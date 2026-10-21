@@ -11,7 +11,7 @@ import { canActOnOwner, NOT_YOURS_ERROR } from '@/lib/auth/viewer';
 import { todayIso } from '@/lib/dates';
 import { readEnv } from '@/lib/env';
 import { getWarrantyItem, setBudgetCategory } from '@/lib/warranty/items';
-import { findInstallmentItem, recordInstallmentPayment } from '@/lib/warranty/installments';
+import { BILL_ARCHIVED_CATEGORY_NOTE, findInstallmentItem, recordInstallmentPayment } from '@/lib/warranty/installments';
 import { listCategories } from '@/lib/categories';
 
 /**
@@ -101,7 +101,8 @@ export async function recordBillPaymentAction(
   revalidatePath('/transactions');
   revalidatePath('/warranties');
   revalidatePath(`/warranties/${target.itemId}`);
-  return { message: 'Payment recorded and the installment marked paid.' };
+  const recorded = 'Payment recorded and the installment marked paid.';
+  return { message: result.categoryLeftForReview ? `${recorded} ${BILL_ARCHIVED_CATEGORY_NOTE}` : recorded };
 }
 
 export async function setBillCategoryAction(

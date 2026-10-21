@@ -3,6 +3,7 @@ import { getDb } from '@/db/client';
 import { billInstallments, transactions, warrantyItemTypes, warrantyItems } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
 import { addDaysIso, isIsoDate } from '@/lib/dates';
+import { isCategoryArchived } from '@/lib/categories';
 import { paymentLinksForTransaction } from '@/lib/loans';
 import { createManualTransaction, RuleOwnedRefusal } from '@/lib/transactions';
 import { MIN_PURCHASE_DATE } from '@/lib/warranty/items';
@@ -351,13 +352,18 @@ export function unpaidInstallments(input: {
 }
 
 export type RecordPaymentResult =
-  | { ok: true; transactionId: number; installmentId: number }
+  | { ok: true; transactionId: number; installmentId: number; categoryLeftForReview?: true }
   | { ok: false; reason: 'gone' | 'already_paid' | 'no_account' | 'linked_elsewhere' }
   // v1.13.0 ruling R4 (item I4): createManualTransaction (below) can refuse when this bill's
   // budgetCategoryId's merchant rule is owned by someone else in the household and the actor is
   // a member -- carries the ready-to-show sentence rather than a bare reason, since (unlike the
   // other refusals above) there is no fixed one-liner the action could supply on its own.
   | { ok: false; reason: 'rule_owned'; error: string };
+
+/** Appended to the Record-payment message when the bill's budget category is archived (decision 25).
+ *  Lives here, not in the 'use server' actions file, which may export only async functions. */
+export const BILL_ARCHIVED_CATEGORY_NOTE =
+  "The bill's budget category is archived, so the payment was not filed into it.";
 
 /**
  * The ownership answer AND the revalidate path, in one query. Ruling R3's check on the Record-payment
@@ -452,6 +458,11 @@ export function recordInstallmentPayment(input: {
   if (target.paidAt !== null) return { ok: false, reason: 'already_paid' };
   if (!Number.isInteger(input.accountId) || input.accountId <= 0) return { ok: false, reason: 'no_account' };
 
+  // An archived category is never assigned automatically (decision 25): a null category skips the
+  // manual confirmation, so nothing is learned and the row is left for review.
+  const heldBack = target.budgetCategoryId !== null && isCategoryArchived(target.budgetCategoryId);
+  const held = heldBack ? ({ categoryLeftForReview: true } as const) : {};
+
   try {
     return db.transaction((tx) => {
       const transactionId = createManualTransaction({
@@ -460,7 +471,7 @@ export function recordInstallmentPayment(input: {
         description: target.itemName,
         // A payment is money OUT. The installment's amount_cents CHECK guarantees it is positive.
         amountCents: -target.amountCents,
-        categoryId: target.budgetCategoryId,
+        categoryId: heldBack ? null : target.budgetCategoryId,
         attributedUserId: target.ownerUserId,
         notes: null,
         userId: input.userId,
@@ -481,7 +492,7 @@ export function recordInstallmentPayment(input: {
           .get();
         if (linked !== undefined && linked.id === input.installmentId) {
           // The matcher already marked exactly the row the person pressed for.
-          return { ok: true, transactionId, installmentId: input.installmentId } as const;
+          return { ok: true, transactionId, installmentId: input.installmentId, ...held } as const;
         }
         if (linked !== undefined) {
           // The matcher guessed a different installment on the merchant match. Clear it -- but
@@ -501,7 +512,7 @@ export function recordInstallmentPayment(input: {
         .run();
 
       if (marked.changes === 0) return { ok: false, reason: 'already_paid' } as const;
-      return { ok: true, transactionId, installmentId: input.installmentId } as const;
+      return { ok: true, transactionId, installmentId: input.installmentId, ...held } as const;
     });
   } catch (error) {
     if (error instanceof LinkedElsewhereRollback) return { ok: false, reason: 'linked_elsewhere' };

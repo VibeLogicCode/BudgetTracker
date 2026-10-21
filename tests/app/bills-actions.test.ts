@@ -4,12 +4,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
-import { createCategory } from '@/lib/categories';
+import { archiveCategory, createCategory } from '@/lib/categories';
 import { setAccountActive } from '@/lib/accounts';
 import { setLastAccountId } from '@/lib/auth/users';
 import { NOT_YOURS_ERROR } from '@/lib/auth/viewer';
-import { createWarrantyItem, getWarrantyItem } from '@/lib/warranty/items';
-import { addInstallment, listInstallments } from '@/lib/warranty/installments';
+import { createWarrantyItem, getWarrantyItem, setBudgetCategory } from '@/lib/warranty/items';
+import { addInstallment, BILL_ARCHIVED_CATEGORY_NOTE, listInstallments } from '@/lib/warranty/installments';
 import { createItemType } from '@/lib/warranty/types';
 
 let currentUser: { id: number; name: string; username: string; role: 'admin' | 'member'; visibility: 'household' | 'self' } = {
@@ -117,6 +117,19 @@ describe('recordBillPaymentAction (ruling R8)', () => {
     const result = await recordBillPaymentAction({}, formData({ installmentId: String(installmentId) }));
     expect(result.message).toMatch(/recorded/i);
     expect(unpaidCount(itemId)).toBe(0);
+  });
+
+  it('says so in the message when the linked category is archived', async () => {
+    setBudgetCategory(itemId, propertyTaxCategoryId);
+    archiveCategory(propertyTaxCategoryId, true);
+    const result = await recordBillPaymentAction({}, formData({ installmentId: String(installmentId) }));
+    expect(result.message).toBe(`Payment recorded and the installment marked paid. ${BILL_ARCHIVED_CATEGORY_NOTE}`);
+  });
+
+  it('gives a live category the plain sentence exactly', async () => {
+    setBudgetCategory(itemId, propertyTaxCategoryId);
+    const result = await recordBillPaymentAction({}, formData({ installmentId: String(installmentId) }));
+    expect(result.message).toBe('Payment recorded and the installment marked paid.');
   });
 
   it('refuses on an installment belonging to another person (ruling R3)', async () => {

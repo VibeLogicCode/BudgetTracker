@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
 import type { Viewer } from '@/lib/auth/viewer';
+import { archiveCategory } from '@/lib/categories';
 import { getTransaction } from '@/lib/transactions';
 import { INSTALLMENT_KIND_ERROR } from '@/lib/warranty/constants';
 import { setBudgetCategory } from '@/lib/warranty/items';
@@ -349,6 +350,29 @@ describe('recordInstallmentPayment (ruling R8)', () => {
     const row = listInstallments(itemId, '2026-08-27', 30).find((r) => r.id === installmentId);
     expect(row?.paidAt).not.toBeNull();
     expect(row?.paidTxnId).toBe((result as { transactionId: number }).transactionId);
+  });
+
+  it('does not file the payment into an archived budget category', () => {
+    const { itemId, installmentId, accountId, userId, propertyTaxCategoryId } = setupBillForPayment();
+    archiveCategory(propertyTaxCategoryId, true);
+
+    const result = recordInstallmentPayment({ installmentId, accountId, userId, today: '2026-08-27', actorRole: 'admin' });
+    expect(result).toEqual({ ok: true, transactionId: expect.any(Number), installmentId, categoryLeftForReview: true });
+
+    const txn = getTransaction((result as { transactionId: number }).transactionId, HOUSEHOLD);
+    expect(txn?.categoryId).toBeNull();
+    expect(txn?.source).not.toBe('manual');
+    const row = listInstallments(itemId, '2026-08-27', 30).find((r) => r.id === installmentId);
+    expect(row?.paidTxnId).toBe((result as { transactionId: number }).transactionId);
+  });
+
+  it('a live linked category still files and carries no note', () => {
+    const { installmentId, accountId, userId, propertyTaxCategoryId } = setupBillForPayment();
+    const result = recordInstallmentPayment({ installmentId, accountId, userId, today: '2026-08-27', actorRole: 'admin' });
+    expect(result).toEqual({ ok: true, transactionId: expect.any(Number), installmentId });
+    expect(getTransaction((result as { transactionId: number }).transactionId, HOUSEHOLD)?.categoryId).toBe(
+      propertyTaxCategoryId,
+    );
   });
 
   it('a second click writes nothing and says so', () => {

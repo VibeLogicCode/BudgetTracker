@@ -13,6 +13,7 @@ import { SubmitButton } from '@/components/SubmitButton';
 // codebase reaches its sibling 'use server' actions.ts via '../actions', not the `@/` alias.
 import { recordBillPaymentAction, type BillActionState } from '../app/(app)/bills/actions';
 import { buttonClass } from '@/components/ui/Button';
+import { Notice } from '@/components/ui/Notice';
 
 const initial: BillActionState = {};
 
@@ -29,6 +30,7 @@ export function RecordPaymentForm({ installmentId }: { installmentId: number }) 
       <input type="hidden" name="installmentId" value={installmentId} />
       <SubmitButton className={buttonClass('ghost', 'sm')}>Record payment</SubmitButton>
       <FormError message={state.error} />
+      {state.message ? <Notice tone="success">{state.message}</Notice> : null}
     </form>
   );
 }
