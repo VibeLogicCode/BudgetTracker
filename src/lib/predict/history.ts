@@ -52,7 +52,7 @@ export interface SeasonalSeries {
  * C-02 fix: `SPEND_ROW_WHERE` (src/lib/spend-where.ts) replaces a bare transfer-only filter here
  * -- MUST-3.1/3.2 at the top of this file promise this module's spend agrees with budgets.ts,
  * and a loan-linked row that budgets.ts now excludes as principal (not spend) must be excluded
- * from a suggestion's history too, or a suggested budget would be inflated by a $6,000 lend-out
+ * from a suggestion's history too, or a suggested budget would be inflated by a $4,500 lend-out
  * that budgetProgress never counted.
  */
 function cells(

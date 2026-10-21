@@ -339,8 +339,8 @@ describe('budgetProgress', () => {
   });
 
   /**
-   * v1.21.0 item 2 (reported: a parent reading $628.55 over children totalling
-   * $183.55, because the direct-to-parent spend counted in the headline but rendered nowhere).
+   * v1.21.0 item 2 (reported: a parent reading $412.30 over children totalling
+   * $97.40, because the direct-to-parent spend counted in the headline but rendered nowhere).
    * `directSpentCents` is the seed foldRollup adds children to -- read back here rather than
    * recomputed, so this pins that it stays exactly the parent's OWN spend, never rolled, while
    * `spentCents` keeps rolling up exactly as it always did (no accounting change, only a new,
@@ -351,11 +351,11 @@ describe('budgetProgress', () => {
     const food = categoryIdByName(db, 'Food');
     const groceries = categoryIdByName(db, 'Groceries');
     spend({ categoryId: food, amountCents: -44500 }); // filed straight under Food, no sub-category
-    spend({ categoryId: groceries, amountCents: -18355 });
+    spend({ categoryId: groceries, amountCents: -9740 });
 
     const foodRow = budgetProgress('2026-03').find((r) => r.categoryId === food)!;
     expect(foodRow.directSpentCents).toBe(44500);
-    expect(foodRow.spentCents).toBe(44500 + 18355);
+    expect(foodRow.spentCents).toBe(44500 + 9740);
     // A child's own directSpentCents equals its spentCents -- it has no children of its own
     // to distinguish itself from.
     const groceriesRow = foodRow.children.find((c) => c.categoryId === groceries)!;
@@ -804,10 +804,10 @@ describe('loan principal movements are excluded from budget spend too (C-02)', (
     const { alice, db, spend } = setup();
     const groceries = categoryIdByName(db, 'Groceries');
     const loanId = seedLoanItem(alice, 'lent');
-    const txnId = spend({ categoryId: groceries, amountCents: -600_000, date: '2026-03-10' });
+    const txnId = spend({ categoryId: groceries, amountCents: -450_000, date: '2026-03-10' });
     assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: loanId });
 
-    // Before item 8a reached budgets.ts, this read 600000 -- Groceries at $6,000.00 against
+    // Before item 8a reached budgets.ts, this read 600000 -- Groceries at $4,500.00 against
     // whatever limit was set, a fabricated overspend.
     expect(categorySpend('2026-03').get(groceries) ?? 0).toBe(0);
   });
@@ -817,10 +817,10 @@ describe('loan principal movements are excluded from budget spend too (C-02)', (
     const groceries = categoryIdByName(db, 'Groceries');
     const loanId = seedLoanItem(alice, 'lent');
     spend({ categoryId: groceries, amountCents: -5000, date: '2026-03-05' }); // real $50 spend
-    const repaymentTxnId = spend({ categoryId: groceries, amountCents: 600_000, date: '2026-03-11' });
+    const repaymentTxnId = spend({ categoryId: groceries, amountCents: 450_000, date: '2026-03-11' });
     assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: repaymentTxnId, itemId: loanId });
 
-    // Before item 8a reached budgets.ts, this netted to -595000 -- Groceries reading a $5,950
+    // Before item 8a reached budgets.ts, this netted to -445000 -- Groceries reading a $4,450
     // "refund" vastly larger than anything actually bought, and (via effectiveBudget's rollover
     // walk) manufacturing a phantom carry into next month.
     expect(categorySpend('2026-03').get(groceries)).toBe(5000);
@@ -854,19 +854,19 @@ describe('loan principal movements are excluded from budget spend too (C-02)', (
     const { alice, db, spend } = setup();
     const groceries = categoryIdByName(db, 'Groceries');
     const loanId = seedLoanItem(alice, 'lent');
-    const txnId = spend({ categoryId: groceries, amountCents: -600_000, date: '2026-03-10' });
+    const txnId = spend({ categoryId: groceries, amountCents: -450_000, date: '2026-03-10' });
     assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: loanId });
 
     expect(categorySpend('2026-03').get(groceries) ?? 0).toBe(0);
     expect(categoryTransactions('2026-03', groceries, {}, HOUSEHOLD_VIEWER)).toEqual([]);
   });
 
-  it('budgetTotals(budgetProgress(...)) reflects it: a $6,000 lend-out never inflates the Budgets card', () => {
+  it('budgetTotals(budgetProgress(...)) reflects it: a $4,500 lend-out never inflates the Budgets card', () => {
     const { alice, db, spend } = setup();
     const groceries = categoryIdByName(db, 'Groceries');
     upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-03', amountCents: 50000 });
     const loanId = seedLoanItem(alice, 'lent');
-    const txnId = spend({ categoryId: groceries, amountCents: -600_000, date: '2026-03-10' });
+    const txnId = spend({ categoryId: groceries, amountCents: -450_000, date: '2026-03-10' });
     assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: loanId });
 
     const rows = budgetProgress('2026-03');

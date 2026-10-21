@@ -56,8 +56,8 @@ export const INSIGHTS_MAX_ROWS = 8;
 
 /**
  * C-02 fix: `SPEND_ROW_WHERE` (src/lib/spend-where.ts) excludes both transfers and
- * loan-principal movements. A $6,000 lend-out categorised under Groceries is money out and,
- * before this fix, surfaced here as "Needs a look: $6,000 unusual charge" while Budgets and
+ * loan-principal movements. A $4,500 lend-out categorised under Groceries is money out and,
+ * before this fix, surfaced here as "Needs a look: $4,500 unusual charge" while Budgets and
  * Reports both correctly said $0 -- the same disagreement this task exists to remove, on a
  * third surface.
  */

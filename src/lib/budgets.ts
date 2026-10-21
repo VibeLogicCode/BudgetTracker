@@ -68,8 +68,8 @@ export interface BudgetRow {
   overBudget: boolean;
   children: BudgetRow[];
   /**
-   * v1.21.0 item 2 (reported: a parent reading $628.55 over children totalling
-   * $183.55). This category's OWN spend, before foldRollup adds any child's -- the exact same
+   * v1.21.0 item 2 (reported: a parent reading $412.30 over children totalling
+   * $97.40). This category's OWN spend, before foldRollup adds any child's -- the exact same
    * figure foldRollup seeds `spentCents` with (src/lib/budgets.ts's own foldRollup, just below).
    * That seed was always arithmetically correct; the defect was that it had no ROW anywhere --
    * BudgetCategoryCard rendered only `children`, so a pharmacy run filed straight under "Health"

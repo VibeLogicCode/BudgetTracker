@@ -564,7 +564,7 @@ function ChildBreakdownRow({
 }
 
 /**
- * v1.21.0 item 2 (reported: a parent reading $628.55 over children totalling $183.55).
+ * v1.21.0 item 2 (reported: a parent reading $412.30 over children totalling $97.40).
  * The label is **"Not in a sub-category"** -- reused verbatim wherever this same bucket shows up
  * elsewhere (the un-rolled Reports breakdown names it identically, per the 2026-08-30 plan).
  *

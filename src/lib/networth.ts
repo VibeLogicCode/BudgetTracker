@@ -289,7 +289,7 @@ export { STALE_SNAPSHOT_DAYS };
  * loan is the exact same kind of number as on an 'owed' one -- a household-maintained balance,
  * corrected the same way, trusted the same way, surfaced on the same dashboard (WhoOwesUsCard)
  * as real money the household expects back. Excluding it while including its 'owed' twin is the
- * asymmetry item 8a's own reasoning already rejects on the transaction side: lending $6,000 out
+ * asymmetry item 8a's own reasoning already rejects on the transaction side: lending $4,500 out
  * turns cash into a receivable, not into nothing, so the receivable belongs on the balance sheet.
  * The counterargument recorded here rather than silently overridden: a debt owed TO the household
  * may never actually be repaid, unlike a snapshot balance backed by a bank's own figure. That is

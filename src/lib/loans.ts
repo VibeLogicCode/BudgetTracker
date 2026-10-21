@@ -445,7 +445,7 @@ function activeRules(tx: ReturnType<typeof getDb>): ActiveRule[] {
  *
  * Every row's applied_cents is rewritten when the replay disagrees with what is stored, so the
  * item ledger ("Applied $X" beside each payment) stays internally consistent with the new total --
- * a payment that used to read "Applied $11.29" because it was clamped out of order now correctly
+ * a payment that used to read "Applied $8.64" because it was clamped out of order now correctly
  * reads the fuller figure once the growth that justifies it is linked, self-healing without
  * anyone having to notice or ask.
  *

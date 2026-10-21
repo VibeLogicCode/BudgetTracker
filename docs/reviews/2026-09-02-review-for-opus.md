@@ -161,7 +161,7 @@ under the appendix ID.
 | S-02 | Med | Four warranty/bill actions skip the viewer gate every sibling applies | `warranties/actions.ts:552,642,721,767` | S |
 | C-01 | High | Archiving a parent category erases its live children from every budget number and every budget alert | `lib/budgets.ts:527-531` | S |
 | C-05 | Med | A non-income child under an income parent is dropped from every budget number | `lib/budgets.ts:521` | S |
-| C-02 | High | Loan-principal exclusion enforced in `reports.ts` only; Budgets shows a $6,000 lend-out as spend and a repayment as a −$5,950 refund | `lib/reports.ts:93-116` vs `lib/budgets.ts:148-155,282-289`, `predict/history.ts:57-66`, `tax.ts:97` | M |
+| C-02 | High | Loan-principal exclusion enforced in `reports.ts` only; Budgets shows a $4,500 lend-out as spend and a repayment as a −$4,450 refund | `lib/reports.ts:93-116` vs `lib/budgets.ts:148-155,282-289`, `predict/history.ts:57-66`, `tax.ts:97` | M |
 | O-03 | High | `runNotifyTick`'s two dormancy reads sit before its `try` — the third instance of a defect fixed in two sibling ticks; a throw there kills the cron callback | `lib/scheduler.ts:73` | S |
 
 **S-01 in one paragraph.** `categoryTransactionsAction` awaits `requireUser()` and discards the
@@ -1303,7 +1303,7 @@ while Reports still reports the same $600 of Groceries spend. It also silently s
 budget-threshold and pace notification for those children.
 
 C-02 is second: the loan-principal exclusion lives only in `reports.ts`, so a lent-loan
-repayment filed against a category shows on Budgets as a $5,950 phantom refund.
+repayment filed against a category shows on Budgets as a $4,450 phantom refund.
 
 Invariants: I1 has 2 violations, I2 has 2, I3 has 1 (the C-02 family), I4/I5/I6 hold.
 Suspects 2, 4, 5, 6, 7, 8, 10 cleared; 1, 3 (partially), 9 produced findings.
@@ -1396,23 +1396,23 @@ a loan — the exact path that makes this divergence common rather than exotic.
 
 **Evidence:** ran two cases in March 2026.
 
-*Case 1 — lending $6,000 out on a `lent` loan, transaction filed under Groceries:*
+*Case 1 — lending $4,500 out on a `lent` loan, transaction filed under Groceries:*
 ```
  reports categoryBreakdown  : 0
  reports cashflowTrend spend: 0
- budgets categorySpend      : 600000
- budgets budgetTotals spent : 600000
+ budgets categorySpend      : 450000
+ budgets budgetTotals spent : 450000
 ```
-Wrong output: the Budgets page shows Groceries at $6,000.00 spent against a $500.00 limit
-(1200% over, a `budget_over` notification fires). Right output: $0.00, matching Reports.
+Wrong output: the Budgets page shows Groceries at $4,500.00 spent against a $500.00 limit
+(900% over, a `budget_over` notification fires). Right output: $0.00, matching Reports.
 
-*Case 2 — $50.00 of real Groceries spend, plus a $6,000 repayment on a `lent` loan that the
+*Case 2 — $50.00 of real Groceries spend, plus a $4,500 repayment on a `lent` loan that the
 categorizer had filed under Groceries:*
 ```
- reports Groceries spend: 5000    budgets Groceries spend: -595000
+ reports Groceries spend: 5000    budgets Groceries spend: -445000
 ```
-Wrong output: Budgets reports Groceries as **−$5,950.00** — a phantom refund that wipes out
-the category, and (with rollover on) manufactures a $5,950 carry into next month via
+Wrong output: Budgets reports Groceries as **−$4,450.00** — a phantom refund that wipes out
+the category, and (with rollover on) manufactures a $4,450 carry into next month via
 `effectiveBudget`'s `carry = max(0, carry + base - spent)` walk (`budgets.ts:451-456`).
 Right output: $50.00.
 

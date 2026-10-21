@@ -837,7 +837,7 @@ describe('loan principal movements are excluded from spend/income (item 8a, 2026
   it('lending money out is excluded from spend entirely -- not counted, not netted as a refund', () => {
     const { alice, add } = setup();
     const loanId = seedLoanItem(alice, 'lent');
-    const txnId = add({ categoryId: null, amountCents: -600_000, merchant: 'E TRANSFER', date: '2026-03-10' });
+    const txnId = add({ categoryId: null, amountCents: -450_000, merchant: 'E TRANSFER', date: '2026-03-10' });
     assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: loanId });
 
     expect(cashflowTrend(1, { endMonth: '2026-03' }, HOUSEHOLD)[0]).toMatchObject({
@@ -853,11 +853,11 @@ describe('loan principal movements are excluded from spend/income (item 8a, 2026
     const { db, alice, add } = setup();
     const loanId = seedLoanItem(alice, 'lent');
     add({ categoryId: categoryIdByName(db, 'Groceries'), amountCents: -5000, date: '2026-03-05' });
-    const repaymentTxnId = add({ categoryId: null, amountCents: 600_000, merchant: 'E TRANSFER', date: '2026-03-11' });
+    const repaymentTxnId = add({ categoryId: null, amountCents: 450_000, merchant: 'E TRANSFER', date: '2026-03-11' });
     assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: repaymentTxnId, itemId: loanId });
 
     // Before item 8a this repayment's positive amount netted straight into the same aggregate as
-    // the $50.00 grocery spend, so the month would have reported net spend of -$5,950.00 -- a
+    // the $50.00 grocery spend, so the month would have reported net spend of -$5$4,450.00 -- a
     // fake refund vastly larger than anything the household actually bought.
     const march = cashflowTrend(1, { endMonth: '2026-03' }, HOUSEHOLD)[0];
     expect(march.spendCents).toBe(5000);

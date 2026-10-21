@@ -141,40 +141,40 @@ describe('assignTransactionToLoan on a lent loan (spec BU)', () => {
    * Item 6 (v1.21.0 backlog): the exact defect a read-only trace confirmed. The OLD link()
    * clamped a repayment against whatever current_balance_cents held AT THE MOMENT it was linked
    * -- which depended on which payment a person happened to link FIRST, not on when either
-   * transaction actually happened. This reproduces the reported shape (a "lent" loan: $6,000 out,
-   * $6,000 back, and a further $11.29 charge) LINKED IN THE WRONG ORDER -- chronologically last
-   * first, chronologically first last -- and shows the balance lands on the correct $11.29
+   * transaction actually happened. This reproduces the reported shape (a "lent" loan: $4,500 out,
+   * $4,500 back, and a further $8.64 charge) LINKED IN THE WRONG ORDER -- chronologically last
+   * first, chronologically first last -- and shows the balance lands on the correct $8.64
    * regardless, because link() now replays every payment in the order its TRANSACTION happened
    * (recomputeBalance), not the order it was linked. Before this fix, this exact sequence
-   * displayed $6,000.00 -- the household's actual reported bug -- with $5,988.71 silently and
+   * displayed $4,500.00 -- the household's actual reported bug -- with $4,491.36 silently and
    * permanently unrecoverable.
    */
   it('item 6: linking a repayment before the growth that justifies it no longer loses the excess', () => {
     ctx = setupLoanTest();
     const { itemId } = ctx.seedLoan({ balanceCents: 0, direction: 'lent' });
 
-    // Chronologically: $6,000 lent out (day 1), $6,000 repaid (day 2), a further $11.29 charge
+    // Chronologically: $4,500 lent out (day 1), $4,500 repaid (day 2), a further $8.64 charge
     // (day 3) -- but LINKED in the opposite order (day 3's small charge first, then day 2's
     // repayment, then day 1's disbursement last), exactly the shape that used to corrupt the
     // stored balance.
-    const smallCharge = ctx.spend('E TRANSFER', -1_129, { date: '2026-08-03' });
-    const repayment = ctx.spend('E TRANSFER', 600_000, { date: '2026-08-02' });
-    const disbursement = ctx.spend('E TRANSFER', -600_000, { date: '2026-08-01' });
+    const smallCharge = ctx.spend('E TRANSFER', -864, { date: '2026-08-03' });
+    const repayment = ctx.spend('E TRANSFER', 450_000, { date: '2026-08-02' });
+    const disbursement = ctx.spend('E TRANSFER', -450_000, { date: '2026-08-01' });
 
-    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: smallCharge, itemId })).toEqual({ linked: true, appliedCents: 1_129 });
-    expect(ctx.balanceOf(itemId)).toBe(1_129);
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: smallCharge, itemId })).toEqual({ linked: true, appliedCents: 864 });
+    expect(ctx.balanceOf(itemId)).toBe(864);
 
     // Linked before its own growth exists on record: clamps to 0, exactly as the old code would
     // have too -- the fix is not that THIS call sees more room, it is that the LATER link below
     // fixes this row up without anyone having to notice or ask.
     expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: repayment, itemId })).toEqual({ linked: true, appliedCents: 0 });
-    expect(ctx.balanceOf(itemId)).toBe(1_129);
+    expect(ctx.balanceOf(itemId)).toBe(864);
 
     // The disbursement arrives LAST in link order but is dated FIRST -- replaying chronologically
-    // now gives the repayment $600,000 of room to consume, correcting its own stored applied_cents
-    // from 0 up to 600,000 in the same call, with no unlink/re-link step required.
-    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: disbursement, itemId })).toEqual({ linked: true, appliedCents: 600_000 });
-    expect(ctx.balanceOf(itemId)).toBe(1_129);
+    // now gives the repayment $450,000 of room to consume, correcting its own stored applied_cents
+    // from 0 up to 450,000 in the same call, with no unlink/re-link step required.
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: disbursement, itemId })).toEqual({ linked: true, appliedCents: 450_000 });
+    expect(ctx.balanceOf(itemId)).toBe(864);
   });
 
   it('an UNKNOWN balance still applies nothing in either direction (NEW-2, unchanged)', () => {
@@ -203,22 +203,22 @@ describe('recomputeLoanBalance (item 6, v1.21.0 backlog: the repair action)', ()
    * seeded directly (not through assignTransactionToLoan) so the test does not rely on link()'s
    * own self-healing to prove the SEPARATE, on-demand repair action also works. The three
    * loan_payments rows and the anchor below are exactly the backlog's own worked example:
-   * a $11.29 growth linked first (clamps nothing), a $6,000 repayment linked second (wrongly
-   * clamped to the $11.29 that existed at that moment), a $6,000 growth linked third (unclamped) --
-   * landing on a displayed balance of $6,000.00 when the true figure is $11.29.
+   * a $8.64 growth linked first (clamps nothing), a $4,500 repayment linked second (wrongly
+   * clamped to the $8.64 that existed at that moment), a $4,500 growth linked third (unclamped) --
+   * landing on a displayed balance of $4,500.00 when the true figure is $8.64.
    */
   it('recovers the true balance from a loan that had no reason to get a new link soon', () => {
     ctx = setupLoanTest();
-    const { itemId } = ctx.seedLoan({ balanceCents: 600_000, direction: 'lent' });
+    const { itemId } = ctx.seedLoan({ balanceCents: 450_000, direction: 'lent' });
 
-    const bigGrowth = ctx.spend('E TRANSFER', -600_000, { date: '2026-08-01' });
-    const repayment = ctx.spend('E TRANSFER', 600_000, { date: '2026-08-02' });
-    const smallGrowth = ctx.spend('E TRANSFER', -1_129, { date: '2026-08-03' });
+    const bigGrowth = ctx.spend('E TRANSFER', -450_000, { date: '2026-08-01' });
+    const repayment = ctx.spend('E TRANSFER', 450_000, { date: '2026-08-02' });
+    const smallGrowth = ctx.spend('E TRANSFER', -864, { date: '2026-08-03' });
 
     for (const [txnId, amountCents, appliedCents] of [
-      [smallGrowth, 1_129, 1_129],
-      [repayment, 600_000, 1_129],
-      [bigGrowth, 600_000, 600_000],
+      [smallGrowth, 864, 864],
+      [repayment, 450_000, 864],
+      [bigGrowth, 450_000, 450_000],
     ] as const) {
       ctx.t.sqlite
         .prepare(
@@ -227,10 +227,10 @@ describe('recomputeLoanBalance (item 6, v1.21.0 backlog: the repair action)', ()
         )
         .run(txnId, itemId, amountCents, appliedCents, '2026-08-18T12:00:00.000Z');
     }
-    expect(ctx.balanceOf(itemId)).toBe(600_000); // the corrupted, displayed figure
+    expect(ctx.balanceOf(itemId)).toBe(450_000); // the corrupted, displayed figure
 
-    expect(recomputeLoanBalance(itemId)).toEqual({ balanceCents: 1_129 });
-    expect(ctx.balanceOf(itemId)).toBe(1_129);
+    expect(recomputeLoanBalance(itemId)).toEqual({ balanceCents: 864 });
+    expect(ctx.balanceOf(itemId)).toBe(864);
   });
 
   it('refuses a loan with no balance being tracked -- there is nothing to recompute', () => {

@@ -206,20 +206,20 @@ describe('netWorthOverTime: loan inclusion', () => {
     // contributing nothing itself, isolating the loan's effect on debtsCents.
     const accountId = insertTestAccount(current.db);
     recordBalanceSnapshot({ accountId, date: '2020-06-01', balanceCents: 0, source: 'manual' });
-    seedLoan(current, userId, 450_000);
+    seedLoan(current, userId, 300_000);
 
     const series = netWorthOverTime(1, { endMonth: '2026-08', today: '2026-08-18', viewer: household });
 
     expect(series).toHaveLength(1);
     expect(series[0].assetsCents).toBe(0);
-    expect(series[0].debtsCents).toBe(450_000);
-    expect(series[0].netCents).toBe(-450_000);
+    expect(series[0].debtsCents).toBe(300_000);
+    expect(series[0].netCents).toBe(-300_000);
   });
 
   /**
    * Item 7 (2026-08-30 plan): debtOverTime returns BOTH owedCents and lentCents, but this
    * function used to add only the owed side to debtsCents -- money lent out was never counted
-   * as an asset, so lending $6,000 out made the household's own books $6,000 poorer for no
+   * as an asset, so lending $4,500 out made the household's own books $4,500 poorer for no
    * reason. See this function's own docblock for the deliberate decision (and the
    * counterargument it weighs) to fold lentCents into assetsCents instead.
    */
@@ -228,14 +228,14 @@ describe('netWorthOverTime: loan inclusion', () => {
     const userId = insertTestUser(current.db, { username: 'nw-lent' });
     const accountId = insertTestAccount(current.db);
     recordBalanceSnapshot({ accountId, date: '2020-06-01', balanceCents: 0, source: 'manual' });
-    seedLoan(current, userId, 600_000, '2020-01-01T00:00:00.000Z', 'lent');
+    seedLoan(current, userId, 450_000, '2020-01-01T00:00:00.000Z', 'lent');
 
     const series = netWorthOverTime(1, { endMonth: '2026-08', today: '2026-08-18', viewer: household });
 
     expect(series).toHaveLength(1);
-    expect(series[0].assetsCents).toBe(600_000);
+    expect(series[0].assetsCents).toBe(450_000);
     expect(series[0].debtsCents).toBe(0);
-    expect(series[0].netCents).toBe(600_000);
+    expect(series[0].netCents).toBe(450_000);
   });
 
   it('nets an owed loan and a lent loan on opposite sides of the same net worth figure', () => {
@@ -243,14 +243,14 @@ describe('netWorthOverTime: loan inclusion', () => {
     const userId = insertTestUser(current.db, { username: 'nw-both' });
     const accountId = insertTestAccount(current.db);
     recordBalanceSnapshot({ accountId, date: '2020-06-01', balanceCents: 0, source: 'manual' });
-    seedLoan(current, userId, 450_000, '2020-01-01T00:00:00.000Z', 'owed');
-    seedLoan(current, userId, 600_000, '2020-01-01T00:00:00.000Z', 'lent');
+    seedLoan(current, userId, 300_000, '2020-01-01T00:00:00.000Z', 'owed');
+    seedLoan(current, userId, 450_000, '2020-01-01T00:00:00.000Z', 'lent');
 
     const series = netWorthOverTime(1, { endMonth: '2026-08', today: '2026-08-18', viewer: household });
 
     expect(series).toHaveLength(1);
-    expect(series[0].assetsCents).toBe(600_000);
-    expect(series[0].debtsCents).toBe(450_000);
+    expect(series[0].assetsCents).toBe(450_000);
+    expect(series[0].debtsCents).toBe(300_000);
     expect(series[0].netCents).toBe(150_000);
   });
 });

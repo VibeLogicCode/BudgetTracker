@@ -289,11 +289,11 @@ describe('taxYearReport — loan principal movements are excluded too (C-02)', (
     const groceries = categoryIdByName(db, 'Groceries');
     flag(groceries);
     const loanId = seedLoanItem(alice, 'lent');
-    const txnId = add({ categoryId: groceries, amountCents: -600_000, date: '2026-03-10' });
+    const txnId = add({ categoryId: groceries, amountCents: -450_000, date: '2026-03-10' });
     assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: loanId });
 
     // Before this fix, this row had never been excluded here either -- taxYearReport, like
-    // budgets.ts, filtered on transfers alone -- so a $6,000 lend-out categorised as Groceries
+    // budgets.ts, filtered on transfers alone -- so a $4,500 lend-out categorised as Groceries
     // would have inflated a household's tax-year total the same way it inflated Budgets.
     expect(taxYearReport(2026)).toEqual([]);
   });

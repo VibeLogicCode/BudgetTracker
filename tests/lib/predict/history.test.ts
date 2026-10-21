@@ -224,10 +224,10 @@ describe('C-02: loan principal movements are excluded from prediction history to
     const { db, alice, spend } = setup();
     const groceries = categoryIdByName(db, 'Groceries');
     const loanId = seedLoanItem(alice, 'lent');
-    const txnId = spend({ categoryId: groceries, amountCents: -600_000, date: '2026-07-05' });
+    const txnId = spend({ categoryId: groceries, amountCents: -450_000, date: '2026-07-05' });
     assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: loanId });
 
-    // Before this fix, `cells()` filtered on transfers alone, so this $6,000 lend-out would have
+    // Before this fix, `cells()` filtered on transfers alone, so this $4,500 lend-out would have
     // inflated a suggested Groceries budget the same way it inflated the Budgets card -- MUST-3.2
     // promises the two never disagree.
     const series = categorySeries({ months: ['2026-07'], scope: 'household', userId: null });
