@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { createContext, useActionState, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { AutoSaveCheckbox, AutoSaveTextInput, useAutoSave } from '@/components/ui/AutoSave';
@@ -21,6 +22,7 @@ import type { SinkingFund } from '@/lib/bills';
 import type { BudgetRow, BudgetScope, UncategorizedSpend } from '@/lib/budgets';
 import type { CategoryLike } from '@/lib/category-order';
 import { transactionsHref } from '@/lib/transaction-links';
+import { budgetCardId } from '@/lib/budgets-links';
 import { UncategorizedSpendCard } from '@/components/UncategorizedSpendCard';
 import { MIN_HISTORY_MONTHS } from '@/lib/predict/constants';
 import type { BudgetPredictions, CategorySuggestion, SectionPredictions } from '@/lib/predict/suggest';
@@ -49,7 +51,7 @@ import { categoryTransactionsAction } from './category-transactions-action';
 // this file's @/-qualified value imports never has a reason to follow it into src/lib/budgets.ts.
 import { categoryHistoryAction, type CategoryHistoryMonth } from './category-history-action';
 import { buttonClass } from '@/components/ui/Button';
-import { RowMenu, RowMenuButton } from '@/components/ui/RowMenu';
+import { RowMenu, RowMenuButton, RowMenuLink } from '@/components/ui/RowMenu';
 import { RecategorizeDialog } from '@/components/transactions/RecategorizeDialog';
 import { AlwaysAskDialog } from '@/components/transactions/AlwaysAskDialog';
 import { SplitDialog, type SplitTarget } from '@/components/transactions/SplitDialog';
@@ -226,6 +228,8 @@ function rowId(scope: BudgetScope, userId: number | null, categoryId: number): s
 interface GroupOpenState {
   isOpen: (categoryId: number) => boolean;
   toggle: (categoryId: number) => void;
+  /** Spec 2026-10-21 (fix from Budgets) §2.6. Opens one group for this visit without saving it as a preference. */
+  open: (categoryId: number) => void;
   expandAll: () => void;
   collapseAll: () => void;
   /** Drives the one Expand-all/Collapse-all button's own label -- "collapse" only once every
@@ -261,7 +265,8 @@ function useGroupOpenState(storageKey: string, groupIds: number[]): GroupOpenSta
       const parsed: unknown = JSON.parse(raw);
       if (!Array.isArray(parsed)) return;
       const restored = new Set(parsed.filter((id): id is number => typeof id === 'number' && groupIds.includes(id)));
-      if (restored.size > 0) setOpenIds(restored);
+      // Merged, not replaced: a card opened by the URL hash on mount must survive this restore.
+      if (restored.size > 0) setOpenIds((prev) => new Set([...prev, ...restored]));
     } catch {
       // Corrupted value, storage disabled, or a private window that throws on access -- the
       // deterministic all-closed default above is already a correct render, so there is
@@ -291,6 +296,7 @@ function useGroupOpenState(storageKey: string, groupIds: number[]): GroupOpenSta
       else next.add(categoryId);
       persist(next);
     },
+    open: (categoryId) => setOpenIds((prev) => new Set(prev).add(categoryId)),
     expandAll: () => persist(new Set(groupIds)),
     collapseAll: () => persist(new Set()),
     anyCollapsed: groupIds.some((id) => !openIds.has(id)),
@@ -549,12 +555,30 @@ function CategoryTransactionsPanel({
                   >
                     {row.splitId === null ? 'Split…' : 'Edit split…'}
                   </RowMenuButton>
+                  <RowMenuLink href={transactionsHref({ range: null, person: null }, { kind: 'transaction', transactionId: row.id, via: 'budgets' })}>
+                    More in Transactions
+                  </RowMenuLink>
                 </RowMenu>
               }
             />
           ))}
         </ul>
       )}
+      {/* Spec 2026-10-21 (fix from Budgets) §2.6. Exactly the rows this list sums: this category
+          alone (exact), spend only, this month, this person. Absent when the list is empty. */}
+      {state.rows.length > 0 ? (
+        <div className="px-4 py-2 sm:px-5">
+          <Link
+            href={transactionsHref(
+              { range: { from: monthStart(month), to: monthEnd(month) }, person: scope === 'personal' ? userId : null },
+              { kind: 'budget-category', categoryId },
+            )}
+            className={buttonClass('ghost', 'sm', 'w-fit px-0 text-xs')}
+          >
+            Open in Transactions
+          </Link>
+        </div>
+      ) : null}
       {recat ? (
         <RecategorizeDialog
           key={recat.id}
@@ -783,6 +807,18 @@ function BudgetCategoryCard({
   const overChildren = row.children.filter((child) => child.overBudget).length;
   const projection = predict !== null ? (predict.projectionOf.get(row.categoryId) ?? null) : null;
   const sinkingFund = sinkingFunds[row.categoryId] ?? null;
+  const cardId = budgetCardId(scope, userId, row.categoryId);
+
+  // Spec 2026-10-21 (fix from Budgets) §2.6. Back to Budgets lands here with this card's id in the
+  // URL hash: open it once after mount, a leaf's transactions or a parent's breakdown. Only this
+  // top-level card reopens; a child row's own panel stays closed (owner decision).
+  useEffect(() => {
+    if (window.location.hash !== `#${cardId}`) return;
+    if (row.children.length > 0) groupState.open(row.categoryId);
+    else setLeafTxOpen(true);
+    // One-shot on mount: the hash names where the person came from, not a state to keep in sync.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // v1.21.0 item 2: "N categories" used to name the direct-spend bucket as if it were one of
   // them -- it is not (it carries no limit, so it can never be "over") -- so this reads
@@ -800,6 +836,7 @@ function BudgetCategoryCard({
 
   return (
     <MetricCard
+      id={cardId}
       className={isOpen ? 'lg:col-span-3' : ''}
       icon={<Icon className="h-5 w-5" />}
       title={

@@ -45,6 +45,8 @@ import { absCents, formatCents } from '@/lib/money';
 // for it here rather than writing `?q=${encodeURIComponent(...)}` inline is the whole point of
 // the module -- see its docblock on why a second, hand-built definition is the defect shape.
 import { transactionsHref } from '@/lib/transaction-links';
+import { budgetCardId, budgetsHref } from '@/lib/budgets-links';
+import { monthLabel } from '@/lib/dates';
 import type { SplitRow } from '@/lib/splits';
 import type {
   CategorizationSource,
@@ -916,7 +918,10 @@ export function TransactionsClient({
    * badge test rather than in production, which is the only reason this reads as a comment and not
    * as a bug report.
    */
-  const cameFromGroups = new URLSearchParams(currentQuery).get('via') === 'groups';
+  const via = new URLSearchParams(currentQuery).get('via');
+  const cameFromGroups = via === 'groups';
+  /** Spec 2026-10-21 (fix from Budgets) §2.6: arrived from a Budgets card, so Back to Budgets is owed. */
+  const cameFromBudgets = via === 'budgets';
   /** `?import=<id>`. Shown as a dismissible chip (below) rather than only being honoured silently:
    *  a batch nobody can see they are inside is a batch they cannot get out of, and the import audit
    *  link (`/transactions?import=<id>&source=rule&group=category`) is the one filter on this page a
@@ -2640,6 +2645,40 @@ export function TransactionsClient({
   }
 
   /**
+   * Spec 2026-10-21 (fix from Budgets) §2.6. The way back to the Budgets card this list was opened
+   * from: the same month (only when the range sits inside one), the same person and the top-level
+   * card of the category, all read off what this page already carries. Unconditionally visible,
+   * for the reason groupsBreadcrumb gives. The trailing name is text, not a second link.
+   */
+  function budgetsBreadcrumb() {
+    if (!cameFromBudgets) return null;
+    const query = new URLSearchParams(currentQuery);
+    const month = range != null && range.from.slice(0, 7) === range.to.slice(0, 7) ? range.from.slice(0, 7) : null;
+    const personParam = query.get('person') ?? '';
+    const personId = /^\d+$/.test(personParam) ? Number(personParam) : null;
+    const landed = categories.find((row) => String(row.id) === activeCategoryChip);
+    const topId = landed === undefined ? null : (landed.parentId ?? landed.id);
+    const backHref = budgetsHref({
+      month,
+      personId,
+      cardId: topId === null ? null : budgetCardId(personId === null ? 'household' : 'personal', personId, topId),
+    });
+    return (
+      <div data-budgets-breadcrumb className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted">
+        <Link href={backHref} className={buttonClass('ghost', 'sm')}>
+          ← Back to Budgets
+        </Link>
+        {landed !== undefined ? (
+          <>
+            <span aria-hidden="true">·</span>
+            <span className="font-medium text-ink">{month !== null ? `${landed.name} — ${monthLabel(month)}` : landed.name}</span>
+          </>
+        ) : null}
+      </div>
+    );
+  }
+
+  /**
    * v1.26.0 Lane 3a item 2 (owner: when rules set a category such as groceries, one should be able to
    * scroll through all of that category's transactions in one go while receiving, rather than only by date). The grouped view: one row per
    * category cluster, largest absolute total first (groupTransactionsByCategory already returns
@@ -3174,7 +3213,7 @@ export function TransactionsClient({
                 submit would drop it -- and dropping it deletes the way back, stranding somebody
                 mid-audit for the crime of changing the account. It narrows nothing on the way
                 through: readFilter never reads it. */}
-            {cameFromGroups ? <input type="hidden" name="via" value="groups" /> : null}
+            {cameFromGroups || cameFromBudgets ? <input type="hidden" name="via" value={via as string} /> : null}
             {activeSort !== '' ? <input type="hidden" name="sort" value={activeSort} /> : null}
             {activeSort !== '' ? <input type="hidden" name="dir" value={activeDirection} /> : null}
             {activeSource !== '' ? <input type="hidden" name="source" value={activeSource} /> : null}
@@ -3614,6 +3653,7 @@ export function TransactionsClient({
           its own -- one place decides, the same way `groups !== null` is the single signal for the
           branch below. */}
       {groupsBreadcrumb()}
+      {budgetsBreadcrumb()}
 
       {/* v1.26.0 Lane 3a item 2: the grouped view replaces the rows entirely, the same
           INSTEAD-not-as-well-as rule review mode has always followed one branch down. It comes

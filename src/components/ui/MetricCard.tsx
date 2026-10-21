@@ -31,6 +31,7 @@ export function MetricCard({
   children,
   className = '',
   tone = 'default',
+  id,
 }: {
   /** Rendered inside the 40px rounded tile. Usually a lucide icon from ./icons -- categoryIcon()
    *  for a budget category, a fixed glyph for a goal or an account. Decorative: the title text
@@ -59,10 +60,12 @@ export function MetricCard({
   /** Spec 2026-10-21 §2.2. 'warning' marks a card that needs attention: a warning border and a
    *  warning icon tile. The icon and the words carry the meaning too; this is never the only signal. */
   tone?: 'default' | 'warning';
+  /** Spec 2026-10-21 (fix from Budgets) §2.6. The article's DOM id, so a link can name this card. */
+  id?: string;
 }) {
   const warning = tone === 'warning';
   return (
-    <article className={`card flex flex-col gap-3 p-4 sm:p-5 ${warning ? 'border-warning ' : ''}${className}`}>
+    <article id={id} className={`card flex flex-col gap-3 p-4 sm:p-5 ${warning ? 'border-warning ' : ''}${className}`}>
       <header className="flex items-start gap-3">
         {icon ? (
           <span

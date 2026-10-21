@@ -56,6 +56,11 @@ describe('MetricCard', () => {
     expect(screen.getByTestId('metric-card-footer')).toBeTruthy();
   });
 
+  it('passes id through to the article', () => {
+    const { container } = render(<MetricCard id="budget-card-household-h-1" title="Groceries" value="$12.00" />);
+    expect(container.querySelector('article')!.id).toBe('budget-card-household-h-1');
+  });
+
   /** Spec 2026-10-21 §2.2: a card that needs attention reads differently from the cards around it. */
   it('a warning card carries the warning border and a warning icon tile; a default card neither', () => {
     const { container, unmount } = render(<MetricCard tone="warning" icon={<span>!</span>} title="Not categorized yet" value="$57.50" />);

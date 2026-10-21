@@ -3863,6 +3863,48 @@ describe('the grouped view: the way back out of a drill-down', () => {
   });
 });
 
+describe('Back to Budgets (spec 2026-10-21, fix from Budgets §2.6)', () => {
+  const BUDGET_CATEGORIES = [
+    { id: 42, name: 'Groceries', parentId: null, isArchived: false, sortOrder: 0 },
+    { id: 43, name: 'Produce', parentId: 42, isArchived: false, sortOrder: 0 },
+  ];
+
+  function renderFromBudgets(query: string, range: { from: string; to: string; preset: 'custom' | 'last_6_months' } | null) {
+    return render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1 })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={BUDGET_CATEGORIES}
+        people={[]}
+        today="2026-03-02"
+        currentQuery={query}
+        range={range === null ? null : { ...range, label: '' }}
+      />,
+    );
+  }
+
+  it('links back to the month, the person and the top-level card, and names the category and month as text', () => {
+    const { container } = renderFromBudgets('range=custom&from=2026-03-01&to=2026-03-31&person=7&category=43&exact=1&spend=1&via=budgets', { preset: 'custom', from: '2026-03-01', to: '2026-03-31' });
+    const back = container.querySelector('[data-budgets-breadcrumb] a');
+    expect((back?.textContent ?? '').trim()).toBe('← Back to Budgets');
+    expect(back?.getAttribute('href')).toBe('/budgets?month=2026-03&person=7#budget-card-personal-7-42');
+    expect(container.querySelector('[data-budgets-breadcrumb]')?.textContent).toContain('Produce — March 2026');
+    expect(container.querySelector('[data-budgets-breadcrumb]')?.className).not.toContain('hidden');
+    expect(container.querySelector('form[method="get"] input[type="hidden"][name="via"]')?.getAttribute('value')).toBe('budgets');
+  });
+
+  /** Review Focus 4. */
+  it('carries no month once the range no longer sits in one month, and no card without a category', () => {
+    const { container } = renderFromBudgets('range=last_6_months&from=2025-10-01&to=2026-03-31&via=budgets', { preset: 'last_6_months', from: '2025-10-01', to: '2026-03-31' });
+    expect(container.querySelector('[data-budgets-breadcrumb] a')?.getAttribute('href')).toBe('/budgets');
+  });
+
+  it('is absent without via=budgets, and the groups breadcrumb is unaffected', () => {
+    expect(renderFromBudgets('category=42&exact=1&spend=1', null).container.querySelector('[data-budgets-breadcrumb]')).toBeNull();
+    expect(renderFromBudgets('category=42&exact=1&via=groups', null).container.querySelector('[data-groups-breadcrumb]')).toBeTruthy();
+  });
+});
+
 describe('v1.26.0 Lane 3a item 4: the group bulk actions', () => {
   it('states the group’s TRUE count, not the number of rows rendered on this page', async () => {
     renderGrouped();

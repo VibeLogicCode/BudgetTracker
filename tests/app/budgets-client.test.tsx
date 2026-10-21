@@ -1483,4 +1483,25 @@ describe('BudgetsClient — fixing a row from the card', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
     expect(screen.queryByRole('group', { name: /Future/ })).toBeNull();
   });
+
+  it('Open in Transactions carries the card’s category exactly, the month, the person and the way back; More in Transactions links to the one row', async () => {
+    await renderWithRows([panelRow()], {}, { selectedPersonId: 7, personal: [{ userId: 7, name: 'Sam', rows: [makeRow()] }] });
+    const open = await screen.findByRole('link', { name: 'Open in Transactions' });
+    expect(Object.fromEntries(new URLSearchParams(open.getAttribute('href')!.split('?')[1]))).toEqual({
+      range: 'custom', from: '2026-03-01', to: '2026-03-31', person: '7', category: '1', exact: '1', spend: '1', via: 'budgets',
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Actions for Phonemart/ }));
+    expect(screen.getByRole('menuitem', { name: 'More in Transactions' }).getAttribute('href')).toBe('/transactions?id=77&via=budgets');
+  });
+
+  it('a card named by the URL hash opens itself on mount', async () => {
+    window.location.hash = '#budget-card-household-h-1';
+    const { categoryTransactionsAction } = await import('@/app/(app)/budgets/category-transactions-action');
+    vi.mocked(categoryTransactionsAction).mockClear();
+    renderBudgets(null);
+    expect(document.getElementById('budget-card-household-h-1')).toBeTruthy();
+    await waitFor(() => expect(categoryTransactionsAction).toHaveBeenCalled());
+    expect(screen.getByRole('button', { name: 'Hide transactions' })).toBeTruthy();
+    window.location.hash = '';
+  });
 });
