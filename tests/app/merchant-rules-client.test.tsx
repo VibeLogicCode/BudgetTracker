@@ -347,6 +347,43 @@ describe('MerchantRulesClient — the rule dialog (RowDialog, item 10)', () => {
     expect((screen.getByPlaceholderText('WALMART') as HTMLInputElement).value).toBe('WALMART');
   });
 
+  it('Edit shows the rule\'s archived category labelled (archived) and keeps it selected', () => {
+    render(
+      <MerchantRulesClient
+        {...baseProps({
+          categories: [category({ id: 1, name: 'Coffee', isArchived: true }), category({ id: 2, name: 'Groceries' })],
+          rows: [rule({ categoryId: 1, categoryArchived: true })],
+        })}
+      />,
+    );
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: /^edit$/i }));
+    const select = screen.getByRole('dialog').querySelector('select[name="categoryId"]') as HTMLSelectElement;
+    expect(select.value).toBe('1');
+    expect(Array.from(select.options).some((o) => o.textContent === 'Coffee (archived)')).toBe(true);
+  });
+
+  it('offers no archived category the rule is not on', () => {
+    render(
+      <MerchantRulesClient
+        {...baseProps({
+          categories: [
+            category({ id: 1, name: 'Coffee', isArchived: true }),
+            category({ id: 2, name: 'Groceries' }),
+            category({ id: 3, name: 'Fuel', isArchived: true }),
+          ],
+          rows: [rule({ categoryId: 1, categoryArchived: true })],
+        })}
+      />,
+    );
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: /^edit$/i }));
+    const select = screen.getByRole('dialog').querySelector('select[name="categoryId"]') as HTMLSelectElement;
+    const labels = Array.from(select.options).map((o) => o.textContent);
+    expect(labels.some((l) => l?.includes('Fuel'))).toBe(false);
+    expect(labels.some((l) => l === 'Groceries')).toBe(true);
+  });
+
   it('closing the dialog removes it', () => {
     render(<MerchantRulesClient {...baseProps()} />);
     fireEvent.click(screen.getByRole('button', { name: 'New rule' }));

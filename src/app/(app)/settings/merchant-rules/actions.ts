@@ -228,7 +228,7 @@ export async function saveRuleAction(_prev: RuleActionState, formData: FormData)
     const category = listCategories({ includeArchived: true }).find((row) => row.id === categoryId);
     if (!category) return { error: 'That category no longer exists. Pick another one.' };
     if (category.isArchived) {
-      return { error: `"${category.name}" is archived, so a rule cannot file anything into it. Un-archive it first, or pick another category.` };
+      return { error: `"${category.name}" is archived, so this rule would not file anything. Pick a live category, or restore "${category.name}" first.` };
     }
   }
 

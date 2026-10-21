@@ -825,6 +825,9 @@ export function MerchantRulesClient({
           <Field label="Category (category rules only)">
             <select name="categoryId" defaultValue={editing.categoryId ?? ''} className={selectClass}>
               <option value="">(none -- transfer, not_transfer and rename rules)</option>
+              {editing.categoryId !== null && categories.some((c) => c.id === editing.categoryId && c.isArchived) ? (
+                <option value={editing.categoryId}>{`${categoryLabelFor(editing.categoryId, categories)} (archived)`}</option>
+              ) : null}
               {categoryOptionGroups(categories).map((group) =>
                 group.label === null ? (
                   <option key={group.options[0].id} value={group.options[0].id}>{group.options[0].label}</option>

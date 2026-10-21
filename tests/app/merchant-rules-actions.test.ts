@@ -605,7 +605,25 @@ describe('v1.31.0 R-13: saveRuleAction validates the category it is handed', () 
       formData({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: String(coffee), renameTo: '' }),
     );
     expect(result.error).toMatch(/"Coffee" is archived/);
+    expect(result.error).toMatch(/Pick a live category/);
     expect(listRules()).toEqual([]);
+  });
+
+  it('saves a live category over an archived one on edit', async () => {
+    const { db, userId } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const groceries = categoryIdByName(db, 'Groceries');
+    const upserted = upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: userId, actorRole: 'admin' });
+    if (!upserted.ok) throw new Error('unexpected refusal');
+    archiveCategory(coffee, true);
+
+    const result = await saveRuleAction(
+      {},
+      formData({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: String(groceries), renameTo: '', fromRuleId: String(upserted.ruleId) }),
+    );
+    expect(result.message).toBe('Rule saved.');
+    expect(listRules()).toHaveLength(1);
+    expect(listRules()[0].categoryId).toBe(groceries);
   });
 
   it('still accepts a live category, and still accepts "(none)" for a kind that has none', async () => {
