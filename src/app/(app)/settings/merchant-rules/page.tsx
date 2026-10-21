@@ -7,7 +7,7 @@ import {
 } from '@/lib/canadian-pack';
 import { listAttributablePeople } from '@/lib/auth/users';
 import { listCategories } from '@/lib/categories';
-import { ruleImpactCounts } from '@/lib/categorize/engine';
+import { alwaysAskSendBackIds, ruleImpactCounts } from '@/lib/categorize/engine';
 import { findRedundantRules, listRules, type MatchType, type MerchantRuleRecord, type RuleKind } from '@/lib/categorize/rules';
 import { previewRulesPackExport } from '@/lib/packs';
 import { MerchantRulesClient } from './merchant-rules-client';
@@ -84,6 +84,12 @@ export default async function MerchantRulesPage({
     const value = impactCounts.get(rule.id);
     if (value !== undefined) impactRecord[rule.id] = value;
   }
+  /** v1.56.1 (review M-3). How many rows each enabled Always ask rule on this page could send back
+   *  to review: the same ids sendBackToReviewAction resets, so the menu's N and the write agree. */
+  const sendBackCounts: Record<number, number> = {};
+  for (const rule of rows) {
+    if (rule.ruleKind === 'always_ask' && rule.disabledAt === null) sendBackCounts[rule.id] = alwaysAskSendBackIds(rule.id).length;
+  }
   /** What the redundant badge needs to name the covering rule ON the row -- see the docblock on
    *  merchant-rules-client.tsx's own `redundantByRuleId` prop for why a bare id is not enough. */
   const redundantRecord: Record<number, { id: number; pattern: string; matchType: MatchType }> = {};
@@ -116,6 +122,7 @@ export default async function MerchantRulesPage({
       kindCounts={kindCounts}
       redundantCount={redundant.length}
       impactCounts={impactRecord}
+      sendBackCounts={sendBackCounts}
       redundantByRuleId={redundantRecord}
       rulesPackRows={previewRulesPackExport({ includeTransferRules: true, includeRenameRules: true })}
       canadianPack={canadianPack}

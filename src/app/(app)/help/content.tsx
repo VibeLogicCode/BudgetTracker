@@ -234,8 +234,9 @@ export const HELP_SECTIONS: HelpSection[] = [
           category for one teaches nothing, and each one waits here for you. The text to match starts as the
           row&rsquo;s description without the code at the end, and the dialog says how many transactions it
           matches before you save. Rows a rule or a guess already filed can be sent back to review in the same
-          step; rows you categorized yourself are never touched. An admin can turn the rule off or delete it
-          under <B>Settings → Merchant rules</B>, where it is listed as Always ask.
+          step; rows you categorized yourself are never touched. An admin can turn the rule off, delete it, or
+          send the rows a rule or a guess filed back to review at any later time under <B>Settings → Merchant
+          rules</B>, where it is listed as Always ask.
         </P>
         <P>
           One merchant can need two answers. Two insurance policies with the same company differ

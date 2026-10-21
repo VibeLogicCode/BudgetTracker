@@ -23,6 +23,11 @@ vi.mock('@/app/(app)/settings/merchant-rules/actions', () => ({
   applyCanadianPackUpdateAction: vi.fn(async () => ({})),
 }));
 
+// v1.56.1: an Always ask rule's row reuses the Transactions dialog's Send back action.
+vi.mock('@/app/(app)/transactions/actions', () => ({
+  sendBackToReviewAction: vi.fn(async () => ({})),
+}));
+
 beforeEach(() => vi.clearAllMocks());
 afterEach(() => cleanup());
 
@@ -1235,6 +1240,35 @@ describe('MerchantRulesClient — Always ask', () => {
     expect(screen.queryByRole('menuitem', { name: 'Edit' })).toBeNull();
     expect(screen.queryByRole('menuitem', { name: /apply now/i })).toBeNull();
     expect(screen.queryByRole('menuitem', { name: 'Delete rule and clear from transactions' })).toBeNull();
+  });
+
+  // v1.56.1 (review M-3): rows a rule or a guess filed before the mark can still go back later.
+  it('offers Send matching rows back to review with its count, posting the rule id to the dialog action', async () => {
+    const { sendBackToReviewAction } = await import('@/app/(app)/transactions/actions');
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(
+      <MerchantRulesClient
+        {...baseProps({ rows: [rule({ id: 4, pattern: 'E-TRANSFER', matchType: 'contains', ruleKind: 'always_ask', categoryId: null })], sendBackCounts: { 4: 3 } })}
+      />,
+    );
+    openRowMenu('Actions for E-TRANSFER');
+    const item = screen.getByRole('menuitem', { name: 'Send matching rows back to review (3)' });
+    expect(item.closest('form')!.querySelector('input[name="ruleId"]')!.getAttribute('value')).toBe('4');
+    fireEvent.click(item);
+    expect(confirmSpy).toHaveBeenCalled();
+    await waitFor(() => expect(sendBackToReviewAction).toHaveBeenCalled());
+    confirmSpy.mockRestore();
+  });
+
+  it('does not offer Send back when nothing would go back, or while the rule is off', () => {
+    const askRule = rule({ id: 4, pattern: 'E-TRANSFER', matchType: 'contains', ruleKind: 'always_ask', categoryId: null });
+    const { unmount } = render(<MerchantRulesClient {...baseProps({ rows: [askRule], sendBackCounts: {} })} />);
+    openRowMenu('Actions for E-TRANSFER');
+    expect(screen.queryByRole('menuitem', { name: /back to review/ })).toBeNull();
+    unmount();
+    render(<MerchantRulesClient {...baseProps({ rows: [{ ...askRule, disabledAt: '2026-09-01T00:00:00.000Z' }], sendBackCounts: { 4: 3 } })} />);
+    openRowMenu('Actions for E-TRANSFER');
+    expect(screen.queryByRole('menuitem', { name: /back to review/ })).toBeNull();
   });
 
   it('says what deleting it does', () => {

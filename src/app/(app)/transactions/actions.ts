@@ -1544,7 +1544,8 @@ export async function setAlwaysAskAction(_prev: AlwaysAskState, formData: FormDa
 
 /**
  * Spec 2026-10-21 §2.1. Keyed by rule id and recomputes the rows on the server, so the posted
- * form can never name which transactions go back to review.
+ * form can never name which transactions go back to review. v1.56.1: also posted from the Always
+ * ask rule's row on the Rules page (review M-3), so rows filed before the mark can go back later.
  */
 export async function sendBackToReviewAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
@@ -1561,5 +1562,7 @@ export async function sendBackToReviewAction(_prev: ActionState, formData: FormD
   revalidatePath('/transactions');
   revalidatePath('/budgets');
   revalidatePath('/dashboard');
+  // v1.56.1: the Rules page offers this too, and its count goes down to what is left.
+  revalidatePath('/settings/merchant-rules');
   return { message: `Sent ${sent} ${rowWord(sent, 'transaction')} back to review.` };
 }

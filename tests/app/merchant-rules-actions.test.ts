@@ -8,6 +8,9 @@ let currentUser = { id: 1, name: 'Admin', username: 'admin', role: 'admin' as co
 
 vi.mock('@/lib/auth/session', () => ({
   requireAdmin: vi.fn(async () => currentUser),
+  // v1.56.1: the Rules page's Send back item posts to the Always ask dialog's own action, which
+  // asks for any signed-in, household-wide viewer.
+  requireUser: vi.fn(async () => currentUser),
 }));
 
 vi.mock('next/headers', () => ({
@@ -31,9 +34,17 @@ import {
   saveRuleAction,
   setRuleDisabledAction,
 } from '@/app/(app)/settings/merchant-rules/actions';
-import { CATEGORY_RULE_NEEDS_CATEGORY_ERROR, listRules, upsertRuleFromCorrection } from '@/lib/categorize/rules';
+import {
+  CATEGORY_RULE_NEEDS_CATEGORY_ERROR,
+  listRules,
+  setAlwaysAskRule,
+  setRuleDisabledFlag,
+  upsertRuleFromCorrection,
+} from '@/lib/categorize/rules';
 import { rerunEngine, upsertRenameRule } from '@/lib/categorize/engine';
 import { archiveCategory, listCategories } from '@/lib/categories';
+import MerchantRulesPage from '@/app/(app)/settings/merchant-rules/page';
+import { sendBackToReviewAction } from '@/app/(app)/transactions/actions';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -655,5 +666,68 @@ describe('v1.31.0 R-13: saveRuleAction validates the category it is handed', () 
       formData({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: '', renameTo: '' }),
     );
     expect(result.error).toBe(CATEGORY_RULE_NEEDS_CATEGORY_ERROR);
+  });
+});
+
+/**
+ * v1.56.1 (v1.56.0 review M-3). Rows a rule or a guess filed before an Always ask rule existed --
+ * including rows a category rule it now shadows filed -- can go back to review from the rule's row on
+ * this page, through the dialog's own action. N is read from the props the page hands its client.
+ */
+describe('Send matching rows back to review, from an Always ask rule on the Rules page', () => {
+  async function sendBackCountOnPage(ruleId: number): Promise<number | undefined> {
+    const element = await MerchantRulesPage({ searchParams: Promise.resolve({ kind: 'always_ask' }) });
+    return (element.props as { sendBackCounts: Record<number, number> }).sendBackCounts[ruleId];
+  }
+  const state = (id: number) =>
+    current!.sqlite.prepare('select category_id, categorization_source from transactions where id = ?').get(id) as {
+      category_id: number | null;
+      categorization_source: string;
+    };
+
+  it('N on the row is exactly the rule- and guess-filed rows the action resets; hand-set and split rows stay', async () => {
+    const { db, sqlite, userId, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const coffee = categoryIdByName(db, 'Coffee');
+    // A category rule files a row, then an Always ask rule on wider text shadows that rule.
+    const shadowed = upsertRuleFromCorrection({ pattern: 'E-TRANSFER ***KD4', matchType: 'exact', ruleKind: 'category', categoryId: groceries, createdBy: userId, actorRole: 'admin' });
+    if (!shadowed.ok) throw new Error('refused');
+    const byRule = add('E-TRANSFER ***KD4');
+    rerunEngine();
+    expect(state(byRule)).toEqual({ category_id: groceries, categorization_source: 'rule' });
+    const byGuess = add('E-TRANSFER ***PW2');
+    const byHand = add('E-TRANSFER ***PW2');
+    const splitRow = add('E-TRANSFER ***KD4');
+    const other = add('CEDAR BAKERY');
+    const file = sqlite.prepare('update transactions set categorization_source = ?, category_id = ? where id = ?');
+    file.run('bayes', groceries, byGuess);
+    file.run('manual', coffee, byHand);
+    file.run('rule', groceries, splitRow);
+    file.run('rule', coffee, other);
+    const part = sqlite.prepare('insert into transaction_splits (txn_id, category_id, amount_cents, created_at) values (?, ?, ?, ?)');
+    part.run(splitRow, groceries, -600, nowIso());
+    part.run(splitRow, coffee, -400, nowIso());
+    const ask = setAlwaysAskRule({ pattern: 'E-TRANSFER', matchType: 'contains', userId, actorRole: 'admin' });
+    if (!ask.ok) throw new Error('refused');
+
+    expect(await sendBackCountOnPage(ask.ruleId)).toBe(2);
+    expect(await sendBackToReviewAction({}, formData({ ruleId: String(ask.ruleId) }))).toEqual({ message: 'Sent 2 transactions back to review.' });
+    expect(state(byRule)).toEqual({ category_id: null, categorization_source: 'none' });
+    expect(state(byGuess)).toEqual({ category_id: null, categorization_source: 'none' });
+    expect(state(byHand)).toEqual({ category_id: coffee, categorization_source: 'manual' });
+    expect(state(splitRow)).toEqual({ category_id: groceries, categorization_source: 'rule' });
+    expect(state(other)).toEqual({ category_id: coffee, categorization_source: 'rule' });
+    expect(await sendBackCountOnPage(ask.ruleId)).toBe(0);
+  });
+
+  it('a disabled Always ask rule offers nothing', async () => {
+    const { db, sqlite, userId, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const id = add('E-TRANSFER ***KD4');
+    sqlite.prepare('update transactions set categorization_source = ?, category_id = ? where id = ?').run('rule', groceries, id);
+    const ask = setAlwaysAskRule({ pattern: 'E-TRANSFER', matchType: 'contains', userId, actorRole: 'admin' });
+    if (!ask.ok) throw new Error('refused');
+    setRuleDisabledFlag(ask.ruleId, true);
+    expect(await sendBackCountOnPage(ask.ruleId) ?? 0).toBe(0);
   });
 });

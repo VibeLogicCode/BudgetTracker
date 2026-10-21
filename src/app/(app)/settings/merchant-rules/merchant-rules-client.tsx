@@ -41,6 +41,8 @@ import {
   setRuleDisabledAction,
   type RuleActionState,
 } from './actions';
+// v1.56.1 (review M-3): the Always ask dialog's own Send back action, with its guards and scope.
+import { sendBackToReviewAction } from '../../transactions/actions';
 import { buttonClass } from '@/components/ui/Button';
 
 const initial: RuleActionState = {};
@@ -546,6 +548,7 @@ export function MerchantRulesClient({
   people,
   redundantCount,
   impactCounts,
+  sendBackCounts = {},
   redundantByRuleId,
   rulesPackRows,
   canadianPack,
@@ -572,6 +575,9 @@ export function MerchantRulesClient({
   redundantCount: number;
   /** Sparse: absent means 0 (item 12's ruleImpactCounts never stores a zero entry). */
   impactCounts: Record<number, number>;
+  /** v1.56.1. Per enabled Always ask rule on this page, the rows a rule or a guess filed that Send
+   *  back would reset (alwaysAskSendBackIds). Absent or 0 means the item is not offered. */
+  sendBackCounts?: Record<number, number>;
   /**
    * ruleId -> the rule that already covers it with the identical outcome (item 10's redundancy
    * detection, widened for 'word' -- see findRedundantRules' own docblock in
@@ -595,6 +601,7 @@ export function MerchantRulesClient({
   const [applyState, applyNow] = useActionState(applyRuleNowAction, initial);
   const [rerunState, rerunAll] = useActionState(rerunAllAction, initial);
   const [clearState, deleteAndClear] = useActionState(deleteRuleAndClearAction, initial);
+  const [sendBackState, sendBack] = useActionState(sendBackToReviewAction, initial);
 
   const [selected, setSelected] = useState<number[]>([]);
   const toggle = (id: number) => setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -612,8 +619,8 @@ export function MerchantRulesClient({
   const [clearingRule, setClearingRule] = useState<MerchantRuleRecord | null>(null);
   const [runningRules, setRunningRules] = useState(false);
 
-  const notice = saveState.message ?? deleteState.message ?? bulkDeleteState.message ?? bulkDisableState.message ?? disableState.message ?? applyState.message ?? rerunState.message ?? clearState.message;
-  const error = saveState.error ?? deleteState.error ?? bulkDeleteState.error ?? bulkDisableState.error ?? disableState.error ?? applyState.error ?? rerunState.error ?? clearState.error;
+  const notice = saveState.message ?? deleteState.message ?? bulkDeleteState.message ?? bulkDisableState.message ?? disableState.message ?? applyState.message ?? rerunState.message ?? clearState.message ?? sendBackState.message;
+  const error = saveState.error ?? deleteState.error ?? bulkDeleteState.error ?? bulkDisableState.error ?? disableState.error ?? applyState.error ?? rerunState.error ?? clearState.error ?? sendBackState.error;
 
   const selectedRules = rows.filter((rule) => selected.includes(rule.id));
   // Only rows on THIS page are resolvable to a real record for the confirm text below -- a
@@ -1179,6 +1186,15 @@ export function MerchantRulesClient({
                         !(rule.ruleKind === 'category' && rule.categoryArchived) ? (
                           <RowMenuForm action={applyNow} fields={{ ruleId: String(rule.id) }}>
                             {`Apply now (${impact} would affect)`}
+                          </RowMenuForm>
+                        ) : null}
+                        {rule.ruleKind === 'always_ask' && !disabled && (sendBackCounts[rule.id] ?? 0) > 0 ? (
+                          <RowMenuForm
+                            action={sendBack}
+                            fields={{ ruleId: String(rule.id) }}
+                            confirm={`Send ${sendBackCounts[rule.id]} ${sendBackCounts[rule.id] === 1 ? 'row' : 'rows'} a rule or a guess filed back to review? Rows you categorized yourself stay as they are.`}
+                          >
+                            {`Send matching rows back to review (${sendBackCounts[rule.id]})`}
                           </RowMenuForm>
                         ) : null}
                         <RowMenuForm action={setDisabled} fields={{ ruleId: String(rule.id), disabled: disabled ? '0' : '1' }}>
