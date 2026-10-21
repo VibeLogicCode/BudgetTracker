@@ -7,6 +7,7 @@ import BetterSqlite3 from 'better-sqlite3';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireAdmin } from '@/lib/auth/session';
 import { archiveCategory, createCategory, listCategories, renameCategory, setCategoryTaxRelevant } from '@/lib/categories';
+import { refileGuessesInCategory } from '@/lib/categorize/engine';
 import {
   createProfile,
   deleteProfile,
@@ -89,6 +90,9 @@ export async function archiveCategoryAction(_prev: ManagerState, formData: FormD
   const archived = formData.get('archived') === '1';
   if (!Number.isInteger(id) || id <= 0) return { error: 'Invalid request.' };
   archiveCategory(id, archived);
+  // An archived category is never assigned automatically, including by a guess made before it
+  // was archived: those rows go back through the engine now rather than waiting for a re-run.
+  if (archived) refileGuessesInCategory(id);
   revalidateCategoryRoutes();
   return { message: archived ? 'Category archived.' : 'Category restored.' };
 }

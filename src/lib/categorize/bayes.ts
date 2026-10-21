@@ -1,6 +1,7 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, notInArray, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { bayesCategoryTotals, bayesTokens } from '@/db/schema';
+import { archivedCategoryIds } from '@/lib/categories';
 import { SETTING_BAYES_VOCAB_SIZE, getIntSetting, setIntSetting } from '@/lib/settings';
 
 /**
@@ -160,14 +161,34 @@ export function scoreCategories(tokens: string[]): { categoryId: number; score: 
     .sort((a, b) => b.score - a.score);
 }
 
+/** tokenExistsAnywhere, counting only what a LIVE category has seen -- see classify. */
+function tokenKnownToLiveCategory(token: string, archived: Set<number>): boolean {
+  if (archived.size === 0) return tokenExistsAnywhere(token);
+  const row = getDb()
+    .select({ c: sql<number>`count(*)` })
+    .from(bayesTokens)
+    .where(and(eq(bayesTokens.token, token), notInArray(bayesTokens.categoryId, [...archived])))
+    .get();
+  return (row?.c ?? 0) > 0;
+}
+
 export function classify(tokens: string[]): { categoryId: number; margin: number } | null {
-  const knownTokens = tokens.filter((token) => tokenExistsAnywhere(token));
+  // The known-token gate counts only tokens some LIVE category has seen. Evidence that exists only
+  // for an archived category says nothing for or against a live one, so it must not let a live
+  // category through the gate on its prior alone.
+  const archived = archivedCategoryIds();
+  const knownTokens = tokens.filter((token) => tokenKnownToLiveCategory(token, archived));
   // The gate counts DISTINCT known tokens, not instances: tokenize('PIZZA PIZZA')
   // must not clear a >=2 gate off a single vocabulary hit repeated twice.
   const distinctKnownCount = new Set(knownTokens).size;
   if (distinctKnownCount < BAYES_MIN_KNOWN_TOKENS) return null;
 
-  const scores = scoreCategories(tokens);
+  // An archived category is never guessed. It is dropped from the running here, where the guess is
+  // chosen, rather than from the training: its counts stay, so restoring it restores its guesses.
+  // The best and runner-up below are both live, so the next-best live category wins only when it
+  // clears the same margin over the next live one; otherwise there is no guess. scoreCategories
+  // itself stays raw -- it is the diagnostic view of the whole model.
+  const scores = scoreCategories(tokens).filter((score) => !archived.has(score.categoryId));
   // A runner-up is required: with a single trained category the margin is undefined.
   if (scores.length < 2) return null;
 

@@ -784,7 +784,12 @@ export function TransactionsClient({
   // and a client component has nothing past what its own props were handed.
   const confirmedCount = Math.max(0, queueCeiling - page.total);
   const queueConfirmedPct = queueCeiling > 0 ? (confirmedCount / queueCeiling) * 100 : 100;
-  const acceptAllIds = page.rows.filter((row) => row.source === 'bayes' && row.categoryId !== null).map((row) => row.id);
+  // A guess stored before its category was archived cannot be accepted (acceptGuessAction refuses
+  // it), so none of the accept controls offer it; the row still shows for a person to choose.
+  const archivedCategoryIdSet = new Set(categories.filter((c) => c.isArchived).map((c) => c.id));
+  const hasLiveGuess = (row: TransactionRow) =>
+    row.source === 'bayes' && row.categoryId !== null && !archivedCategoryIdSet.has(row.categoryId);
+  const acceptAllIds = page.rows.filter(hasLiveGuess).map((row) => row.id);
 
   const label = (id: number | null) => {
     if (id === null) return 'Uncategorized';
@@ -1260,7 +1265,8 @@ export function TransactionsClient({
    * second copy of that guard.
    */
   function confirmButton(row: TransactionRow) {
-    const hasCategory = row.categoryId !== null;
+    // An archived guess counts as no category here: it has to be chosen again, not confirmed.
+    const hasCategory = row.categoryId !== null && (row.source !== 'bayes' || hasLiveGuess(row));
     const Icon = hasCategory ? ConfirmIcon : UnconfirmedIcon;
     return (
       <form action={acceptAction}>
@@ -1422,7 +1428,9 @@ export function TransactionsClient({
                 // A whole dollar: a split point between two policies is a round number a person
                 // picks, not a premium read off a statement.
                 splitPoint: centsToInput(Math.round(Math.abs(row.amountCents) / 100) * 100),
-                categoryId: row.categoryId,
+                // Only a live category seeds the dialog: the picker lists live ones only, so an
+                // archived id would sit in its hidden input unseen and be submitted anyway.
+                categoryId: row.categoryId !== null && !archivedCategoryIdSet.has(row.categoryId) ? row.categoryId : null,
                 person: '',
               });
             }}
@@ -1447,7 +1455,7 @@ export function TransactionsClient({
         ) : null}
         {/* Review-mode-only, inventory #5: only when the categorizer itself guessed this row and
             nobody has confirmed it yet. */}
-        {reviewMode && row.source === 'bayes' && row.categoryId !== null ? (
+        {reviewMode && hasLiveGuess(row) ? (
           <RowMenuForm action={acceptAction} fields={{ transactionId: String(row.id) }}>
             {`Accept ${row.categoryName}`}
           </RowMenuForm>

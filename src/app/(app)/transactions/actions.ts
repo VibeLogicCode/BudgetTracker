@@ -45,6 +45,8 @@ import { filterFromQuery } from './filter-params';
 import {
   applyCategoryToMatching,
   applyRenameRules,
+  ARCHIVED_CATEGORY_NO_RULE,
+  ARCHIVED_GUESS_ERROR,
   clearCategory,
   confirmCategory,
   createRulesFromRow,
@@ -58,6 +60,16 @@ import {
 } from '@/lib/categorize/engine';
 import { ruleOwnedError, AMOUNT_BOUND_ORDER_ERROR, setRecurringMarks, type RecurringMark } from '@/lib/categorize/rules';
 import { boundsProblem } from '@/lib/categorize/amount-bounds';
+import { isCategoryArchived } from '@/lib/categories';
+
+/**
+ * A pick that would normally also teach a rule writes none when the category is archived (the
+ * engine refuses: mayLearnCategoryRule). This is the sentence that says so, appended to the
+ * action's usual message, or nothing when a rule was not asked for or the category is live.
+ */
+function archivedNoRuleNote(categoryId: number, ruleAsked: boolean): string {
+  return ruleAsked && isCategoryArchived(categoryId) ? ` ${ARCHIVED_CATEGORY_NO_RULE}` : '';
+}
 
 export interface ActionState {
   error?: string;
@@ -253,7 +265,7 @@ export async function setCategoryAction(_prev: ActionState, formData: FormData):
 
   revalidatePath('/transactions');
   revalidatePath('/review');
-  return { message: 'Category updated.' };
+  return { message: `Category updated.${raw === '' ? '' : archivedNoRuleNote(Number(raw), formData.get('teach') === '1')}` };
 }
 
 /**
@@ -273,6 +285,9 @@ export async function acceptGuessAction(_prev: ActionState, formData: FormData):
   const transactionId = Number(formData.get('transactionId'));
   const row = getTransaction(transactionId, user);
   if (!row || row.categoryId === null) return { error: 'There is no guess to accept on that row.' };
+  // A guess stored before its category was archived: accepting it would make an automatic
+  // assignment to an archived category permanent.
+  if (row.source === 'bayes' && isCategoryArchived(row.categoryId)) return { error: ARCHIVED_GUESS_ERROR };
   // v1.27.0 item 1: `createRule` spelled out rather than left to confirmCategory's `!== false`
   // default. Behaviour is identical -- accepting a guess has always taught the merchant's rule,
   // which is the point of accepting it -- but tests/ops/rule-authoring-intent.test.ts requires
@@ -281,7 +296,7 @@ export async function acceptGuessAction(_prev: ActionState, formData: FormData):
   const result = confirmCategory({ transactionId, categoryId: row.categoryId, userId: user.id, createRule: true, actorRole: user.role });
   if (!result.ok) return { error: guardedWriteError(result) };
   revalidatePath('/transactions');
-  return { message: 'Accepted.' };
+  return { message: `Accepted.${archivedNoRuleNote(row.categoryId, true)}` };
 }
 
 /**
@@ -345,6 +360,9 @@ export async function applyToAllMatchingAction(_prev: ActionState, formData: For
   const result = applyCategoryToMatching({ normalizedMerchant, categoryId, userId: user.id, actorRole: user.role });
   if (!result.ok) return { error: guardedWriteError(result) };
   revalidatePath('/transactions');
+  if (isCategoryArchived(categoryId)) {
+    return { message: `Applied to ${result.count} transactions.${archivedNoRuleNote(categoryId, true)}` };
+  }
   return { message: `Applied to ${result.count} transactions and created a rule.` };
 }
 
@@ -434,7 +452,7 @@ export async function bulkCategorizeAction(_prev: ActionState, formData: FormDat
   if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
   revalidatePath('/transactions');
   revalidatePath('/review');
-  const changedSentence = `Categorized ${result.changed} transaction${result.changed === 1 ? '' : 's'}.`;
+  const changedSentence = `Categorized ${result.changed} transaction${result.changed === 1 ? '' : 's'}.${archivedNoRuleNote(categoryId, createRules)}`;
   const skipSentence = splitSkipSentence(result.skipped);
   return { message: skipSentence ? `${changedSentence} ${skipSentence}` : changedSentence };
 }
@@ -803,7 +821,7 @@ export async function bulkRecategorizeGroupAction(_prev: ActionState, formData: 
   if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
   revalidatePath('/transactions');
   revalidatePath('/review');
-  const changedSentence = `Moved ${result.changed} transaction${result.changed === 1 ? '' : 's'}.`;
+  const changedSentence = `Moved ${result.changed} transaction${result.changed === 1 ? '' : 's'}.${archivedNoRuleNote(categoryId, formData.get('createRules') === 'on')}`;
   const skipSentence = splitSkipSentence(result.skipped);
   return { message: skipSentence ? `${changedSentence} ${skipSentence}` : changedSentence };
 }
@@ -1420,7 +1438,7 @@ export async function createRulesFromRowAction(_prev: ActionState, formData: For
 
   revalidatePath('/transactions');
   revalidatePath('/settings/merchant-rules');
-  const parts = [`Created ${result.rulesCreated} ${rowWord(result.rulesCreated, 'rule')}.`];
+  const parts = result.rulesCreated > 0 ? [`Created ${result.rulesCreated} ${rowWord(result.rulesCreated, 'rule')}.`] : [];
   if (parsed.value.categoryId !== undefined) {
     parts.push(`Filed ${result.categoryChanged} ${rowWord(result.categoryChanged, 'transaction')}.`);
   }
@@ -1431,6 +1449,9 @@ export async function createRulesFromRowAction(_prev: ActionState, formData: For
     // Said out loud rather than folded into the count: a split row's parts ARE its categorization,
     // so it was deliberately left alone and the household should not have to notice the shortfall.
     parts.push(`Left ${result.splitsSkipped} split ${rowWord(result.splitsSkipped, 'transaction')} alone.`);
+  }
+  if (parsed.value.categoryId !== undefined && isCategoryArchived(parsed.value.categoryId)) {
+    parts.push(ARCHIVED_CATEGORY_NO_RULE);
   }
   return { message: parts.join(' ') };
 }

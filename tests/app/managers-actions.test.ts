@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createSeededTestDb, insertTestAccount, categoryIdByName, insertTestUser, type TestDb } from '../helpers/db';
+import { sql } from 'drizzle-orm';
 import { nowIso } from '@/lib/clock';
 
 let currentUser = { id: 1, name: 'Admin', username: 'admin', role: 'admin' as const };
@@ -248,6 +249,28 @@ describe('category mutations revalidate every route that renders categories (fin
     expect(result.message).toBeTruthy();
     const calls = vi.mocked(revalidatePath).mock.calls.map((call) => call[0]);
     for (const route of CATEGORY_RENDERING_ROUTES) expect(calls).toContain(route);
+  });
+
+  it('archiving re-files the guesses already sitting in that category, and leaves hand picks alone', async () => {
+    const { db, userId } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const accountId = insertTestAccount(db);
+    const add = (merchant: string, source: 'bayes' | 'manual') =>
+      db.get<{ id: number }>(sql`
+        insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, category_id, categorization_source, confidence, created_by, created_at, updated_at)
+        values (${accountId}, '2026-03-02', ${merchant}, ${merchant}, -1200, ${coffee}, ${source}, ${source === 'bayes' ? 2.5 : null}, ${userId}, ${nowIso()}, ${nowIso()})
+        returning id`).id;
+    const guessed = add('BEAN BARN', 'bayes');
+    const picked = add('BEAN BARN', 'manual');
+
+    await archiveCategoryAction({}, formData({ categoryId: String(coffee), archived: '1' }));
+    const read = (id: number) =>
+      current!.sqlite.prepare('select category_id, categorization_source from transactions where id = ?').get(id) as {
+        category_id: number | null;
+        categorization_source: string;
+      };
+    expect(read(guessed).category_id).not.toBe(coffee);
+    expect(read(picked)).toEqual({ category_id: coffee, categorization_source: 'manual' });
   });
 });
 

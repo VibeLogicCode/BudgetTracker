@@ -7,6 +7,7 @@ import { transactionHasSplits } from '@/lib/splits';
 import { displaySourceMayWrite, displaySourcesAbove, type DisplaySource } from '@/lib/display-source';
 import { applyPaymentMatchers, restoreLoanDescription } from '@/lib/loans';
 import { amountWithinBounds, isBounded } from '@/lib/categorize/amount-bounds';
+import { isCategoryArchived } from '@/lib/categories';
 import { classify, train, untrain } from './bayes';
 import { tokenize } from './normalize';
 import {
@@ -18,6 +19,7 @@ import {
   listRules,
   matchRule,
   RECURRING_MARK_KINDS,
+  ruleCategoryArchived,
   setRuleDisabledFlag,
   upsertRuleFromCorrection,
   type MatchType,
@@ -1226,11 +1228,50 @@ function teachTarget(
       rule.matchType === 'exact' &&
       rule.pattern === normalizedMerchant &&
       rule.disabledAt === null &&
+      // Skipped by matchRule, so it does not decide this row -- and is left untouched for when the
+      // category is restored.
+      !ruleCategoryArchived(rule) &&
       isBounded(rule) &&
       amountWithinBounds(amountCents, rule.amountMinCents, rule.amountMaxCents),
   );
   if (covering.length !== 1) return unbounded;
   return { amountMinCents: covering[0].amountMinCents, amountMaxCents: covering[0].amountMaxCents };
+}
+
+/**
+ * One wording, one place (MUST-19.11): what a person is told when they picked an archived category
+ * somewhere that would normally also teach a rule. The pick is saved; the rule is not.
+ */
+export const ARCHIVED_CATEGORY_NO_RULE = 'No category rule was saved, because that category is archived.';
+
+/** One wording, one place: accepting a stored guess whose category was archived after the guess. */
+export const ARCHIVED_GUESS_ERROR =
+  'That suggestion is an archived category, so it cannot be accepted. Choose a category for this one instead.';
+
+/**
+ * Archiving a category re-files the guesses already sitting in it: every Bayes-sourced row on that
+ * category goes back through the engine, which can no longer pick it (classify) and so files the
+ * row elsewhere or leaves it uncategorized. A subset of ELIGIBLE (source = 'bayes'), so rule rows
+ * and hand picks are untouched -- the eligibility rule itself is not widened.
+ */
+export function refileGuessesInCategory(categoryId: number): EngineResult {
+  const ids = getDb()
+    .select({ id: transactions.id })
+    .from(transactions)
+    .where(and(eq(transactions.categoryId, categoryId), eq(transactions.categorizationSource, 'bayes')))
+    .all()
+    .map((row) => row.id);
+  return runEngine(ids);
+}
+
+/**
+ * A rule that would file rows into an archived category would never fire (ruleCategoryArchived),
+ * so the learning paths below do not write one: a person may still pick an archived category for a
+ * row by hand, but that pick teaches nothing. Checked by every writer of a category rule that
+ * learns from a pick -- confirmCategory, createRulesFromRow and applyCategoryToMatching.
+ */
+function mayLearnCategoryRule(categoryId: number): boolean {
+  return !isCategoryArchived(categoryId);
 }
 
 export function confirmCategory(input: {
@@ -1282,7 +1323,7 @@ export function confirmCategory(input: {
   }
 
   // R4 ownership check FIRST: resolved (and can refuse) before anything else below is touched.
-  if (input.createRule !== false && row.normalizedMerchant.length > 0) {
+  if (input.createRule !== false && row.normalizedMerchant.length > 0 && mayLearnCategoryRule(input.categoryId)) {
     const target = teachTarget(row.normalizedMerchant, row.amountCents);
     const upserted = upsertRuleFromCorrection({
       pattern: row.normalizedMerchant,
@@ -1721,7 +1762,7 @@ export function createRulesFromRow(input: RulesFromRowInput): RulesFromRowResult
       // writes. upsertRuleFromCorrection goes through getDb(), which inside a better-sqlite3
       // transaction resolves to this same connection, so its writes are part of this unit of work
       // and a throw below rolls them back.
-      if (input.categoryId !== undefined) {
+      if (input.categoryId !== undefined && mayLearnCategoryRule(input.categoryId)) {
         const upserted = upsertRuleFromCorrection({
           pattern: input.normalizedMerchant,
           matchType: 'exact',
@@ -1835,17 +1876,19 @@ export function applyCategoryToMatching(input: {
   if (ids.length === 0) return { ok: true, count: 0 };
 
   // R4 ownership check FIRST: resolved -- and can refuse -- before any of the matching rows
-  // below are touched.
-  const upserted = upsertRuleFromCorrection({
-    pattern: input.normalizedMerchant,
-    matchType: 'exact',
-    ruleKind: 'category',
-    categoryId: input.categoryId,
-    createdBy: input.userId,
-    actorRole: input.actorRole,
-    at: input.at,
-  });
-  if (!upserted.ok) return { ok: false, reason: 'owned_by_another', ownerName: upserted.ownerName };
+  // below are touched. No rule at all for an archived category (mayLearnCategoryRule).
+  if (mayLearnCategoryRule(input.categoryId)) {
+    const upserted = upsertRuleFromCorrection({
+      pattern: input.normalizedMerchant,
+      matchType: 'exact',
+      ruleKind: 'category',
+      categoryId: input.categoryId,
+      createdBy: input.userId,
+      actorRole: input.actorRole,
+      at: input.at,
+    });
+    if (!upserted.ok) return { ok: false, reason: 'owned_by_another', ownerName: upserted.ownerName };
+  }
 
   for (const id of ids) {
     // createRule: false -- the rule for this merchant was just resolved above, once, for the

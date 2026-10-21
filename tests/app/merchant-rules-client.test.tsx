@@ -38,7 +38,7 @@ function rule(over: Partial<MerchantRuleRecord> = {}): MerchantRuleRecord {
     id: 1, pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: 1, renameTo: null,
     createdBy: null, hitCount: 0, lastUsedAt: null, createdAt: '2026-08-16T00:00:00.000Z', lastModifiedBy: null,
     disabledAt: null, packSource: null, packVersion: null, installedAt: null,
-    amountMinCents: null, amountMaxCents: null, attributedUserId: null, ...over,
+    amountMinCents: null, amountMaxCents: null, attributedUserId: null, categoryArchived: false, ...over,
   };
 }
 
@@ -96,6 +96,12 @@ describe('MerchantRulesClient — rendering the row', () => {
     expect(screen.getByText('Coffee')).toBeTruthy();
     expect(screen.getByText('7 transactions')).toBeTruthy();
     expect(screen.getByText('enabled')).toBeTruthy();
+  });
+
+  it('marks a category rule whose category is archived as not applied, instead of enabled', () => {
+    render(<MerchantRulesClient {...baseProps({ rows: [rule({ categoryArchived: true })] })} />);
+    expect(screen.getByText('Category archived, not applied')).toBeTruthy();
+    expect(screen.queryByText('enabled')).toBeNull();
   });
 
   it('shows a disabled badge, and never an Apply now item, for a disabled rule', () => {

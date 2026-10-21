@@ -3,6 +3,7 @@ import { getDb } from '@/db/client';
 import { merchantRules, users } from '@/db/schema';
 import { amountWithinBounds, boundsProblem, boundsWidth, isBounded } from '@/lib/categorize/amount-bounds';
 import { wordBoundaryTokens } from '@/lib/categorize/normalize';
+import { archivedCategoryIds } from '@/lib/categories';
 import { nowIso } from '@/lib/clock';
 import { isRecurringMarkKind, RECURRING_MARK_KINDS, type RecurringMark } from './mark-kinds';
 
@@ -215,6 +216,14 @@ export interface MerchantRuleRecord {
   /** 2026-09-13 (migration 0024). Set only on rule_kind = 'attribution', where NULL means
    *  Household -- the same thing NULL already means in transactions.attributed_user_id. */
   attributedUserId: number | null;
+  /**
+   * NOT A COLUMN. True when categoryId names an archived category (archivedCategoryIds, the one
+   * definition), filled in by listRules on every read. matchRule skips a category rule that
+   * carries it -- see ruleCategoryArchived. Required rather than optional for the same reason
+   * EngineTxn.amountCents is: a record built without it must fail to compile, not quietly read as
+   * "live".
+   */
+  categoryArchived: boolean;
 }
 
 /** What a pack write stamps on the row it writes -- see upsertRuleFromCorrection's `pack` param. */
@@ -227,7 +236,10 @@ export interface PackProvenance {
 export function listRules(kind?: RuleKind): MerchantRuleRecord[] {
   const query = getDb().select().from(merchantRules);
   const rows = kind ? query.where(eq(merchantRules.ruleKind, kind)).all() : query.all();
-  return rows.sort((a, b) => a.id - b.id);
+  const archived = archivedCategoryIds();
+  return rows
+    .map((row) => ({ ...row, categoryArchived: row.categoryId !== null && archived.has(row.categoryId) }))
+    .sort((a, b) => a.id - b.id);
 }
 
 /**
@@ -354,6 +366,19 @@ export function ruleOutcomeMissing(rule: Pick<MerchantRuleRecord, 'ruleKind' | '
 }
 
 /**
+ * Does this category rule point at an archived category? Such a rule never fires: an archived
+ * category is never assigned automatically.
+ *
+ * SKIPPED, NOT DELETED OR DISABLED. The row stays exactly as it was, so restoring the category
+ * restores the rule with nothing to re-create. And skipped at matchRule, the choke point, for the
+ * reason ruleOutcomeMissing gives: a rule that won its merchant and then declined to act would
+ * shadow a shorter rule that points at a live category.
+ */
+export function ruleCategoryArchived(rule: Pick<MerchantRuleRecord, 'ruleKind' | 'categoryArchived'>): boolean {
+  return rule.ruleKind === 'category' && rule.categoryArchived;
+}
+
+/**
  * 2026-09-13 (migration 0024). `amountCents` is the transaction's own signed amount, or null when
  * the caller has none to offer.
  *
@@ -378,6 +403,8 @@ export function matchRule(
     // v1.31.0 R-02: a rule with no outcome must not WIN and then do nothing -- see
     // ruleOutcomeMissing above for the merchant that stopped being categorised because it did.
     if (ruleOutcomeMissing(rule)) continue;
+    // Never file a row into an archived category -- see ruleCategoryArchived.
+    if (ruleCategoryArchived(rule)) continue;
     if (isBounded(rule)) {
       // The read-side half of AMOUNT_BOUND_KINDS, beside the match-type skip above and for the
       // same reason: a window on a kind that may not carry one can never fire, whatever route put

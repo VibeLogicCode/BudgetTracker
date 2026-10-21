@@ -461,7 +461,7 @@ describe('findRedundantRules', () => {
       id: 1, pattern: 'X', matchType: 'exact', ruleKind: 'category', categoryId: null, renameTo: null,
       createdBy: null, hitCount: 0, lastUsedAt: null, createdAt: '2026-01-01T00:00:00.000Z',
       lastModifiedBy: null, disabledAt: null, packSource: null, packVersion: null, installedAt: null,
-      amountMinCents: null, amountMaxCents: null, attributedUserId: null, ...over,
+      amountMinCents: null, amountMaxCents: null, attributedUserId: null, categoryArchived: false, ...over,
     };
   }
 
@@ -668,7 +668,7 @@ describe('findRedundantRules', () => {
         renameTo: rule.rename_to,
         createdBy: null, hitCount: 0, lastUsedAt: null, createdAt: '2026-01-01T00:00:00.000Z',
         lastModifiedBy: null, disabledAt: null, packSource: null, packVersion: null, installedAt: null,
-        amountMinCents: null, amountMaxCents: null, attributedUserId: null,
+        amountMinCents: null, amountMaxCents: null, attributedUserId: null, categoryArchived: false,
       }));
     }
 

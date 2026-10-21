@@ -1125,7 +1125,15 @@ export function MerchantRulesClient({
                             : '—'}
                     </td>
                     <td className="text-xs" data-label="Status">
-                      {disabled ? <span className="badge badge--muted">disabled</span> : <span className="badge badge--green">enabled</span>}
+                      {disabled ? (
+                        <span className="badge badge--muted">disabled</span>
+                      ) : rule.ruleKind === 'category' && rule.categoryArchived ? (
+                        // Kept, but skipped by matchRule until the category is restored: "enabled"
+                        // here would promise filing that cannot happen.
+                        <span className="badge badge--amber">Category archived, not applied</span>
+                      ) : (
+                        <span className="badge badge--green">enabled</span>
+                      )}
                     </td>
                     <td className="tabnum text-right text-xs text-muted cell-stack-amount" data-label="Affects">
                       {impact} transaction{impact === 1 ? '' : 's'}
@@ -1152,7 +1160,11 @@ export function MerchantRulesClient({
                           Edit
                         </RowMenuButton>
                         )}
-                        {rule.ruleKind !== 'rename' && !isRecurringMarkKind(rule.ruleKind) && !disabled ? (
+                        {rule.ruleKind !== 'rename' &&
+                        !isRecurringMarkKind(rule.ruleKind) &&
+                        !disabled &&
+                        // Skipped by the engine while its category is archived, so there is nothing to apply.
+                        !(rule.ruleKind === 'category' && rule.categoryArchived) ? (
                           <RowMenuForm action={applyNow} fields={{ ruleId: String(rule.id) }}>
                             {`Apply now (${impact} would affect)`}
                           </RowMenuForm>

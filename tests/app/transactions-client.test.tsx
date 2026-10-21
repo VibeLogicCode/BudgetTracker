@@ -2918,6 +2918,14 @@ describe('Review mode: confirm-progress bar and Accept all suggestions (item 5)'
     expect(screen.getByRole('button', { name: /Accept all suggestions \(2\)/ })).toBeTruthy();
   });
 
+  it('leaves out a guess whose category has since been archived', () => {
+    const archivedDining = [{ id: 1, name: 'Dining', parentId: null, isArchived: true, sortOrder: 0 }];
+    render(
+      <TransactionsClient page={reviewPageOf(3, 2)} accounts={[]} categories={archivedDining} people={[]} today="2026-08-16" reviewMode />,
+    );
+    expect(screen.queryByRole('button', { name: /Accept all suggestions/ })).toBeNull();
+  });
+
   it('is absent when nothing on the page has a guess to accept', () => {
     render(
       <TransactionsClient page={reviewPageOf(3, 0)} accounts={[]} categories={[]} people={[]} today="2026-08-16" reviewMode />,

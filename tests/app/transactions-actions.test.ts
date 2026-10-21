@@ -7,8 +7,9 @@ import { nowIso } from '@/lib/clock';
 import { createWarrantyItem, getWarrantyItem } from '@/lib/warranty/items';
 import { createItemType } from '@/lib/warranty/types';
 import { setTransactionSplits } from '@/lib/splits';
-import { confirmCategory, runEngine, upsertRenameRule } from '@/lib/categorize/engine';
+import { ARCHIVED_GUESS_ERROR, confirmCategory, runEngine, upsertRenameRule } from '@/lib/categorize/engine';
 import { listRules, ruleOwnedError, upsertRuleFromCorrection } from '@/lib/categorize/rules';
+import { archiveCategory } from '@/lib/categories';
 import { NOT_YOURS_ERROR } from '@/lib/auth/viewer';
 
 let currentUser: {
@@ -1634,6 +1635,19 @@ describe('acceptGuessAction (ported from review/actions.ts)', () => {
     expect(addTxn).toBeTypeOf('function');
   });
 
+  it('refuses a guess whose category has since been archived, and changes nothing', async () => {
+    const { db, sqlite } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const id = addTxnWithCategory('BEAN BARN', coffee, 'bayes');
+    archiveCategory(coffee, true);
+    const result = await acceptGuessAction({}, formData({ transactionId: String(id) }));
+    expect(result.error).toBe(ARCHIVED_GUESS_ERROR);
+    expect(sqlite.prepare('select categorization_source from transactions where id = ?').get(id)).toEqual({
+      categorization_source: 'bayes',
+    });
+    expect(listRules('category')).toEqual([]);
+  });
+
   it('errors when the row has no guess to accept', async () => {
     const { addTxn } = setup();
     const id = addTxn();
@@ -1956,6 +1970,20 @@ describe("setCategoryAction: ruling R3 -- teach='1' creates a rule, anything els
     const id = addTxn('GARBAGE TEACH MERCHANT');
     await setCategoryAction({}, formData({ transactionId: String(id), categoryId: String(coffee), teach: 'garbage' }));
     expect(listRules('category').map((r) => r.pattern)).not.toContain(normalizeMerchant('GARBAGE TEACH MERCHANT'));
+  });
+
+  it("teach='1' on an archived category saves the pick, writes no rule, and says so", async () => {
+    const { db, addTxn } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    archiveCategory(coffee, true);
+    const id = addTxn('RETIRED SHELF MERCHANT');
+    const result = await setCategoryAction({}, formData({ transactionId: String(id), categoryId: String(coffee), teach: '1' }));
+    expect(result.message).toBe('Category updated. No category rule was saved, because that category is archived.');
+    expect(listRules('category').map((r) => r.pattern)).not.toContain(normalizeMerchant('RETIRED SHELF MERCHANT'));
+    expect(db.get<{ category_id: number; categorization_source: string }>(sql`select category_id, categorization_source from transactions where id = ${id}`)).toEqual({
+      category_id: coffee,
+      categorization_source: 'manual',
+    });
   });
 });
 

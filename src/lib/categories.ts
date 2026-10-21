@@ -104,6 +104,25 @@ export function renameCategory(id: number, name: string): void {
   getDb().update(categories).set({ name: name.trim() }).where(eq(categories.id, id)).run();
 }
 
+/**
+ * The ids of every archived category -- the ONE definition the categorizer uses to keep archived
+ * categories out of automatic assignment (matchRule via listRules, classify, and the rule writers
+ * in src/lib/categorize/engine.ts).
+ *
+ * A category's OWN flag, nothing inherited: archiving a parent does not archive its children. That
+ * is the same definition the pickers use (categoryOptions in src/lib/category-order.ts keeps such
+ * a child selectable), so a category offered as live is never one the categorizer refuses.
+ */
+export function archivedCategoryIds(): Set<number> {
+  const rows = getDb().select({ id: categories.id }).from(categories).where(eq(categories.isArchived, true)).all();
+  return new Set(rows.map((row) => row.id));
+}
+
+/** archivedCategoryIds asked about one id, so the two can never disagree. */
+export function isCategoryArchived(id: number): boolean {
+  return archivedCategoryIds().has(id);
+}
+
 /** Archive only — transactions, rules and budgets reference categories forever. */
 export function archiveCategory(id: number, archived: boolean): void {
   getDb().update(categories).set({ isArchived: archived }).where(eq(categories.id, id)).run();
