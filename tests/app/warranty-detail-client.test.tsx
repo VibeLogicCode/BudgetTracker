@@ -954,6 +954,16 @@ describe('the Add receipt form is collapsed by default (item 7)', () => {
   });
 });
 
+describe('the Receipts card description', () => {
+  it('says files are stored and read on the server, not on "this machine"', () => {
+    const { container } = renderDetail({ receipts: [receipt()] });
+    expect(container.textContent).toContain(
+      'Photos and PDFs are stored on your Budget Tracker server and read there, offline.',
+    );
+    expect(container.textContent).not.toContain('on this machine');
+  });
+});
+
 // v1.16.0 plan, item 6: the Linked transactions card, replacing the old bare "Payments linked"
 // count. Rendered for every kind, unconditionally.
 describe('the Linked transactions card (item 6)', () => {

@@ -419,8 +419,9 @@ describe('the receipt card', () => {
   it('says reading stays inside the network rather than that nothing is uploaded', () => {
     const { container } = renderForm();
     expect(container.textContent).toContain(
-      'Photograph it or attach a PDF. Reading happens on this machine — nothing leaves your network.',
+      'Photograph it or attach a PDF. Read on your Budget Tracker server. Nothing leaves your network.',
     );
+    expect(container.textContent).not.toContain('on this machine');
     expect(container.textContent).not.toContain('nothing is uploaded anywhere');
   });
 });

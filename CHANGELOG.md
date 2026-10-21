@@ -37,6 +37,7 @@ All notable changes to Budget Tracker are recorded here.
 
 ### Fixed
 
+- **The receipt card says reading happens on your Budget Tracker server**, which is true from a phone as well as from the computer it runs on.
 - **Import dates follow the household's time zone.** An evening import no longer shows as the next day in the import history, the digest's Last import line, or the reminder that imports have gone quiet.
 - **A loan's payoff estimate uses the day its interest posts**, instead of assuming the 1st of each month.
 - **Receipt amounts written with a space between the thousands** (such as 1 234,56 $) are read whole instead of losing the first digits.

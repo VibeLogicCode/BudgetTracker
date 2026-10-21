@@ -1386,7 +1386,7 @@ export function WarrantyDetailClient({
       <Card>
         <CardHeader
           title={<>Receipts ({receipts.length} receipt{receipts.length === 1 ? '' : 's'})</>}
-          description="Photos and PDFs are stored on this machine and read offline."
+          description="Photos and PDFs are stored on your Budget Tracker server and read there, offline."
           action={
             // Item 7 (v1.16.0 plan): same disclosure shape as Add rule above -- the receipt LIST
             // stays visible; the file picker and Attach button (a create form) go behind a button.

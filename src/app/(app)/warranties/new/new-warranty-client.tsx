@@ -360,7 +360,7 @@ export function NewWarrantyClient({
       <FormError message={state.error} />
 
       <Card>
-        <CardHeader title="Receipt" description="Photograph it or attach a PDF. Reading happens on this machine — nothing leaves your network." />
+        <CardHeader title="Receipt" description="Photograph it or attach a PDF. Read on your Budget Tracker server. Nothing leaves your network." />
         <CardBody>
           <ReceiptUploader
             onStagedChange={onStagedChange}
