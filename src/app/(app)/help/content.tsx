@@ -526,12 +526,10 @@ export const HELP_SECTIONS: HelpSection[] = [
           row&rsquo;s menu puts that loan&rsquo;s balance back to what it was.
         </P>
         <P>
-          A <B>bill</B> is the one kind that carries its own list of due dates rather than a
-          repeating cycle — property tax, which falls due two to six times a year on dates the
-          municipality picks. Create an item type of kind <B>Bill</B> under{' '}
-          <B>Settings → Item types</B> (call it <B>Property tax</B>), add the item, then enter
-          each due date and amount in the <B>Installments</B> section on the item&rsquo;s own
-          page. The Dashboard&rsquo;s <B>Coming up</B> card lists them, you are reminded before
+          To set one up, create an item type of kind <B>Bill</B> under{' '}
+          <B>Settings → Item types</B> (call it <B>Property tax</B>), then add the item with its{' '}
+          <B>Amount due</B> and <B>Due date</B>. Further due dates and amounts go in the{' '}
+          <B>Installments</B> section on the item&rsquo;s own page. The Dashboard&rsquo;s <B>Coming up</B> card lists them, you are reminded before
           each one, and anything that goes past is flagged as overdue until you mark it paid. If
           you add a payment-matching rule, the transaction that pays it marks the next unpaid
           installment for you. Paid by some other means, or want to record it the moment it

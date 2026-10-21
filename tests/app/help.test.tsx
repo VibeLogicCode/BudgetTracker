@@ -152,6 +152,19 @@ describe('the help page covers Always ask and uncategorized spending', () => {
   });
 });
 
+describe('the help page tells one bills story', () => {
+  it('tells one bills story: the first amount and due date are entered when the bill is added', () => {
+    const text = textOf(section('coverage').body);
+    expect(text).toContain('takes its amount and due date when you add it');
+    expect(text).not.toContain('then enter each due date and amount');
+  });
+
+  it('defines a bill once', () => {
+    const text = textOf(section('coverage').body);
+    expect(text.split('A bill is ').length - 1).toBe(1);
+  });
+});
+
 describe('the help page covers the v1.13.0 household features', () => {
   const all = () => textOf(<>{[HELP_ROUTINE, ...HELP_SECTIONS].map((s) => <div key={s.id}>{s.body}</div>)}</>);
 
