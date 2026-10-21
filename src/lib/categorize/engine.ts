@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray, isNotNull, isNull, lte, ne, notInArray, or, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, isNotNull, isNull, lte, ne, notInArray, or, sql, type SQL } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { loanPayments, transactions, transactionSplits } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
@@ -1961,7 +1961,22 @@ export const REVIEW_WHERE = and(
  * above would fall out of both chips instead of silently miscounting into "suggested".
  */
 export const REVIEW_SUGGESTED_WHERE = and(isNotNull(transactions.categoryId), eq(transactions.categorizationSource, 'bayes'));
-export const REVIEW_UNCATEGORIZED_WHERE = isNull(transactions.categoryId);
+
+/**
+ * What "uncategorized" means, as a filter: no category of its own AND no split parts. A split
+ * row's categories live in transaction_splits and its own category_id stays null (setTransactionSplits
+ * never invents one), so a bare `category_id is null` listed every split row as uncategorized
+ * while the split-aware grouping (groupTransactionsByCategory) counted it under its parts -- a
+ * cluster header and its drill-down list that disagreed. Every "uncategorized" filter uses this.
+ *
+ * A `.where()` predicate, never a select field, for the reason transactionHasSplits gives
+ * (src/lib/splits.ts): only in a condition is the correlated subquery's column table-qualified.
+ */
+export const UNCATEGORIZED_WHERE: SQL = sql`(${transactions.categoryId} is null and not exists (select 1 from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id}))`;
+
+/** The review queue's uncategorized tab. REVIEW_WHERE already excludes split rows; this is the
+ *  same definition every other "uncategorized" filter uses, so the two can never drift. */
+export const REVIEW_UNCATEGORIZED_WHERE = UNCATEGORIZED_WHERE;
 
 export function reviewQueueIds(limit = 100, offset = 0): number[] {
   return getDb()

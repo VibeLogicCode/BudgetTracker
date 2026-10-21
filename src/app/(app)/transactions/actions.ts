@@ -792,14 +792,9 @@ export async function bulkConfirmGroupAction(_prev: ActionState, formData: FormD
  *
  * UNLIKE confirm, the uncategorized cluster is allowed -- and is one of the more useful things
  * here: "everything the rules had no opinion about in that import, all of it, into Groceries".
- * There is one honesty note that belongs in the record rather than a comment nobody reads:
- * `?category=uncategorized` is `category_id IS NULL` at the data layer and is NOT split-aware,
- * while the grouping is, so a split row whose own category_id is null (the usual case --
- * setTransactionSplits never invents one) is swept into this cluster's ids even though the grouped
- * view counted it under its parts' clusters. Those rows are then skipped by the split guard and
- * reported, so the outcome is correct and stated; what it means is that the uncategorized cluster's
- * `changed` count can be lower than its header said for a household that splits transactions. It
- * cannot arise on the audit URL (`source: 'rule'` excludes every split row).
+ * `?category=uncategorized` excludes split rows (UNCATEGORIZED_WHERE, src/lib/categorize/engine.ts),
+ * the same as the split-aware grouping, so this cluster's ids are exactly the rows its header
+ * counted.
  */
 export async function bulkRecategorizeGroupAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };

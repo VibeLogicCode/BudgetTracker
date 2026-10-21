@@ -8,6 +8,7 @@ import {
   REVIEW_SUGGESTED_WHERE,
   REVIEW_UNCATEGORIZED_WHERE,
   REVIEW_WHERE,
+  UNCATEGORIZED_WHERE,
   confirmCategory,
   runEngine,
   setTransferFlag,
@@ -370,7 +371,8 @@ function buildWhere(filter: TransactionFilter, viewer: Viewer): SQL | undefined 
   const clauses: SQL[] = [];
   if (typeof filter.accountId === 'number') clauses.push(eq(transactions.accountId, filter.accountId));
 
-  if (filter.categoryId === 'uncategorized') clauses.push(isNull(transactions.categoryId));
+  // A fully split row is not uncategorized: its categories are its parts (UNCATEGORIZED_WHERE).
+  if (filter.categoryId === 'uncategorized') clauses.push(UNCATEGORIZED_WHERE);
   else if (typeof filter.categoryId === 'number')
     clauses.push(categoryMatchClause(filter.categoryId, filter.categoryExact === true));
 
@@ -426,7 +428,7 @@ function buildWhere(filter: TransactionFilter, viewer: Viewer): SQL | undefined 
     if (clause) clauses.push(clause);
   }
 
-  if (filter.uncategorizedOnly) clauses.push(isNull(transactions.categoryId));
+  if (filter.uncategorizedOnly) clauses.push(UNCATEGORIZED_WHERE);
   // v1.24.0 Lane A item 2: see TransactionFilter.transferView's own doc comment for why 'only'
   // exists at all -- it is the recovery path for a transfer REVIEW_WHERE (below) can never show.
   if (filter.transferView === 'none') clauses.push(eq(transactions.isTransfer, false));
