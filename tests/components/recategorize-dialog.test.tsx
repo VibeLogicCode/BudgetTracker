@@ -39,6 +39,18 @@ describe('the rule choice (spec §2.4)', () => {
     expect(new FormData(form).get('teach')).toBe('1');
   });
 
+  /** v1.57.1: the radios choose what is posted; they post nothing of their own. */
+  it('posts only the row, the category and, on Also file, teach, whichever choice is made', () => {
+    render(<RecategorizeDialog {...base} row={ROW} canAuthorRules isAdmin={false} />);
+    const form = screen.getByRole('button', { name: 'Save category' }).closest('form') as HTMLFormElement;
+    const keys = () => [...new FormData(form).keys()].sort();
+    expect(keys()).toEqual(['categoryId', 'transactionId']);
+    fireEvent.click(screen.getByLabelText(/Also file PHONEMART 884 this way from now on/));
+    expect(keys()).toEqual(['categoryId', 'teach', 'transactionId']);
+    fireEvent.click(screen.getByLabelText(/Always ask about PHONEMART 884 from now on/));
+    expect(keys()).toEqual(['categoryId', 'transactionId']);
+  });
+
   it('says the rule itself changes when it is exact on this merchant', () => {
     render(<RecategorizeDialog {...base} row={{ ...ROW, filedBy: { ruleId: 9, pattern: 'PHONEMART 884', matchType: 'exact', bounded: false } }} canAuthorRules isAdmin={false} />);
     expect(screen.getByText('Changes the rule PHONEMART 884 → Groceries to the category you pick.')).toBeTruthy();

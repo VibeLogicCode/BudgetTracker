@@ -103,13 +103,15 @@ export function RecategorizeDialog({
         {offerChoice ? (
           <fieldset className="flex flex-col gap-2">
             <legend className="mb-1 text-sm font-medium text-ink">{`Future ${row.normalizedMerchant} rows`}</legend>
+            {/* No `name` on the radios: they decide what the form posts (teach or nothing) and post
+                nothing of their own. setCategoryAction reads `teach`, shared with Transactions review mode. */}
             <label className="flex items-start gap-2 text-sm">
-              <input type="radio" name="ruleChoice" value="keep" checked={effective === 'keep'} onChange={() => setChoice('keep')} className="mt-1" />
+              <input type="radio" value="keep" checked={effective === 'keep'} onChange={() => setChoice('keep')} className="mt-1" />
               <span>Change this transaction only</span>
             </label>
             {teachOffered ? (
               <label className="flex items-start gap-2 text-sm">
-                <input type="radio" name="ruleChoice" value="teach" checked={effective === 'teach'} disabled={teachDisabled} onChange={() => setChoice('teach')} className="mt-1" />
+                <input type="radio" value="teach" checked={effective === 'teach'} disabled={teachDisabled} onChange={() => setChoice('teach')} className="mt-1" />
                 <span>
                   {`Also file ${row.normalizedMerchant} this way from now on`}
                   <span className="block text-xs text-muted">{teachHint}</span>
@@ -118,7 +120,7 @@ export function RecategorizeDialog({
             ) : null}
             {row.alwaysAsked ? null : (
               <label className="flex items-start gap-2 text-sm">
-                <input type="radio" name="ruleChoice" value="ask" checked={effective === 'ask'} onChange={() => setChoice('ask')} className="mt-1" />
+                <input type="radio" value="ask" checked={effective === 'ask'} onChange={() => setChoice('ask')} className="mt-1" />
                 <span>
                   {`Always ask about ${row.normalizedMerchant} from now on`}
                   <span className="block text-xs text-muted">This transaction is filed as you pick; then you set the Always ask rule.</span>
