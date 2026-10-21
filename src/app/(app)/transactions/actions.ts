@@ -43,6 +43,9 @@ import {
 // some second parse happened to agree with.
 import { filterFromQuery } from './filter-params';
 import {
+  alwaysAskMatchCount,
+  alwaysAskSendBackIds,
+  ALWAYS_ASK_NO_RULE,
   applyCategoryToMatching,
   applyRenameRules,
   ARCHIVED_CATEGORY_NO_RULE,
@@ -52,13 +55,22 @@ import {
   createRulesFromRow,
   previewRulesFromRow,
   RULE_FROM_ROW_NEEDS_AN_OUTCOME,
+  sendAlwaysAskRowsToReview,
   setTransactionDisplayName,
   setTransferFlag,
   upsertRenameRule,
   type CategoryMatchResult,
   type RuleGuardedWriteResult,
 } from '@/lib/categorize/engine';
-import { ruleOwnedError, AMOUNT_BOUND_ORDER_ERROR, setRecurringMarks, type RecurringMark } from '@/lib/categorize/rules';
+import {
+  alwaysAskRuleFor,
+  listRules,
+  ruleOwnedError,
+  AMOUNT_BOUND_ORDER_ERROR,
+  setAlwaysAskRule,
+  setRecurringMarks,
+  type RecurringMark,
+} from '@/lib/categorize/rules';
 import { boundsProblem } from '@/lib/categorize/amount-bounds';
 import { isCategoryArchived } from '@/lib/categories';
 
@@ -71,10 +83,29 @@ function archivedNoRuleNote(categoryId: number, ruleAsked: boolean): string {
   return ruleAsked && isCategoryArchived(categoryId) ? ` ${ARCHIVED_CATEGORY_NO_RULE}` : '';
 }
 
+/**
+ * Spec 2026-10-21 §2.1. A pick that would teach a category rule writes none on a row an enabled
+ * Always ask rule covers. This is the sentence that says so, or nothing when no rule was asked
+ * for or no merchant is covered. Appended after archivedNoRuleNote when both apply.
+ */
+function alwaysAskNoRuleNote(merchants: readonly string[], ruleAsked: boolean): string {
+  if (!ruleAsked || merchants.length === 0) return '';
+  const rules = listRules('always_ask');
+  return merchants.some((merchant) => alwaysAskRuleFor(merchant, rules) !== null) ? ` ${ALWAYS_ASK_NO_RULE}` : '';
+}
+
 export interface ActionState {
   error?: string;
   message?: string;
 }
+
+/** Spec 2026-10-21 §2.1. setAlwaysAskAction also reports the saved rule and how many rows could be sent back. */
+export interface AlwaysAskState extends ActionState {
+  ruleId?: number;
+  sendBackCount?: number;
+}
+
+const RULES_ARE_HOUSEHOLD_WIDE = 'Rules are set up for the whole household, so this is not available here.';
 
 const CROSS_ORIGIN_ERROR = 'Cross-origin request rejected';
 
@@ -231,7 +262,8 @@ export async function setCategoryAction(_prev: ActionState, formData: FormData):
   const raw = String(formData.get('categoryId') ?? '');
   if (!Number.isInteger(transactionId) || transactionId <= 0) return { error: 'Invalid request.' };
   // Ruling R2 fix round 2: resolve the row through the viewer BEFORE either write path below.
-  if (getTransaction(transactionId, user) === null) return { error: NOT_YOURS_ERROR };
+  const pickedRow = getTransaction(transactionId, user);
+  if (pickedRow === null) return { error: NOT_YOURS_ERROR };
 
   if (raw === '') {
     // deleteRule: false -- ruling R4/P5. See clearCategory's docblock.
@@ -265,7 +297,10 @@ export async function setCategoryAction(_prev: ActionState, formData: FormData):
 
   revalidatePath('/transactions');
   revalidatePath('/review');
-  return { message: `Category updated.${raw === '' ? '' : archivedNoRuleNote(Number(raw), formData.get('teach') === '1')}` };
+  const taught = raw !== '' && formData.get('teach') === '1';
+  return {
+    message: `Category updated.${raw === '' ? '' : archivedNoRuleNote(Number(raw), taught)}${alwaysAskNoRuleNote([pickedRow.normalizedMerchant], taught)}`,
+  };
 }
 
 /**
@@ -296,7 +331,7 @@ export async function acceptGuessAction(_prev: ActionState, formData: FormData):
   const result = confirmCategory({ transactionId, categoryId: row.categoryId, userId: user.id, createRule: true, actorRole: user.role });
   if (!result.ok) return { error: guardedWriteError(result) };
   revalidatePath('/transactions');
-  return { message: `Accepted.${archivedNoRuleNote(row.categoryId, true)}` };
+  return { message: `Accepted.${archivedNoRuleNote(row.categoryId, true)}${alwaysAskNoRuleNote([row.normalizedMerchant], true)}` };
 }
 
 /**
@@ -360,9 +395,8 @@ export async function applyToAllMatchingAction(_prev: ActionState, formData: For
   const result = applyCategoryToMatching({ normalizedMerchant, categoryId, userId: user.id, actorRole: user.role });
   if (!result.ok) return { error: guardedWriteError(result) };
   revalidatePath('/transactions');
-  if (isCategoryArchived(categoryId)) {
-    return { message: `Applied to ${result.count} transactions.${archivedNoRuleNote(categoryId, true)}` };
-  }
+  const note = `${archivedNoRuleNote(categoryId, true)}${alwaysAskNoRuleNote([normalizedMerchant], true)}`;
+  if (note !== '') return { message: `Applied to ${result.count} transactions.${note}` };
   return { message: `Applied to ${result.count} transactions and created a rule.` };
 }
 
@@ -452,7 +486,7 @@ export async function bulkCategorizeAction(_prev: ActionState, formData: FormDat
   if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
   revalidatePath('/transactions');
   revalidatePath('/review');
-  const changedSentence = `Categorized ${result.changed} transaction${result.changed === 1 ? '' : 's'}.${archivedNoRuleNote(categoryId, createRules)}`;
+  const changedSentence = `Categorized ${result.changed} transaction${result.changed === 1 ? '' : 's'}.${archivedNoRuleNote(categoryId, createRules)}${alwaysAskNoRuleNote(createRules ? merchantsOfTransactions(ids) : [], createRules)}`;
   const skipSentence = splitSkipSentence(result.skipped);
   return { message: skipSentence ? `${changedSentence} ${skipSentence}` : changedSentence };
 }
@@ -812,11 +846,12 @@ export async function bulkRecategorizeGroupAction(_prev: ActionState, formData: 
   const ids = groupTransactionIds(filter, parsed.data.groupCategoryId, user);
   if (ids.length === 0) return { error: 'That group is empty now — nothing was changed.' };
 
-  const result = bulkSetCategory(ids, categoryId, user.id, formData.get('createRules') === 'on', user.role);
+  const createRules = formData.get('createRules') === 'on';
+  const result = bulkSetCategory(ids, categoryId, user.id, createRules, user.role);
   if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
   revalidatePath('/transactions');
   revalidatePath('/review');
-  const changedSentence = `Moved ${result.changed} transaction${result.changed === 1 ? '' : 's'}.${archivedNoRuleNote(categoryId, formData.get('createRules') === 'on')}`;
+  const changedSentence = `Moved ${result.changed} transaction${result.changed === 1 ? '' : 's'}.${archivedNoRuleNote(categoryId, createRules)}${alwaysAskNoRuleNote(createRules ? merchantsOfTransactions(ids) : [], createRules)}`;
   const skipSentence = splitSkipSentence(result.skipped);
   return { message: skipSentence ? `${changedSentence} ${skipSentence}` : changedSentence };
 }
@@ -1394,7 +1429,7 @@ export async function previewRowRuleAction(_prev: ActionState, formData: FormDat
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
 
   const user = await requireUser();
-  if (isSelfScoped(user)) return { error: 'Rules are set up for the whole household, so this is not available here.' };
+  if (isSelfScoped(user)) return { error: RULES_ARE_HOUSEHOLD_WIDE };
 
   const parsed = parseRuleFromRow(formData);
   if (!parsed.ok) return { error: parsed.error };
@@ -1418,7 +1453,7 @@ export async function createRulesFromRowAction(_prev: ActionState, formData: For
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
 
   const user = await requireUser();
-  if (isSelfScoped(user)) return { error: 'Rules are set up for the whole household, so this is not available here.' };
+  if (isSelfScoped(user)) return { error: RULES_ARE_HOUSEHOLD_WIDE };
 
   const parsed = parseRuleFromRow(formData);
   if (!parsed.ok) return { error: parsed.error };
@@ -1448,5 +1483,75 @@ export async function createRulesFromRowAction(_prev: ActionState, formData: For
   if (parsed.value.categoryId !== undefined && isCategoryArchived(parsed.value.categoryId)) {
     parts.push(ARCHIVED_CATEGORY_NO_RULE);
   }
+  if (parsed.value.categoryId !== undefined && alwaysAskNoRuleNote([parsed.value.normalizedMerchant], true) !== '') {
+    parts.push(ALWAYS_ASK_NO_RULE);
+  }
   return { message: parts.join(' ') };
+}
+
+const alwaysAskFields = z.object({ pattern: z.string().max(200), matchType: z.enum(['contains', 'exact']) });
+
+function parseAlwaysAsk(formData: FormData) {
+  return alwaysAskFields.safeParse({ pattern: formData.get('pattern') ?? '', matchType: formData.get('matchType') ?? '' });
+}
+
+/** Spec 2026-10-21 §2.1. The live count under the row menu's Always ask dialog; writes nothing. */
+export async function previewAlwaysAskAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  const user = await requireUser();
+  if (isSelfScoped(user)) return { error: RULES_ARE_HOUSEHOLD_WIDE };
+
+  const parsed = parseAlwaysAsk(formData);
+  if (!parsed.success) return { error: 'Invalid request.' };
+  const pattern = parsed.data.pattern.trim();
+  if (pattern.length === 0) return { message: 'Matches 0 transactions.' };
+  const count = alwaysAskMatchCount({ pattern, matchType: parsed.data.matchType });
+  return { message: `Matches ${count} ${rowWord(count, 'transaction')}.` };
+}
+
+/** Spec 2026-10-21 §2.1. Saves the Always ask rule and reports how many rule- or guess-filed rows could go back to review. */
+export async function setAlwaysAskAction(_prev: AlwaysAskState, formData: FormData): Promise<AlwaysAskState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  const user = await requireUser();
+  if (isSelfScoped(user)) return { error: RULES_ARE_HOUSEHOLD_WIDE };
+
+  const parsed = parseAlwaysAsk(formData);
+  if (!parsed.success) return { error: 'Invalid request.' };
+  const pattern = parsed.data.pattern.trim();
+  if (pattern.length === 0) return { error: 'Type the text to match.' };
+
+  const result = setAlwaysAskRule({ pattern, matchType: parsed.data.matchType, userId: user.id, actorRole: user.role });
+  if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
+
+  revalidatePath('/transactions');
+  revalidatePath('/settings/merchant-rules');
+  return {
+    message: `Rows matching "${pattern.toUpperCase()}" will always be asked about.`,
+    ruleId: result.ruleId,
+    sendBackCount: alwaysAskSendBackIds(result.ruleId).length,
+  };
+}
+
+/**
+ * Spec 2026-10-21 §2.1. Keyed by rule id and recomputes the rows on the server, so the posted
+ * form can never name which transactions go back to review.
+ */
+export async function sendBackToReviewAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  const user = await requireUser();
+  if (isSelfScoped(user)) return { error: RULES_ARE_HOUSEHOLD_WIDE };
+
+  const parsed = z.object({ ruleId: z.coerce.number().int().positive() }).safeParse({ ruleId: formData.get('ruleId') });
+  if (!parsed.success) return { error: 'Invalid request.' };
+  const rule = listRules('always_ask').find((candidate) => candidate.id === parsed.data.ruleId);
+  if (!rule || rule.disabledAt !== null) return { error: 'That Always ask rule is no longer on.' };
+
+  const { sent } = sendAlwaysAskRowsToReview({ ruleId: rule.id });
+  revalidatePath('/transactions');
+  revalidatePath('/budgets');
+  revalidatePath('/dashboard');
+  return { message: `Sent ${sent} ${rowWord(sent, 'transaction')} back to review.` };
 }

@@ -414,9 +414,10 @@ describe('v1.27.0 item 1: only an argued list of files may author a merchant rul
     ],
     [
       'src/app/(app)/transactions/actions.ts',
-      'Spec 2026-10-05 §2.2. setRecurringMarkAction and bulkRecurringMarkAction reach setRecurringMarks ' +
-        'only. "Mark recurring" and "Not recurring" are statements about a MERCHANT -- the control names the ' +
-        'mark and nothing else, and no category, flag or link on the row changes.',
+      'Spec 2026-10-05 §2.2 and 2026-10-21 §2.1. setRecurringMarkAction and bulkRecurringMarkAction reach ' +
+        'setRecurringMarks only, and setAlwaysAskAction reaches setAlwaysAskRule only. "Mark recurring", "Not recurring" ' +
+        'and "Always ask for rows like this" are statements about a MERCHANT -- each control names the text it is about, ' +
+        'and no category, flag or link on the row changes.',
     ],
     [
       'src/lib/packs.ts',

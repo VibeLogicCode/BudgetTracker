@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TransactionsClient } from '@/app/(app)/transactions/transactions-client';
-import { assignToBillAction, createRulesFromRowAction, deleteTransactionAction, previewRowRuleAction, setCategoryAction } from '@/app/(app)/transactions/actions';
+import { assignToBillAction, createRulesFromRowAction, deleteTransactionAction, previewAlwaysAskAction, previewRowRuleAction, sendBackToReviewAction, setAlwaysAskAction, setCategoryAction } from '@/app/(app)/transactions/actions';
 import type { CategoryGroupPage, CategoryGroupRow, TransactionPage, TransactionRow } from '@/lib/transactions';
 import type { SplitRow } from '@/lib/splits';
 
@@ -40,6 +40,9 @@ vi.mock('@/app/(app)/transactions/actions', () => ({
   assignToBillAction: vi.fn(async () => ({})),
   previewRowRuleAction: vi.fn(async () => ({})),
   createRulesFromRowAction: vi.fn(async () => ({})),
+  previewAlwaysAskAction: vi.fn(async () => ({})),
+  setAlwaysAskAction: vi.fn(async () => ({})),
+  sendBackToReviewAction: vi.fn(async () => ({})),
   // v1.19.0 Lane 2 item 5: "Accept all suggestions".
   acceptAllGuessesAction: vi.fn(async () => ({})),
 }));
@@ -4715,5 +4718,75 @@ describe('TransactionsClient — the recurring mark', () => {
     await waitFor(() => expect(bulkRecurringMarkAction).toHaveBeenCalled());
     const formData = vi.mocked(bulkRecurringMarkAction).mock.calls[0]?.[1] as FormData;
     expect([formData.get('ids'), formData.get('mark')]).toEqual(['1', 'recurring']);
+  });
+});
+
+/** Spec 2026-10-21 §2.1. The row menu's Always ask dialog. */
+describe('TransactionsClient — Always ask for rows like this', () => {
+  const base = { accounts: [], categories: [], people: [], today: '2026-03-02' };
+  const etransfer = () => pageWithRow({ rawDescription: 'E-TRANSFER ***AB1', normalizedMerchant: 'E-TRANSFER ***AB1', source: 'rule' });
+  const openAsk = () => {
+    openRowMenu('Actions for E-TRANSFER ***AB1');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Always ask for rows like this…' }));
+  };
+
+  it('is offered on a non-transfer row, and not on a transfer, for a self-scoped viewer, or for a merchant already asked about', () => {
+    const { unmount } = render(<TransactionsClient page={etransfer()} {...base} />);
+    openRowMenu('Actions for E-TRANSFER ***AB1');
+    expect(screen.getByRole('menuitem', { name: 'Always ask for rows like this…' })).toBeTruthy();
+    unmount();
+    for (const props of [
+      { page: pageWithRow({ rawDescription: 'E-TRANSFER ***AB1', normalizedMerchant: 'E-TRANSFER ***AB1', isTransfer: true }) },
+      { page: etransfer(), selfScoped: true },
+      { page: etransfer(), alwaysAskMerchants: ['E-TRANSFER ***AB1'] },
+    ]) {
+      const view = render(<TransactionsClient {...base} {...props} />);
+      openRowMenu('Actions for E-TRANSFER ***AB1');
+      expect(screen.queryByRole('menuitem', { name: 'Always ask for rows like this…' })).toBeNull();
+      view.unmount();
+    }
+  });
+
+  it('opens with the merchant minus its masked code, Contains chosen, and the live count', async () => {
+    vi.mocked(previewAlwaysAskAction).mockResolvedValue({ message: 'Matches 3 transactions.' });
+    render(<TransactionsClient page={etransfer()} {...base} />);
+    openAsk();
+    expect((screen.getByLabelText('Text to match') as HTMLInputElement).value).toBe('E-TRANSFER');
+    expect((screen.getByLabelText('Match') as HTMLSelectElement).value).toBe('contains');
+    expect(await screen.findByText('Matches 3 transactions.')).toBeTruthy();
+    const posted = vi.mocked(previewAlwaysAskAction).mock.calls.at(-1)?.[1] as FormData;
+    expect([posted.get('pattern'), posted.get('matchType')]).toEqual(['E-TRANSFER', 'contains']);
+  });
+
+  it('counts again after the text or the match type changes', async () => {
+    render(<TransactionsClient page={etransfer()} {...base} />);
+    openAsk();
+    fireEvent.change(screen.getByLabelText('Text to match'), { target: { value: 'E-TRANSFER ***AB1' } });
+    fireEvent.change(screen.getByLabelText('Match'), { target: { value: 'exact' } });
+    await waitFor(() => {
+      const posted = vi.mocked(previewAlwaysAskAction).mock.calls.at(-1)?.[1] as FormData;
+      expect([posted.get('pattern'), posted.get('matchType')]).toEqual(['E-TRANSFER ***AB1', 'exact']);
+    });
+  });
+
+  it('after saving, offers Send N back to review for the saved rule', async () => {
+    vi.mocked(setAlwaysAskAction).mockResolvedValue({ message: 'Rows matching "E-TRANSFER" will always be asked about.', ruleId: 41, sendBackCount: 2 });
+    render(<TransactionsClient page={etransfer()} {...base} />);
+    openAsk();
+    fireEvent.click(screen.getByRole('button', { name: 'Always ask' }));
+    expect(await screen.findByText('Rows matching "E-TRANSFER" will always be asked about.')).toBeTruthy();
+    expect(screen.getByText('2 of them were filed by a rule or a guess.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Send 2 back to review' }));
+    await waitFor(() => expect(sendBackToReviewAction).toHaveBeenCalled());
+    expect((vi.mocked(sendBackToReviewAction).mock.calls[0]?.[1] as FormData).get('ruleId')).toBe('41');
+  });
+
+  it('after saving with nothing to send back, offers only Done', async () => {
+    vi.mocked(setAlwaysAskAction).mockResolvedValue({ message: 'Rows matching "E-TRANSFER" will always be asked about.', ruleId: 41, sendBackCount: 0 });
+    render(<TransactionsClient page={etransfer()} {...base} />);
+    openAsk();
+    fireEvent.click(screen.getByRole('button', { name: 'Always ask' }));
+    expect(await screen.findByRole('button', { name: 'Done' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /back to review/ })).toBeNull();
   });
 });

@@ -8,7 +8,7 @@ import { createWarrantyItem, getWarrantyItem } from '@/lib/warranty/items';
 import { createItemType } from '@/lib/warranty/types';
 import { setTransactionSplits } from '@/lib/splits';
 import { ARCHIVED_GUESS_ERROR, confirmCategory, runEngine, upsertRenameRule } from '@/lib/categorize/engine';
-import { listRules, ruleOwnedError, upsertRuleFromCorrection } from '@/lib/categorize/rules';
+import { listRules, ruleOwnedError, setAlwaysAskRule, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { archiveCategory } from '@/lib/categories';
 import { NOT_YOURS_ERROR } from '@/lib/auth/viewer';
 
@@ -63,9 +63,13 @@ import {
   bulkRecategorizeGroupAction,
   bulkTransferAction,
   createLoanFromTransactionAction,
+  createRulesFromRowAction,
   manualEntryAction,
+  previewAlwaysAskAction,
   renameTransactionAction,
   saveNoteAction,
+  sendBackToReviewAction,
+  setAlwaysAskAction,
   setAttributionAction,
   setCategoryAction,
   setRecurringMarkAction,
@@ -2711,5 +2715,114 @@ describe('bulkRecurringMarkAction', () => {
     currentUser = { ...currentUser, role: 'member' };
     expect((await bulkRecurringMarkAction({}, formData({ ids: `${a},${b}`, mark: 'recurring' }))).error).toBe(ruleOwnedError('Bob'));
     expect(listRules('recurring')).toEqual([]);
+  });
+});
+
+function fileAs(id: number, source: string, categoryId: number) {
+  current!.db.run(sql`update transactions set categorization_source = ${source}, category_id = ${categoryId} where id = ${id}`);
+}
+
+/** Spec 2026-10-21 §2.1. The row menu's Always ask dialog. */
+describe('Always ask from a row', () => {
+  it('counts the rows the text would ask about', async () => {
+    const { addTxn } = setup();
+    addTxn('E-TRANSFER ***AB1', -2000);
+    addTxn('E-TRANSFER ***QX7', -3500);
+    addTxn('TIM HORTONS', -500);
+    expect(await previewAlwaysAskAction({}, formData({ pattern: 'E-TRANSFER', matchType: 'contains' }))).toEqual({ message: 'Matches 2 transactions.' });
+    expect(await previewAlwaysAskAction({}, formData({ pattern: 'E-TRANSFER ***QX7', matchType: 'exact' }))).toEqual({ message: 'Matches 1 transaction.' });
+  });
+
+  it('saves the rule and offers back the rows a rule or a guess filed', async () => {
+    const { addTxn, db } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    fileAs(addTxn('E-TRANSFER ***AB1', -2000), 'rule', groceries);
+    fileAs(addTxn('E-TRANSFER ***QX7', -3500), 'bayes', groceries);
+    fileAs(addTxn('E-TRANSFER ***QX7', -1500), 'manual', groceries);
+    const result = await setAlwaysAskAction({}, formData({ pattern: 'e-transfer', matchType: 'contains' }));
+    const rule = listRules('always_ask')[0]!;
+    expect(result).toEqual({ message: 'Rows matching "E-TRANSFER" will always be asked about.', ruleId: rule.id, sendBackCount: 2 });
+    expect([rule.pattern, rule.matchType]).toEqual(['E-TRANSFER', 'contains']);
+    expect(vi.mocked(revalidatePath).mock.calls.map((call) => call[0])).toEqual(expect.arrayContaining(['/transactions', '/settings/merchant-rules']));
+  });
+
+  it('sends those rows back and says how many', async () => {
+    const { addTxn, db, userId } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    fileAs(addTxn('E-TRANSFER ***AB1', -2000), 'rule', groceries);
+    fileAs(addTxn('E-TRANSFER ***QX7', -3500), 'bayes', groceries);
+    const saved = setAlwaysAskRule({ pattern: 'E-TRANSFER', matchType: 'contains', userId, actorRole: 'admin' });
+    if (!saved.ok) throw new Error('refused');
+    vi.mocked(revalidatePath).mockClear();
+    expect(await sendBackToReviewAction({}, formData({ ruleId: String(saved.ruleId) }))).toEqual({ message: 'Sent 2 transactions back to review.' });
+    expect(vi.mocked(revalidatePath).mock.calls.map((call) => call[0])).toEqual(expect.arrayContaining(['/transactions', '/budgets', '/dashboard']));
+  });
+
+  it('refuses a self-scoped viewer on all three, and writes nothing', async () => {
+    const { addTxn } = setup();
+    addTxn('E-TRANSFER ***AB1', -2000);
+    currentUser = { ...currentUser, role: 'member', visibility: 'self' };
+    const refusal = { error: 'Rules are set up for the whole household, so this is not available here.' };
+    expect(await previewAlwaysAskAction({}, formData({ pattern: 'E-TRANSFER', matchType: 'contains' }))).toEqual(refusal);
+    expect(await setAlwaysAskAction({}, formData({ pattern: 'E-TRANSFER', matchType: 'contains' }))).toEqual(refusal);
+    expect(await sendBackToReviewAction({}, formData({ ruleId: '1' }))).toEqual(refusal);
+    expect(listRules('always_ask')).toEqual([]);
+  });
+
+  it('refuses empty text, an unknown match type, and a rule that is no longer on', async () => {
+    setup();
+    expect(await setAlwaysAskAction({}, formData({ pattern: '   ', matchType: 'contains' }))).toEqual({ error: 'Type the text to match.' });
+    expect(await setAlwaysAskAction({}, formData({ pattern: 'E-TRANSFER', matchType: 'word' }))).toEqual({ error: 'Invalid request.' });
+    expect(await sendBackToReviewAction({}, formData({ ruleId: '999999' }))).toEqual({ error: 'That Always ask rule is no longer on.' });
+    expect(listRules('always_ask')).toEqual([]);
+  });
+
+  it("refuses a member over somebody else's rule", async () => {
+    const { db } = setup();
+    const bob = insertTestUser(db, { name: 'Bob', username: 'bob', role: 'member' });
+    setAlwaysAskRule({ pattern: 'E-TRANSFER', matchType: 'contains', userId: currentUser.id, actorRole: 'admin' });
+    currentUser = { id: bob, name: 'Bob', username: 'bob', role: 'member' };
+    expect(await setAlwaysAskAction({}, formData({ pattern: 'E-TRANSFER', matchType: 'contains' }))).toEqual({ error: ruleOwnedError('Alice') });
+  });
+
+  it('refuses a cross-origin post before anything else', async () => {
+    setup();
+    sameOrigin.value = false;
+    expect(await setAlwaysAskAction({}, formData({ pattern: 'E-TRANSFER', matchType: 'contains' }))).toEqual({ error: CROSS_ORIGIN_ERROR });
+    expect(listRules('always_ask')).toEqual([]);
+  });
+});
+
+/** Spec 2026-10-21 §2.1 No learning: a pick that would teach a rule says when it did not. */
+describe('teaching paths on an Always ask row', () => {
+  const NOTE = 'No category rule was saved, because rows like this are set to Always ask.';
+
+  it('says no rule was saved when a review pick lands on an Always ask row', async () => {
+    const { addTxn, db, userId } = setup();
+    const id = addTxn('E-TRANSFER ***AB1', -2000);
+    setAlwaysAskRule({ pattern: 'E-TRANSFER', matchType: 'contains', userId, actorRole: 'admin' });
+    const groceries = categoryIdByName(db, 'Groceries');
+    expect(await setCategoryAction({}, formData({ transactionId: String(id), categoryId: String(groceries), teach: '1' }))).toEqual({ message: `Category updated. ${NOTE}` });
+    expect(listRules('category')).toEqual([]);
+  });
+
+  it('says so on Apply to all matching, on the bulk bar with rules on, and on Create a rule', async () => {
+    const { addTxn, db, userId } = setup();
+    const a = addTxn('E-TRANSFER ***AB1', -2000);
+    const b = addTxn('E-TRANSFER ***AB1', -1000);
+    setAlwaysAskRule({ pattern: 'E-TRANSFER', matchType: 'contains', userId, actorRole: 'admin' });
+    const groceries = String(categoryIdByName(db, 'Groceries'));
+    expect((await applyToAllMatchingAction({}, formData({ normalizedMerchant: 'E-TRANSFER ***AB1', categoryId: groceries }))).message).toBe(`Applied to 2 transactions. ${NOTE}`);
+    expect((await bulkCategorizeAction({}, formData({ ids: `${a},${b}`, categoryId: groceries, createRules: 'on' }))).message).toContain(NOTE);
+    expect((await createRulesFromRowAction({}, formData({ normalizedMerchant: 'E-TRANSFER ***AB1', amountMin: '', amountMax: '', categoryId: groceries, person: '' }))).message).toContain(NOTE);
+    expect(listRules('category')).toEqual([]);
+  });
+
+  // Pin: a plain per-row pick never asked for a rule, so it says nothing extra.
+  it('says nothing extra on a plain pick', async () => {
+    const { addTxn, db, userId } = setup();
+    const id = addTxn('E-TRANSFER ***AB1', -2000);
+    setAlwaysAskRule({ pattern: 'E-TRANSFER', matchType: 'contains', userId, actorRole: 'admin' });
+    expect(await setCategoryAction({}, formData({ transactionId: String(id), categoryId: String(categoryIdByName(db, 'Groceries')) }))).toEqual({ message: 'Category updated.' });
   });
 });

@@ -11,7 +11,7 @@ import { resolveRenameRule, reviewQueueCount } from '@/lib/categorize/engine';
 // resolution out with matchRule plus its own emptiness test, which was a second definition of
 // the same question. See renameRules below for why this is the one honest way to answer "which
 // rule renamed this row" at all.
-import { listRecurringMarkRules, listRules, recurringMarkFor } from '@/lib/categorize/rules';
+import { alwaysAskRuleFor, listRecurringMarkRules, listRules, recurringMarkFor } from '@/lib/categorize/rules';
 import type { RecurringMark } from '@/lib/categorize/mark-kinds';
 import { splitsForTransactions } from '@/lib/splits';
 import { countMatchingMerchant, groupTransactionsByCategory, listTransactions } from '@/lib/transactions';
@@ -150,6 +150,16 @@ export default async function TransactionsPage({
       }
     }
   }
+  /** Spec 2026-10-21 §2.1. Merchants on this page an enabled Always ask rule already covers -- the row menu offers it only to the rest. */
+  const alwaysAskMerchants: string[] = [];
+  {
+    const rules = listRules('always_ask');
+    if (rules.length > 0) {
+      for (const merchant of new Set(page.rows.map((row) => row.normalizedMerchant))) {
+        if (alwaysAskRuleFor(merchant, rules) !== null) alwaysAskMerchants.push(merchant);
+      }
+    }
+  }
   return (
     <TransactionsClient
       page={page}
@@ -158,6 +168,7 @@ export default async function TransactionsPage({
       matchingCounts={matchingCounts}
       renameRules={renameRules}
       recurringMarks={recurringMarks}
+      alwaysAskMerchants={alwaysAskMerchants}
       groups={groups}
       currentQuery={currentQueryString(params)}
       // Ruling R10: an asset account holds a typed balance and takes no transactions/imports, so
