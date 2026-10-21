@@ -1472,7 +1472,13 @@ describe('BudgetsClient — fixing a row from the card', () => {
   });
 
   it('a self viewer sees Change category but no rule choice', async () => {
-    await renderWithRows([panelRow()], {}, { household: null, householdTotals: null, selectedPersonId: null, personal: [{ userId: 1, name: 'Alex', rows: [makeRow()] }] });
+    // Positive control: the same row, as a household viewer, does get the rule choice.
+    await renderWithRows([panelRow()]);
+    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
+    expect(screen.getByRole('group', { name: /Future/ })).toBeTruthy();
+    cleanup();
+    await renderWithRows([panelRow()], {},{ household: null, householdTotals: null, selectedPersonId: null, personal: [{ userId: 1, name: 'Alex', rows: [makeRow()] }] });
     fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
     expect(screen.queryByRole('group', { name: /Future/ })).toBeNull();
