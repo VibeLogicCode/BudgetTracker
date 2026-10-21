@@ -21,6 +21,23 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.55.4] - 2026-10-20
+
+### Fixed
+
+- **"More to check" opens on the Dashboard.** The rules card's "+N more to check" link led to an
+  import screen with nothing to check. It now opens the rest of the list in place, with the same
+  Check and Dismiss buttons, and the card has a Dismiss all for the imports it lists.
+- **Archived categories are never assigned automatically.** A rule that points at an archived
+  category no longer files anything (it is kept, and works again if the category is restored),
+  guesses never pick an archived category, and picking one by hand no longer creates a rule.
+- **The category list stays open while you scroll it.** Scrolling or dragging the scrollbar of the
+  category list closed it. It now stays open, and follows its field when the page scrolls or the
+  window resizes.
+- **A split transaction is no longer listed as Uncategorized.** A transaction split across
+  categories showed under Uncategorized when that group was opened, though the group's count
+  left it out.
+
 ## [1.55.3] - 2026-10-13
 
 ### Fixed
