@@ -8,6 +8,7 @@ import { setBudgetCategory } from '@/lib/warranty/items';
 import {
   addInstallment,
   findInstallmentItem,
+  foldBillSchedules,
   installmentStateFor,
   listInstallments,
   markInstallmentPaid,
@@ -382,6 +383,45 @@ describe('recordInstallmentPayment (ruling R8)', () => {
       ok: false,
       reason: 'no_account',
     });
+  });
+});
+
+describe('foldBillSchedules', () => {
+  const FOLD_TODAY = '2026-10-15';
+
+  function fold(ownerUserId?: number) {
+    return foldBillSchedules(
+      unpaidInstallments({ today: FOLD_TODAY, windowEnd: '2036-10-15', includeOverdue: true, ownerUserId }),
+      FOLD_TODAY,
+    );
+  }
+
+  it("folds an item's unpaid installments into next amount, count, outstanding and overdue", () => {
+    const { userId } = setup();
+    const itemId = billItem(userId);
+    addInstallment({ itemId, dueDate: '2026-12-01', amountCents: 30_000, at: NOW });
+    addInstallment({ itemId, dueDate: '2026-10-01', amountCents: 10_000, at: NOW });
+    addInstallment({ itemId, dueDate: '2026-11-01', amountCents: 20_000, at: NOW });
+    expect(fold(userId)[itemId]).toEqual({
+      nextDueDate: '2026-10-01',
+      overdueCount: 1,
+      nextAmountCents: 10_000,
+      unpaidCount: 3,
+      outstandingCents: 60_000,
+    });
+  });
+
+  it('scopes the amounts the way it scopes the dates', () => {
+    const { userId: alice } = setup();
+    const bob = insertTestUser(current!.db, { username: 'user-2' });
+    const aliceItem = billItem(alice, 'Alice tax');
+    const bobItem = billItem(bob, 'Bob tax');
+    addInstallment({ itemId: aliceItem, dueDate: '2026-11-01', amountCents: 20_000, at: NOW });
+    addInstallment({ itemId: bobItem, dueDate: '2026-11-02', amountCents: 99_000, at: NOW });
+    const scoped = fold(alice);
+    expect(Object.keys(scoped).map(Number)).toEqual([aliceItem]);
+    expect(scoped[aliceItem].outstandingCents).toBe(20_000);
+    expect(Object.keys(fold()).map(Number).sort()).toEqual([aliceItem, bobItem].sort());
   });
 });
 

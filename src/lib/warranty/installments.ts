@@ -83,6 +83,40 @@ export interface UnpaidInstallment {
   overdue: boolean;
 }
 
+export interface BillSchedule {
+  nextDueDate: string;
+  overdueCount: number;
+  nextAmountCents: number;
+  unpaidCount: number;
+  outstandingCents: number;
+}
+
+/**
+ * Folds unpaid installments into one schedule per item. Rows must arrive ordered the way
+ * unpaidInstallments returns them (due_date, then id): the FIRST row per item is its next due.
+ */
+export function foldBillSchedules(rows: readonly UnpaidInstallment[], today: string): Record<number, BillSchedule> {
+  const billSchedules: Record<number, BillSchedule> = {};
+  for (const row of rows) {
+    const entry = billSchedules[row.itemId];
+    if (entry === undefined) {
+      // First row per item is the next due: unpaidInstallments orders by due_date, then id.
+      billSchedules[row.itemId] = {
+        nextDueDate: row.dueDate,
+        overdueCount: row.dueDate < today ? 1 : 0,
+        nextAmountCents: row.amountCents,
+        unpaidCount: 1,
+        outstandingCents: row.amountCents,
+      };
+    } else {
+      if (row.dueDate < today) entry.overdueCount += 1;
+      entry.unpaidCount += 1;
+      entry.outstandingCents += row.amountCents;
+    }
+  }
+  return billSchedules;
+}
+
 /**
  * DERIVED, never stored: paid_at wins; else strictly before today is overdue; else on or before
  * today + dueSoonDays is due soon; else scheduled. Both boundaries are inclusive on the near

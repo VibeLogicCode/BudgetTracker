@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { SCANNER_AUTO_ACCEPT_MS } from '@/lib/warranty/ocr/onnx/constants';
 import {
   ReceiptUploader,
@@ -100,6 +100,57 @@ describe('MUST-8.11: the state machine between the pick and the upload', () => {
     await vi.advanceTimersByTimeAsync(SCANNER_AUTO_ACCEPT_MS + 50);
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
     expect((fetchMock.mock.calls[0][1].body as FormData).getAll('file')[0]).toBe(CORRECTED);
+  });
+
+  it('starts the countdown at 8 seconds and counts down once a second', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.spyOn(scanModule, 'scanReceiptFile').mockResolvedValue({
+      file: CORRECTED,
+      corrected: { url: 'blob:corrected', quad: quad(), sourceWidth: 100, sourceHeight: 100 },
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stageResponse()));
+    const { container } = render(<ReceiptUploader onStagedChange={vi.fn()} />);
+    pick(container, [new File(['jpeg'], 'receipt.jpg', { type: 'image/jpeg' })]);
+    await vi.waitFor(() => expect(screen.queryByTestId('scan-preview-original')).toBeTruthy());
+    expect(screen.getByText('Using the straightened photo in 8 seconds')).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100); });
+    expect(screen.getByText('Using the straightened photo in 7 seconds')).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(5900); });
+    expect(screen.getByText('Using the straightened photo in 1 second')).toBeTruthy();
+  });
+
+  it('keeps the auto-accept at 8000 ms', async () => {
+    expect(SCANNER_AUTO_ACCEPT_MS).toBe(8000);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.spyOn(scanModule, 'scanReceiptFile').mockResolvedValue({
+      file: CORRECTED,
+      corrected: { url: 'blob:corrected', quad: quad(), sourceWidth: 100, sourceHeight: 100 },
+    });
+    const fetchMock = vi.fn().mockResolvedValue(stageResponse());
+    vi.stubGlobal('fetch', fetchMock);
+    const { container } = render(<ReceiptUploader onStagedChange={vi.fn()} />);
+    pick(container, [new File(['jpeg'], 'receipt.jpg', { type: 'image/jpeg' })]);
+    await vi.waitFor(() => expect(screen.queryByTestId('scan-preview-original')).toBeTruthy());
+    await vi.advanceTimersByTimeAsync(7800);
+    expect(fetchMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(400);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+  });
+
+  it('shows both preview images at the larger size', async () => {
+    vi.spyOn(scanModule, 'scanReceiptFile').mockResolvedValue({
+      file: CORRECTED,
+      corrected: { url: 'blob:corrected', quad: quad(), sourceWidth: 100, sourceHeight: 100 },
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stageResponse()));
+    const { container } = render(<ReceiptUploader onStagedChange={vi.fn()} />);
+    pick(container, [new File(['jpeg'], 'receipt.jpg', { type: 'image/jpeg' })]);
+    const original = await screen.findByAltText('The photo you took');
+    const corrected = screen.getByTestId('scan-preview-corrected');
+    for (const img of [original, corrected]) {
+      expect(img.className).toContain('max-h-64');
+      expect(img.className).not.toContain('max-h-40');
+    }
   });
 
   it('Use this uploads immediately and cancels the timer', async () => {
