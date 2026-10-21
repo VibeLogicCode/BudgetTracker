@@ -15,6 +15,7 @@ import {
 } from '@/lib/predict/anomalies';
 import { DUPLICATE_LOOKBACK_DAYS, DUPLICATE_WINDOW_DAYS, UNUSUAL_BASELINE_DAYS, UNUSUAL_LOOKBACK_DAYS } from '@/lib/predict/constants';
 import { SPEND_ROW_WHERE } from '@/lib/spend-where';
+import { splitsForTransactions } from '@/lib/splits';
 
 /**
  * v1.13.0 ruling R6 (item AJ / PROD-2). The maths already existed and was tested; it was
@@ -63,7 +64,7 @@ export const INSIGHTS_MAX_ROWS = 8;
 function readSlice(sliceStart: string, scope: number | null): SpendRow[] {
   const clauses = [gte(transactions.date, sliceStart), ...SPEND_ROW_WHERE, lt(transactions.amountCents, 0)];
   if (scope !== null) clauses.push(eq(transactions.attributedUserId, scope));
-  return getDb()
+  const rows = getDb()
     .select({
       id: transactions.id,
       date: transactions.date,
@@ -75,6 +76,11 @@ function readSlice(sliceStart: string, scope: number | null): SpendRow[] {
     .where(and(...clauses))
     .orderBy(asc(transactions.date), asc(transactions.id))
     .all();
+  // Split ids are looked up only for rows already in the scoped slice. A split charge's
+  // category_id is stale, so it joins no per-category baseline (decision 30); the merchant
+  // baseline, duplicates and price rises still see it whole.
+  const split = splitsForTransactions(rows.map((row) => row.id));
+  return rows.map((row) => ({ ...row, isSplit: split.has(row.id) }));
 }
 
 function earliestDate(scope: number | null): string | null {
@@ -119,9 +125,9 @@ export function householdInsights(input: {
       .filter((row) => row.id !== candidate.id && row.merchant === candidate.merchant)
       .map((row) => Math.abs(row.amountCents));
     const categorySample =
-      candidate.categoryId === null
+      candidate.categoryId === null || candidate.isSplit
         ? []
-        : slice.filter((row) => row.id !== candidate.id && row.categoryId === candidate.categoryId).map((row) => Math.abs(row.amountCents));
+        : slice.filter((row) => row.id !== candidate.id && !row.isSplit && row.categoryId === candidate.categoryId).map((row) => Math.abs(row.amountCents));
     const verdict = unusualVerdict({ amountCents: candidate.amountCents, merchantSample, categorySample });
     if (verdict === null) continue;
     rows.push({

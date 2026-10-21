@@ -9,6 +9,7 @@ import * as outboxModule from '@/lib/notify/outbox';
 import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
 import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify/send';
 import { evaluateAnomalies, evaluateSubscriptionCreep, resetAnomalyFingerprintForTests } from '@/lib/notify/evaluate/anomalies';
+import { setTransactionSplits } from '@/lib/splits';
 import { runScheduledEvaluation, resetSlotSkipLogForTests, resetDailyEvaluationSlotForTests } from '@/lib/notify/evaluate';
 
 let t: TestDb;
@@ -636,5 +637,76 @@ describe('a ruling (v1.31.0, item M-8): the family channel keeps working for a h
     expect(rows.filter((r) => r.user_id === admin)).toEqual([]);
     expect(rows.filter((r) => r.user_id === selfMember)).toEqual([]);
     expect(rows).toHaveLength(1);
+  });
+});
+
+describe('a split charge and the per-category baseline', () => {
+  /** Splits a charge across two categories; the parent keeps its own (now stale) category_id. */
+  function split(txnId: number, cents: number, first: number, second: number): void {
+    const half = Math.floor(cents / 2);
+    setTransactionSplits({
+      txnId,
+      userId: creatorId,
+      parts: [
+        { categoryId: first, amountCents: -half, note: null },
+        { categoryId: second, amountCents: -(cents - half), note: null },
+      ],
+    });
+  }
+
+  /** Five ordinary $120 charges at five different merchants, so only the category baseline exists. */
+  function seedCategoryBaseline(categoryId: number): void {
+    for (let index = 0; index < 5; index += 1) {
+      charge({ merchant: `CORNER SHOP ${index}`, cents: 12000, date: `2026-0${index + 2}-1${index + 1}`, categoryId });
+    }
+  }
+
+  it('a split charge is not compared with its stale parent category baseline', () => {
+    emailUser();
+    seedHistory();
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    const coffee = categoryIdByName(t.db, 'Coffee');
+    seedCategoryBaseline(groceries);
+    const control = charge({ merchant: 'ONE OFF STORE', cents: 41288, date: '2026-08-14', categoryId: groceries });
+
+    expect(evaluateAnomalies({ now: NOW, tz: TZ })).toBe(1);
+    expect(keys()).toEqual([`unusual:${control}`]);
+
+    t.sqlite.prepare('delete from notification_outbox').run();
+    resetAnomalyFingerprintForTests();
+    split(control, 41288, groceries, coffee);
+    expect(evaluateAnomalies({ now: NOW, tz: TZ })).toBe(0);
+    expect(keys()).toEqual([]);
+  });
+
+  it('a split parent does not pad its category baseline', () => {
+    emailUser();
+    seedHistory();
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    const coffee = categoryIdByName(t.db, 'Coffee');
+    // Five $120 rows plus six $900 split charges is eleven samples with a $900 median, which hides
+    // a $412.88 charge; leaving the six out leaves a $120 median, which does not.
+    seedCategoryBaseline(groceries);
+    for (let index = 0; index < 6; index += 1) {
+      const big = charge({ merchant: `BIG SPLIT ${index}`, cents: 90000 + index, date: `2026-03-0${index + 1}`, categoryId: groceries });
+      split(big, 90000 + index, groceries, coffee);
+    }
+    const candidate = charge({ merchant: 'ONE OFF STORE', cents: 41288, date: '2026-08-14', categoryId: groceries });
+
+    expect(evaluateAnomalies({ now: NOW, tz: TZ })).toBe(1);
+    expect(keys()).toEqual([`unusual:${candidate}`]);
+  });
+
+  it('a split charge is still checked against its merchant baseline', () => {
+    emailUser();
+    seedHistory();
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    const coffee = categoryIdByName(t.db, 'Coffee');
+    seedMerchantBaseline('CANADIAN TIRE', groceries);
+    const outlier = charge({ merchant: 'CANADIAN TIRE', cents: 41288, date: '2026-08-14', categoryId: groceries });
+    split(outlier, 41288, groceries, coffee);
+
+    expect(evaluateAnomalies({ now: NOW, tz: TZ })).toBe(1);
+    expect(keys()).toEqual([`unusual:${outlier}`]);
   });
 });

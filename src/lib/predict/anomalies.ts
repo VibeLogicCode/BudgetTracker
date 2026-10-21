@@ -32,6 +32,8 @@ export interface SpendRow {
   merchant: string;
   categoryId: number | null;
   amountCents: number;
+  /** Has split parts: its category_id is stale, so it joins no per-category baseline. */
+  isSplit?: boolean;
 }
 
 /** MUST-9.10 condition 1: a first import has no baseline to be unusual against. */

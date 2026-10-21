@@ -21,7 +21,8 @@ import {
   UNUSUAL_MAX_PER_EVALUATION,
   UNUSUAL_MIN_ABS_CENTS,
 } from '@/lib/predict/constants';
-import { SPEND_ROW_WHERE } from '@/lib/spend-where';
+import { splitsForTransactions } from '@/lib/splits';
+import { NOT_SPLIT_PARENT, SPEND_ROW_WHERE } from '@/lib/spend-where';
 
 /**
  * MUST-10.4: evaluateAnomalies runs on EVERY tick, so it needs the same guard evaluateBudgets
@@ -135,7 +136,7 @@ function earliestTransactionDate(): string | null {
  * Reports both correctly say $0.
  */
 function readSlice(sliceStart: string): SliceRow[] {
-  return getDb()
+  const rows = getDb()
     .select({
       id: transactions.id,
       date: transactions.date,
@@ -149,6 +150,11 @@ function readSlice(sliceStart: string): SliceRow[] {
     .where(and(gte(transactions.date, sliceStart), ...SPEND_ROW_WHERE, lt(transactions.amountCents, 0)))
     .orderBy(asc(transactions.date), asc(transactions.id))
     .all();
+  // A split charge's category_id is stale (a split never changes it), so it is marked here and
+  // gets no category sample in baselineSamples; its merchant baseline, duplicates and price
+  // rises still use the whole charge.
+  const split = splitsForTransactions(rows.map((row) => row.id));
+  return rows.map((row) => ({ ...row, isSplit: split.has(row.id) }));
 }
 
 interface CategoryBaselineRow {
@@ -177,6 +183,7 @@ function categoryBaselineRows(
         gte(transactions.date, yearStart),
         ...SPEND_ROW_WHERE,
         lt(transactions.amountCents, 0),
+        NOT_SPLIT_PARENT,
         eq(transactions.categoryId, categoryId),
       ),
     )
@@ -216,7 +223,7 @@ function baselineSamples(
 ): { merchantSample: number[]; categorySample: number[] } {
   const merchantSample = merchantBaselineMagnitudes(candidate, yearStart);
   const categorySample =
-    candidate.categoryId === null
+    candidate.categoryId === null || candidate.isSplit
       ? []
       : categoryBaselineRows(candidate.categoryId, yearStart, categoryCache)
           .filter((row) => row.id !== candidate.id)

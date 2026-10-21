@@ -1,5 +1,5 @@
 import { eq, sql, type SQL } from 'drizzle-orm';
-import { loanPayments, transactions, warrantyItems } from '@/db/schema';
+import { loanPayments, transactionSplits, transactions, warrantyItems } from '@/db/schema';
 
 /**
  * The single definition of "a row that counts as spend" (C-02 fix). Before this module existed,
@@ -84,6 +84,15 @@ export const NOT_PRINCIPAL_MOVEMENT: SQL = sql`(
       and ${warrantyItems.loanDirection} = ${'owed'}
   )
 )`;
+
+/**
+ * A transaction with no split parts. A split never changes the parent's category_id, so a parent
+ * that has parts carries a stale category that says nothing about what the money bought; a
+ * per-category baseline reads this to leave such a charge out. Not part of SPEND_ROW_WHERE: a split
+ * charge is still spend, and the merchant baseline, duplicate and price-rise checks still see it
+ * whole. WHERE clauses only, never a select list (see transactionHasSplits in splits.ts).
+ */
+export const NOT_SPLIT_PARENT: SQL = sql`not exists (select 1 from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id})`;
 
 /** Both, for the callers that want the whole rule. Spread into an existing `clauses` array. */
 export const SPEND_ROW_WHERE: SQL[] = [NOT_TRANSFER, NOT_PRINCIPAL_MOVEMENT];
