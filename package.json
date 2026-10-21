@@ -1,6 +1,6 @@
 {
   "name": "budget-tracker",
-  "version": "1.55.4",
+  "version": "1.56.0",
   "private": true,
   "engines": {
     "node": ">=22"

@@ -29,6 +29,8 @@ export interface OcrSidecar {
   status: 'done' | 'failed';
   text?: string;
   error?: string;
+  /** False when reading the same file again would fail the same way; absent means a retry may help. */
+  retryable?: boolean;
   suggestions?: SuggestedFields;
   lines?: string[];
   candidates?: { amounts: AmountCandidate[]; dates: DateCandidate[] };

@@ -21,6 +21,8 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.56.0] - 2026-10-21
+
 ### Added
 
 - **Always ask for rows like this.** A row's menu on Transactions can now tell the app never to file a
