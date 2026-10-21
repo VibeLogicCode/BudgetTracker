@@ -1271,6 +1271,20 @@ describe('MerchantRulesClient — Always ask', () => {
     expect(screen.queryByRole('menuitem', { name: /back to review/ })).toBeNull();
   });
 
+  // v1.56.1 (review M-4): the Always ask dialog says "Matches N transactions"; the row says it the same way.
+  it('labels its Affects figure the way the dialog does', () => {
+    render(
+      <MerchantRulesClient
+        {...baseProps({
+          rows: [rule({ id: 4, pattern: 'E-TRANSFER', matchType: 'contains', ruleKind: 'always_ask', categoryId: null }), rule({ id: 5 })],
+          impactCounts: { 4: 3, 5: 2 },
+        })}
+      />,
+    );
+    const cells = Array.from(document.querySelectorAll('td[data-label="Affects"]')).map((cell) => cell.textContent);
+    expect(cells).toEqual(['Matches 3 transactions', '2 transactions']);
+  });
+
   it('says what deleting it does', () => {
     render(<MerchantRulesClient {...baseProps({ rows: [rule({ pattern: 'E-TRANSFER', matchType: 'contains', ruleKind: 'always_ask', categoryId: null })] })} />);
     openRowMenu('Actions for E-TRANSFER');

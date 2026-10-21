@@ -44,7 +44,7 @@ import {
 import { rerunEngine, upsertRenameRule } from '@/lib/categorize/engine';
 import { archiveCategory, listCategories } from '@/lib/categories';
 import MerchantRulesPage from '@/app/(app)/settings/merchant-rules/page';
-import { sendBackToReviewAction } from '@/app/(app)/transactions/actions';
+import { previewAlwaysAskAction, sendBackToReviewAction } from '@/app/(app)/transactions/actions';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -729,5 +729,25 @@ describe('Send matching rows back to review, from an Always ask rule on the Rule
     if (!ask.ok) throw new Error('refused');
     setRuleDisabledFlag(ask.ruleId, true);
     expect(await sendBackCountOnPage(ask.ruleId) ?? 0).toBe(0);
+  });
+});
+
+/** v1.56.1 (v1.56.0 review M-4). The dialog's "Matches N" and the Rules page's Affects are one number. */
+describe('Matches N: the Always ask dialog and the Rules page agree', () => {
+  it('two overlapping Always ask rules show the same number in the dialog and in Affects', async () => {
+    const { userId, add } = setup();
+    add('E-TRANSFER ***AB1');
+    add('E-TRANSFER ***AB1');
+    add('E-TRANSFER ***QX7');
+    add('CEDAR BAKERY');
+    const wide = setAlwaysAskRule({ pattern: 'E-TRANSFER', matchType: 'contains', userId, actorRole: 'admin' });
+    const narrow = setAlwaysAskRule({ pattern: 'E-TRANSFER ***AB1', matchType: 'exact', userId, actorRole: 'admin' });
+    if (!wide.ok || !narrow.ok) throw new Error('refused');
+    const element = await MerchantRulesPage({ searchParams: Promise.resolve({ kind: 'always_ask' }) });
+    const affects = (element.props as { impactCounts: Record<number, number> }).impactCounts;
+    const dialog = async (pattern: string, matchType: string) => (await previewAlwaysAskAction({}, formData({ pattern, matchType }))).message;
+    expect(await dialog('E-TRANSFER', 'contains')).toBe(`Matches ${affects[wide.ruleId]} transactions.`);
+    expect(await dialog('E-TRANSFER ***AB1', 'exact')).toBe(`Matches ${affects[narrow.ruleId]} transactions.`);
+    expect([affects[wide.ruleId], affects[narrow.ruleId]]).toEqual([3, 2]);
   });
 });

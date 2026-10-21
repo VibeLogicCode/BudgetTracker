@@ -10,6 +10,8 @@ import {
   confirmCategory,
   createRulesFromRow,
   reviewQueueIds,
+  ruleImpactCounts,
+  ruleImpactIds,
   runEngine,
   sendAlwaysAskRowsToReview,
 } from '@/lib/categorize/engine';
@@ -225,6 +227,41 @@ describe('alwaysAskMatchCount', () => {
     expect(alwaysAskMatchCount({ pattern: ' e-transfer ', matchType: 'contains' })).toBe(2);
     expect(alwaysAskMatchCount({ pattern: 'E-TRANSFER ***QX7', matchType: 'exact' })).toBe(1);
     expect(alwaysAskMatchCount({ pattern: '   ', matchType: 'contains' })).toBe(0);
+  });
+});
+
+/**
+ * v1.56.1 (v1.56.0 review M-4). One count, one meaning: the rows a rule's text matches, whether or not
+ * another Always ask rule matches them too. The dialog's "Matches N" and the rule's Affects agree even
+ * when two rules overlap.
+ */
+describe('Matches N: the dialog and Affects', () => {
+  it('two overlapping rules each show the same number in the dialog and in Affects', () => {
+    const { add, ask, transfer } = setup();
+    const ab1 = [add('E-TRANSFER ***AB1'), add('E-TRANSFER ***AB1')];
+    const qx7 = add('E-TRANSFER ***QX7');
+    transfer(add('E-TRANSFER ***AB1'));
+    add('TIM HORTONS');
+    const wide = ask('E-TRANSFER', 'contains');
+    const narrow = ask('E-TRANSFER ***AB1', 'exact');
+    const affects = ruleImpactCounts();
+    expect({ wide: affects.get(wide), narrow: affects.get(narrow) }).toEqual({
+      wide: alwaysAskMatchCount({ pattern: 'E-TRANSFER', matchType: 'contains' }),
+      narrow: alwaysAskMatchCount({ pattern: 'E-TRANSFER ***AB1', matchType: 'exact' }),
+    });
+    expect({ wide: affects.get(wide), narrow: affects.get(narrow) }).toEqual({ wide: 3, narrow: 2 });
+    // The ids behind each figure are that figure's rows.
+    expect(ruleImpactIds(wide)).toEqual([...ab1, qx7]);
+    expect(ruleImpactIds(narrow)).toEqual(ab1);
+  });
+
+  it('a rule that is off matches nothing', () => {
+    const { add, ask } = setup();
+    add('E-TRANSFER ***AB1');
+    const ruleId = ask('E-TRANSFER', 'contains');
+    setRuleDisabledFlag(ruleId, true);
+    expect(ruleImpactCounts().get(ruleId) ?? 0).toBe(0);
+    expect(ruleImpactIds(ruleId)).toEqual([]);
   });
 });
 

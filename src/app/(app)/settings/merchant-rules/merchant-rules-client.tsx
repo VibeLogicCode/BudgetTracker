@@ -1155,6 +1155,10 @@ export function MerchantRulesClient({
                       )}
                     </td>
                     <td className="tabnum text-right text-xs text-muted cell-stack-amount" data-label="Affects">
+                      {/* v1.56.1 (review M-4): an Always ask rule's figure is the dialog's "Matches N"
+                          (alwaysAskMatchCount), overlap with another Always ask rule included, and
+                          says so in the dialog's words. */}
+                      {rule.ruleKind === 'always_ask' ? 'Matches ' : ''}
                       {impact} transaction{impact === 1 ? '' : 's'}
                     </td>
                     <td className="text-right cell-stack-actions" data-label="">

@@ -19,12 +19,12 @@ import {
   isMerchantMarkKind,
   listRules,
   matchRule,
-  MERCHANT_MARK_KINDS,
+  matchTypeAllowedForKind,
   patternMatches,
+  RECURRING_MARK_KINDS,
   ruleCategoryArchived,
   setRuleDisabledFlag,
   upsertRuleFromCorrection,
-  type AlwaysAskMatchType,
   type MatchType,
   type MerchantRuleRecord,
   type RuleKind,
@@ -795,7 +795,9 @@ export function setRuleDisabled(input: { ruleId: number; disabled: boolean; at?:
  *    this rule resolves -- always in sync already (every rename save/disable/delete reapplies),
  *    so this is the one kind that needs no re-run to become accurate; it just reads what already
  *    happened.
- *  - recurring / not_recurring / always_ask: the non-transfer rows of every merchant the rule resolves.
+ *  - recurring / not_recurring: the non-transfer rows of every merchant the rule resolves.
+ *  - always_ask (v1.56.1, review M-4): alwaysAskMatchCount, the dialog's own "Matches N" -- every
+ *    non-transfer row the rule's text matches, overlap with another Always ask rule included.
  *
  * Read-only; never called from a path that writes.
  */
@@ -906,15 +908,15 @@ export function ruleImpactCounts(ctx: CategorizeContext = buildContext()): Map<n
   // Spec 2026-10-05 §2.2, 2026-10-21 §2.1: a merchant mark's "Affects" counts the non-transfer rows of every merchant it
   // resolves (refunds, any date, every person included). Skipped when the household has no merchant mark, like attribution above.
   if (ctx.rules.some((rule) => isMerchantMarkKind(rule.ruleKind))) {
-    const marked = db
-      .select({ normalizedMerchant: transactions.normalizedMerchant, c: sql<number>`count(*)` })
-      .from(transactions)
-      .where(candidateRowsFor('recurring'))
-      .groupBy(transactions.normalizedMerchant)
-      .all();
-    for (const kind of MERCHANT_MARK_KINDS) {
+    const marked = merchantMarkCandidates();
+    for (const kind of RECURRING_MARK_KINDS) {
       const attributed = ruleAttributor(kind, ctx);
       for (const row of marked) bump(attributed(row.normalizedMerchant, null), row.c);
+    }
+    // Not attributed to one winner: two Always ask rules never disagree, so overlap is counted for
+    // each, exactly as the dialog counts it (alwaysAskMatchCount's docblock).
+    for (const rule of ctx.rules) {
+      if (alwaysAskRuleOn(rule)) bump(rule.id, alwaysAskMatchCount(rule, marked));
     }
   }
 
@@ -996,7 +998,9 @@ export function ruleImpactIds(ruleId: number, scope: RuleScope = {}, ctx: Catego
     .where(and(candidateRowsFor(rule.ruleKind), ...bounds))
     .orderBy(asc(transactions.id))
     .all()
-    .filter(attributedToRule(rule, ctx))
+    // v1.56.1: an Always ask rule's rows are the rows its text matches, the same set ruleImpactCounts
+    // counts through alwaysAskMatchCount; every other kind goes to the one rule that wins the row.
+    .filter(rule.ruleKind === 'always_ask' ? (row) => alwaysAskRowMatches(rule, row.normalizedMerchant) : attributedToRule(rule, ctx))
     // 2026-09-13. FORWARD-LOOKING, the transfer kind's own definition of "Affects": the rows this
     // rule would change if applied. A row already on the rule's person is not affected by it --
     // counting it would make "Apply now" promise N and change fewer, and would leave the column
@@ -1975,34 +1979,57 @@ export function applyCategoryToMatching(input: {
   return { ok: true, count: ids.length };
 }
 
-/**
- * Spec 2026-10-21 §2.1, and decision 8 of that plan: the Always ask dialog's live count and its
- * Send back to review. The count is every non-transfer row the pattern matches (the rows the
- * rule's Affects column will show), the pattern trimmed and uppercased the way
- * upsertRuleFromCorrection stores it. Send back offers only the rows REVIEW_WHERE would show once
- * cleared: filed by a rule or a guess, with a category, not a transfer, no split parts and no loan
- * link, so a person's own decision never goes back. The two `not exists` clauses stay inside
- * `.where()`, never the select list (transactionHasSplits' docblock says why).
- */
-export function alwaysAskMatchCount(input: { pattern: string; matchType: AlwaysAskMatchType }): number {
-  const pattern = input.pattern.trim().toUpperCase();
-  if (pattern.length === 0) return 0;
-  const groups = getDb()
-    .select({ merchant: transactions.normalizedMerchant, count: sql<number>`count(*)` })
+/** A merchant mark's candidate rows (candidateRowsFor), counted per merchant. */
+function merchantMarkCandidates(): { normalizedMerchant: string; c: number }[] {
+  return getDb()
+    .select({ normalizedMerchant: transactions.normalizedMerchant, c: sql<number>`count(*)` })
     .from(transactions)
-    .where(eq(transactions.isTransfer, false))
+    .where(candidateRowsFor('always_ask'))
     .groupBy(transactions.normalizedMerchant)
     .all();
+}
+
+/**
+ * Spec 2026-10-21 §2.1, and decision 8 of that plan: "Matches N transactions" -- one count, read by
+ * the Always ask dialog (for text not saved yet) and by an Always ask rule's Affects column on the
+ * Rules page (ruleImpactCounts, ruleImpactIds). v1.56.1 (review M-4) fixed what it means in both:
+ * every non-transfer row whose merchant the text matches, WHETHER OR NOT another Always ask rule
+ * matches that row too. Overlap is not handed to one winner because two Always ask rules never
+ * disagree -- whichever wins, the row is asked about -- and a winner-only figure is not one the
+ * dialog can state for text nobody has saved. The pattern is trimmed and uppercased the way
+ * upsertRuleFromCorrection stores it. `groups` lets ruleImpactCounts pass rows it already counted.
+ *
+ * Send back (below) offers only the rows REVIEW_WHERE would show once cleared: filed by a rule or a
+ * guess, with a category, not a transfer, no split parts and no loan link, so a person's own
+ * decision never goes back. The two `not exists` clauses stay inside `.where()`, never the select
+ * list (transactionHasSplits' docblock says why).
+ */
+export function alwaysAskMatchCount(
+  input: { pattern: string; matchType: MatchType },
+  groups: readonly { normalizedMerchant: string; c: number }[] = merchantMarkCandidates(),
+): number {
+  const pattern = input.pattern.trim().toUpperCase();
+  if (pattern.length === 0) return 0;
   let total = 0;
   for (const group of groups) {
-    if (patternMatches(pattern, input.matchType, group.merchant)) total += group.count;
+    if (patternMatches(pattern, input.matchType, group.normalizedMerchant)) total += group.c;
   }
   return total;
 }
 
+/** An Always ask rule that can fire: on, and of a shape matchRule accepts (no word match, no window). */
+function alwaysAskRuleOn(rule: MerchantRuleRecord): boolean {
+  return rule.ruleKind === 'always_ask' && rule.disabledAt === null && matchTypeAllowedForKind(rule.matchType, rule.ruleKind) && !isBounded(rule);
+}
+
+/** The row-level half of alwaysAskMatchCount, for the paths that need ids rather than a count. */
+function alwaysAskRowMatches(rule: MerchantRuleRecord, normalizedMerchant: string): boolean {
+  return alwaysAskRuleOn(rule) && patternMatches(rule.pattern.trim().toUpperCase(), rule.matchType, normalizedMerchant);
+}
+
 export function alwaysAskSendBackIds(ruleId: number): number[] {
   const rule = listRules('always_ask').find((candidate) => candidate.id === ruleId);
-  if (!rule || rule.disabledAt !== null) return [];
+  if (!rule || !alwaysAskRuleOn(rule)) return [];
   const candidates = getDb()
     .select({ id: transactions.id, merchant: transactions.normalizedMerchant })
     .from(transactions)
@@ -2016,7 +2043,7 @@ export function alwaysAskSendBackIds(ruleId: number): number[] {
     )
     .orderBy(asc(transactions.id))
     .all()
-    .filter((row) => patternMatches(rule.pattern, rule.matchType, row.merchant))
+    .filter((row) => alwaysAskRowMatches(rule, row.merchant))
     .map((row) => row.id);
   // The link table is consulted through loans.ts here, not named in this file (MUST-13.2 guard).
   const linked = loanLinksForTransactions(candidates);
