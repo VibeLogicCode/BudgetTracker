@@ -1549,4 +1549,25 @@ describe('BudgetsClient — fixing a row from the card', () => {
     expect(screen.getByRole('button', { name: 'Hide transactions' })).toBeTruthy();
     window.location.hash = '';
   });
+
+  /** v1.57.1: the hash is acted on once, so a card the person closed stays closed. */
+  it('clears the hash after opening the card from it, keeping the path and query, and a remount does not reopen it', async () => {
+    window.history.replaceState(null, '', '/budgets?month=2026-03#budget-card-household-h-1');
+    const { categoryTransactionsAction } = await import('@/app/(app)/budgets/category-transactions-action');
+    vi.mocked(categoryTransactionsAction).mockClear();
+    renderBudgets(null);
+    await waitFor(() => expect(categoryTransactionsAction).toHaveBeenCalled());
+    expect(screen.getByRole('button', { name: 'Hide transactions' })).toBeTruthy();
+    expect({ path: window.location.pathname, query: window.location.search, hash: window.location.hash }).toEqual({
+      path: '/budgets',
+      query: '?month=2026-03',
+      hash: '',
+    });
+    cleanup();
+    vi.mocked(categoryTransactionsAction).mockClear();
+    renderBudgets(null);
+    expect(screen.getByRole('button', { name: 'View transactions' })).toBeTruthy();
+    expect(categoryTransactionsAction).not.toHaveBeenCalled();
+    window.history.replaceState(null, '', '/');
+  });
 });

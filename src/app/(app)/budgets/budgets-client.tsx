@@ -888,7 +888,10 @@ function BudgetCategoryCard({
     if (window.location.hash !== `#${cardId}`) return;
     if (row.children.length > 0) groupState.open(row.categoryId);
     else setLeafTxOpen(true);
-    // One-shot on mount: the hash names where the person came from, not a state to keep in sync.
+    // One-shot: the hash names where the person came from, not a state to keep in sync. Cleared once
+    // acted on, or a card they closed would reopen on its next mount (leaving Edit limits, say). A
+    // null state lets the Next router keep its own history entry and take the new URL.
+    window.history.replaceState(null, '', window.location.pathname + window.location.search);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
