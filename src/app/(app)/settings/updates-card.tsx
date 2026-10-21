@@ -43,6 +43,7 @@ export function UpdatesCard() {
       enabled={state.enabled}
       autoApply={state.autoApply}
       lastCheckedAt={state.lastCheckedAt}
+      lastSuccessAt={state.lastSuccessAt}
       lastCheckError={state.lastCheckError}
       latestVersion={state.latestVersion}
       latestPublishedAt={state.latestPublishedAt}

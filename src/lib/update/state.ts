@@ -17,6 +17,8 @@ const KEY_ENABLED_AT = 'update.enabled_at';
 const KEY_AUTO_APPLY = 'update.auto_apply';
 const KEY_LAST_CHECKED_AT = 'update.last_checked_at';
 const KEY_LAST_CHECK_ERROR = 'update.last_check_error';
+/** Written only by a check that worked, so a later failure can still say when one last did. */
+const KEY_LAST_SUCCESS_AT = 'update.last_success_at';
 const KEY_LATEST_VERSION = 'update.latest_version';
 const KEY_LATEST_PUBLISHED_AT = 'update.latest_published_at';
 const KEY_DISMISSED_VERSION = 'update.dismissed_version';
@@ -40,6 +42,7 @@ const WIPED_ON_DISABLE = [
   KEY_AUTO_APPLY,
   KEY_LAST_CHECKED_AT,
   KEY_LAST_CHECK_ERROR,
+  KEY_LAST_SUCCESS_AT,
   KEY_LATEST_VERSION,
   KEY_LATEST_PUBLISHED_AT,
   KEY_DISMISSED_VERSION,
@@ -60,6 +63,8 @@ export interface UpdateState {
   /** MUST-3.5: false when !enabled, regardless of what is stored. */
   autoApply: boolean;
   lastCheckedAt: string | null;
+  /** The last attempt that did NOT fail; kept through later failures. */
+  lastSuccessAt: string | null;
   lastCheckError: string | null;
   latestVersion: string | null;
   latestPublishedAt: string | null;
@@ -105,6 +110,7 @@ export function readUpdateState(): UpdateState {
     // disabled, so no caller can reach an apply path through a stale key.
     autoApply: enabled ? getSetting(KEY_AUTO_APPLY) !== '0' : false,
     lastCheckedAt: getSetting(KEY_LAST_CHECKED_AT),
+    lastSuccessAt: getSetting(KEY_LAST_SUCCESS_AT),
     lastCheckError: getSetting(KEY_LAST_CHECK_ERROR),
     latestVersion: getSetting(KEY_LATEST_VERSION),
     latestPublishedAt: getSetting(KEY_LATEST_PUBLISHED_AT),
@@ -162,6 +168,7 @@ export function recordCheckOutcome(input: {
     return;
   }
   deleteSetting(KEY_LAST_CHECK_ERROR);
+  setSetting(KEY_LAST_SUCCESS_AT, iso(input.at));
   writeOrDelete(KEY_LATEST_VERSION, input.latestVersion ?? null);
   writeOrDelete(KEY_LATEST_PUBLISHED_AT, input.publishedAt ?? null);
 }

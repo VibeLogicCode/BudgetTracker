@@ -332,6 +332,21 @@ describe('Task 3d (symptom A): the actions return what they computed', () => {
     expect(result.applyRequestedAt).toBeNull();
   });
 
+  it('checkForUpdateNowAction returns lastCheckError equal to its error, then null after a check that works', async () => {
+    await actions.enableUpdateChecksAction({}, new FormData());
+    stubWatchtower(500);
+    const failed = await actions.checkForUpdateNowAction({}, new FormData());
+    expect(typeof failed.error).toBe('string');
+    expect(failed.lastCheckError).toBe(failed.error);
+    expect(failed.lastSuccessAt).toBeNull();
+
+    stubRelease(`v${APP_VERSION}`);
+    const ok = await actions.checkForUpdateNowAction({}, new FormData());
+    expect(ok.error).toBeUndefined();
+    expect(ok.lastCheckError).toBeNull();
+    expect(typeof ok.lastSuccessAt).toBe('string');
+  });
+
   it('applyUpdateAction returns the fresh applyRequestedVersion/applyRequestedAt after a successful request', async () => {
     process.env.WATCHTOWER_URL = 'http://watchtower:8080/v1/update';
     process.env.WATCHTOWER_TOKEN = 'a-fine-token-value-long-enough';

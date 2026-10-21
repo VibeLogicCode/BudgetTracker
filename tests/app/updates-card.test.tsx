@@ -43,6 +43,7 @@ const base: UpdatesViewProps = {
   enabled: true,
   autoApply: true,
   lastCheckedAt: '2026-08-18T09:30:00.000Z',
+  lastSuccessAt: '2026-08-18T09:30:00.000Z',
   lastCheckError: null,
   latestVersion: null,
   latestPublishedAt: null,
@@ -347,6 +348,53 @@ describe('item H: updates-client.tsx passes server actions to useActionState dir
     render(<UpdatesClient {...base} />);
     submit('Check now');
     await waitFor(() => expect(screen.getByText('You are on the newest published version.')).toBeTruthy());
+  });
+});
+
+describe('item 19: one error notice, cleared on success, never up to date after a failure', () => {
+  it('shows a failed check once', async () => {
+    vi.mocked(checkForUpdateNowAction).mockResolvedValueOnce({
+      error: 'GitHub returned 500.',
+      lastCheckError: 'GitHub returned 500.',
+      lastCheckedAt: '2026-08-18T10:00:00.000Z',
+    });
+    render(<UpdatesClient {...base} lastCheckError="GitHub returned 500." />);
+    submit('Check now');
+    await waitFor(() => expect(vi.mocked(checkForUpdateNowAction)).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Check now' })).toBeTruthy());
+    expect(screen.getAllByText('GitHub returned 500.')).toHaveLength(1);
+  });
+
+  it('clears the old error after a successful check', async () => {
+    vi.mocked(checkForUpdateNowAction).mockResolvedValueOnce({
+      message: 'You are on the newest published version.',
+      lastCheckError: null,
+      lastSuccessAt: '2026-08-18T10:00:00.000Z',
+      lastCheckedAt: '2026-08-18T10:00:00.000Z',
+    });
+    render(<UpdatesClient {...base} lastCheckError="GitHub returned 500." />);
+    expect(screen.getByText('GitHub returned 500.')).toBeTruthy();
+    submit('Check now');
+    await waitFor(() => expect(screen.getByText('You are on the newest published version.')).toBeTruthy());
+    expect(screen.queryByText('GitHub returned 500.')).toBeNull();
+    expect(screen.getByText('Up to date (v1.3.1)')).toBeTruthy();
+  });
+
+  it('says it could not check, never up to date, after a failure', () => {
+    render(
+      <UpdatesClient
+        {...base}
+        lastCheckError="GitHub returned 500."
+        lastSuccessAt="2026-08-17T09:30:00.000Z"
+      />,
+    );
+    expect(screen.getByText(/Could not check for updates/)).toBeTruthy();
+    expect(screen.queryByText(/^Up to date/)).toBeNull();
+    expect(screen.getByText(/Last successful check 2026-08-17 09:30/)).toBeTruthy();
+    cleanup();
+    render(<UpdatesClient {...base} lastCheckError="GitHub returned 500." lastSuccessAt={null} />);
+    expect(screen.getByText(/No successful check yet/)).toBeTruthy();
+    expect(screen.queryByText(/^Up to date/)).toBeNull();
   });
 });
 

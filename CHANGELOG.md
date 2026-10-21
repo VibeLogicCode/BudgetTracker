@@ -37,6 +37,7 @@ All notable changes to Budget Tracker are recorded here.
 
 ### Fixed
 
+- **The Updates card shows a failed check once and clears it after a check that works.** After a failed check it says it could not check, with the time of the last one that worked, instead of up to date.
 - **The Add item header names the fields each kind really has**, such as start date and payment amount for a loan, instead of promising a price.
 - **Try again is offered only when trying again can help.** A photo with no readable text, a scanned PDF, or a read that kept stopping no longer offers a retry that would fail the same way.
 - **The receipt card says reading happens on your Budget Tracker server**, which is true from a phone as well as from the computer it runs on.

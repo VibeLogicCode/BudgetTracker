@@ -44,6 +44,7 @@ describe('MUST-1.1 / MUST-3.1: absence is the off state', () => {
       enabledAt: null,
       autoApply: false,
       lastCheckedAt: null,
+      lastSuccessAt: null,
       lastCheckError: null,
       latestVersion: null,
       latestPublishedAt: null,
@@ -54,6 +55,34 @@ describe('MUST-1.1 / MUST-3.1: absence is the off state', () => {
       lastApplyError: null,
       lastApplyFailedVersion: null,
     });
+  });
+});
+
+describe('the last successful check is remembered across failures', () => {
+  it('a success sets lastSuccessAt; a later failure keeps it and moves lastCheckedAt', () => {
+    const userId = insertTestUser(t.db, { username: 'admin-ls1' });
+    setUpdateChecksEnabled({ enabled: true, userId });
+    recordCheckOutcome({ at: new Date('2026-08-17T09:30:00.000Z'), latestVersion: null });
+    expect(readUpdateState().lastSuccessAt).toBe('2026-08-17T09:30:00.000Z');
+
+    recordCheckOutcome({ at: new Date('2026-08-18T10:00:00.000Z'), error: 'GitHub returned 500.' });
+    const state = readUpdateState();
+    expect(state.lastSuccessAt).toBe('2026-08-17T09:30:00.000Z');
+    expect(state.lastCheckedAt).toBe('2026-08-18T10:00:00.000Z');
+  });
+
+  it('a failure with no earlier success leaves lastSuccessAt null', () => {
+    recordCheckOutcome({ at: new Date('2026-08-18T10:00:00.000Z'), error: 'GitHub returned 500.' });
+    expect(readUpdateState().lastSuccessAt).toBeNull();
+  });
+
+  it('disabling checks wipes it', () => {
+    const userId = insertTestUser(t.db, { username: 'admin-ls2' });
+    setUpdateChecksEnabled({ enabled: true, userId });
+    recordCheckOutcome({ at: new Date(), latestVersion: null });
+    expect(readUpdateState().lastSuccessAt).not.toBeNull();
+    setUpdateChecksEnabled({ enabled: false, userId });
+    expect(readUpdateState().lastSuccessAt).toBeNull();
   });
 });
 

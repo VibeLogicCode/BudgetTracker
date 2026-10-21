@@ -32,6 +32,8 @@ export interface UpdatesViewProps {
   enabled: boolean;
   autoApply: boolean;
   lastCheckedAt: string | null;
+  /** The last check that did not fail; shown beside a failed one instead of "Up to date". */
+  lastSuccessAt: string | null;
   lastCheckError: string | null;
   latestVersion: string | null;
   latestPublishedAt: string | null;
@@ -82,6 +84,8 @@ type ResolvedAvailability = Pick<
   | 'latestVersion'
   | 'latestPublishedAt'
   | 'lastCheckedAt'
+  | 'lastCheckError'
+  | 'lastSuccessAt'
   | 'severity'
   | 'applyRequestedVersion'
   | 'applyRequestedAt'
@@ -95,6 +99,8 @@ const RESOLVED_KEYS = [
   'latestVersion',
   'latestPublishedAt',
   'lastCheckedAt',
+  'lastCheckError',
+  'lastSuccessAt',
   'severity',
   'applyRequestedVersion',
   'applyRequestedAt',
@@ -278,6 +284,7 @@ export function UpdatesClient(props: UpdatesViewProps) {
     );
   }
 
+  const checkFailed = resolved.lastCheckError !== null;
   const severity = resolved.severity;
   const offered = severity !== 'none' && resolved.latestVersion !== null ? resolved.latestVersion : null;
   // Item M-3: resolved, not props. dismissUpdateAction hands back the dismissedVersion it just
@@ -318,9 +325,11 @@ export function UpdatesClient(props: UpdatesViewProps) {
       <CardHeader
         title="Updates"
         description={
-          offered === null
-            ? `Up to date (v${props.currentVersion})`
-            : `Version ${offered} is available`
+          offered !== null
+            ? `Version ${offered} is available`
+            : checkFailed
+              ? 'Could not check for updates'
+              : `Up to date (v${props.currentVersion})`
         }
         action={
           offered === null || severity === 'none' ? null : (
@@ -359,6 +368,13 @@ export function UpdatesClient(props: UpdatesViewProps) {
               {timeoutSeconds(GITHUB_INTERACTIVE_TIMEOUT_MS)} seconds. Previously checked{' '}
               {stamp(resolved.lastCheckedAt)}.
             </>
+          ) : checkFailed ? (
+            <>
+              {resolved.lastSuccessAt === null
+                ? 'No successful check yet'
+                : `Last successful check ${stamp(resolved.lastSuccessAt)}`}
+              {props.lastAppliedAt === null ? null : ` · last updated ${stamp(props.lastAppliedAt)}`}
+            </>
           ) : (
             <>
               Last checked {stamp(resolved.lastCheckedAt)}
@@ -368,15 +384,16 @@ export function UpdatesClient(props: UpdatesViewProps) {
           )}
         </p>
 
-        {props.lastCheckError === null ? null : <Notice tone="error">{props.lastCheckError}</Notice>}
-        {props.lastCheckError?.startsWith(COULD_NOT_REACH_GITHUB) ? (
+        {resolved.lastCheckError === null ? null : <Notice tone="error">{resolved.lastCheckError}</Notice>}
+        {resolved.lastCheckError?.startsWith(COULD_NOT_REACH_GITHUB) ? (
           <p className="text-sm text-muted">
             Check that the server can look up api.github.com and make outbound HTTPS connections.
           </p>
         ) : null}
         {props.lastApplyError === null ? null : <Notice tone="error">{props.lastApplyError}</Notice>}
         {props.watchtowerError === null ? null : <Notice tone="error">{props.watchtowerError}</Notice>}
-        <FormError message={error} />
+        {/* The failed check is already the notice above; the same text twice is one error shown twice. */}
+        <FormError message={error === resolved.lastCheckError ? undefined : error} />
         {message === undefined ? null : <Notice tone="success">{message}</Notice>}
 
         <div className="flex flex-wrap items-center gap-3">

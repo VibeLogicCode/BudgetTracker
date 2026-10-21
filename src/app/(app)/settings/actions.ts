@@ -290,6 +290,9 @@ export interface UpdateActionState {
   latestVersion?: string | null;
   latestPublishedAt?: string | null;
   lastCheckedAt?: string | null;
+  /** The stored failure of the latest check (null once a check works), so the card shows it once. */
+  lastCheckError?: string | null;
+  lastSuccessAt?: string | null;
   severity?: UpdateSeverity;
   applyRequestedVersion?: string | null;
   applyRequestedAt?: string | null;
@@ -332,6 +335,8 @@ function currentAvailability(): Pick<
   | 'latestVersion'
   | 'latestPublishedAt'
   | 'lastCheckedAt'
+  | 'lastCheckError'
+  | 'lastSuccessAt'
   | 'severity'
   | 'applyRequestedVersion'
   | 'applyRequestedAt'
@@ -348,6 +353,8 @@ function currentAvailability(): Pick<
     latestVersion: state.latestVersion,
     latestPublishedAt: state.latestPublishedAt,
     lastCheckedAt: state.lastCheckedAt,
+    lastCheckError: state.lastCheckError,
+    lastSuccessAt: state.lastSuccessAt,
     severity,
     applyRequestedVersion: state.applyRequestedVersion,
     applyRequestedAt: state.applyRequestedAt,
