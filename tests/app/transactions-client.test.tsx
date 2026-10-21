@@ -2594,6 +2594,19 @@ describe('Task 3c: rows fold below sm only when their own filter is at default',
     expect(new FormData(form).get('exact')).toBeNull();
   });
 
+  /** v1.57.1: a client navigation keeps the component mounted with a new URL. */
+  it('after a client navigation to another category, the form follows the new URL and keeps its exact=1', () => {
+    const props = { page: pageWithRow(), accounts: [], categories, people: [], today: '2026-03-02' };
+    const { container, rerender } = render(<TransactionsClient {...props} currentQuery="category=1&exact=1" />);
+    const form = () => container.querySelector('form[method="get"]') as HTMLFormElement;
+    const posted = () => ({ category: new FormData(form()).get('category'), exact: new FormData(form()).get('exact') });
+    expect(posted()).toEqual({ category: '1', exact: '1' });
+    rerender(<TransactionsClient {...props} currentQuery="category=2&exact=1" />);
+    expect(posted()).toEqual({ category: '2', exact: '1' });
+    fireEvent.change(container.querySelector('form[method="get"] select[name="category"]') as HTMLSelectElement, { target: { value: '1' } });
+    expect(posted()).toEqual({ category: '1', exact: null });
+  });
+
   // v1.56.1 (review M1): a search typed after arriving narrows the view it arrived in.
   it('the filter form starts at the filters already in the URL', () => {
     const { container } = render(

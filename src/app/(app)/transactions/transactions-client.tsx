@@ -955,12 +955,19 @@ export function TransactionsClient({
     };
   })();
   /**
-   * Spec 2026-10-21 (fix from Budgets) §2.6. `exact=1` qualifies the category the URL arrived with,
-   * so the form carries it only while the Category select still holds that category; choosing
-   * another category is a new question and drops it.
+   * Spec 2026-10-21 (fix from Budgets) §2.6. `exact=1` qualifies the category the URL holds, so the
+   * form carries it only while the Category select still holds that category; choosing another
+   * category is a new question and drops it. A client navigation (a chip, a group link) keeps this
+   * component mounted with a new `currentQuery`, so the select starts again from the current URL's
+   * category whenever that changes, not from the URL the page first loaded with.
    */
   const exactActive = new URLSearchParams(currentQuery).get('exact') === '1';
   const [categoryChoice, setCategoryChoice] = useState(formDefaults.category);
+  const [categoryChoiceFor, setCategoryChoiceFor] = useState(formDefaults.category);
+  if (categoryChoiceFor !== formDefaults.category) {
+    setCategoryChoiceFor(formDefaults.category);
+    setCategoryChoice(formDefaults.category);
+  }
 
   // Fix round (reported, phone screenshot): six stacked control rows sat above the data at
   // every width, because ruling S7's disclosure (`filtersOpen`, above) only ever gated the four
@@ -3570,7 +3577,7 @@ export function TransactionsClient({
                 </select>
               </Field>
               <Field label="Category">
-                <select name="category" defaultValue={formDefaults.category} onChange={(e) => setCategoryChoice(e.target.value)} className={selectClass}>
+                <select name="category" value={categoryChoice} onChange={(e) => setCategoryChoice(e.target.value)} className={selectClass}>
                   <option value="">All</option>
                   <option value="uncategorized">Uncategorized</option>
                   {groupedCategories.map((opt) => (
