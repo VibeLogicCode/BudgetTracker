@@ -94,6 +94,11 @@ function alwaysAskNoRuleNote(merchants: readonly string[], ruleAsked: boolean): 
   return merchants.some((merchant) => alwaysAskRuleFor(merchant, rules) !== null) ? ` ${ALWAYS_ASK_NO_RULE}` : '';
 }
 
+/** v1.57.1. A teach found its exact rule disabled and turned it back on (confirmCategory); this says so. */
+function ruleEnabledAgainNote(merchant: string, enabledAgain: boolean): string {
+  return enabledAgain ? ` The disabled rule for ${merchant} is enabled again.` : '';
+}
+
 export interface ActionState {
   error?: string;
   message?: string;
@@ -265,6 +270,7 @@ export async function setCategoryAction(_prev: ActionState, formData: FormData):
   const pickedRow = getTransaction(transactionId, user);
   if (pickedRow === null) return { error: NOT_YOURS_ERROR };
 
+  let ruleEnabledAgain = false;
   if (raw === '') {
     // deleteRule: false -- ruling R4/P5. See clearCategory's docblock.
     if (!clearCategory({ transactionId, userId: user.id, deleteRule: false })) {
@@ -293,6 +299,7 @@ export async function setCategoryAction(_prev: ActionState, formData: FormData):
             : 'This transaction is split — clear its split first, then change its category.',
       };
     }
+    ruleEnabledAgain = result.ruleEnabledAgain === true;
   }
 
   revalidatePath('/transactions');
@@ -303,7 +310,7 @@ export async function setCategoryAction(_prev: ActionState, formData: FormData):
   revalidatePath('/reports');
   const taught = raw !== '' && formData.get('teach') === '1';
   return {
-    message: `Category updated.${raw === '' ? '' : archivedNoRuleNote(Number(raw), taught)}${alwaysAskNoRuleNote([pickedRow.normalizedMerchant], taught)}`,
+    message: `Category updated.${raw === '' ? '' : archivedNoRuleNote(Number(raw), taught)}${alwaysAskNoRuleNote([pickedRow.normalizedMerchant], taught)}${ruleEnabledAgainNote(pickedRow.normalizedMerchant, ruleEnabledAgain)}`,
   };
 }
 

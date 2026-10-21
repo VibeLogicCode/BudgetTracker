@@ -8,7 +8,7 @@ import { createWarrantyItem, getWarrantyItem } from '@/lib/warranty/items';
 import { createItemType } from '@/lib/warranty/types';
 import { setTransactionSplits } from '@/lib/splits';
 import { ARCHIVED_GUESS_ERROR, confirmCategory, runEngine, upsertRenameRule } from '@/lib/categorize/engine';
-import { listRules, ruleOwnedError, setAlwaysAskRule, upsertRuleFromCorrection } from '@/lib/categorize/rules';
+import { listRules, ruleOwnedError, setAlwaysAskRule, setRuleDisabledFlag, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { archiveCategory } from '@/lib/categories';
 import { NOT_YOURS_ERROR } from '@/lib/auth/viewer';
 
@@ -1972,6 +1972,22 @@ describe("setCategoryAction: ruling R3 -- teach='1' creates a rule, anything els
     const id = addTxn('GARBAGE TEACH MERCHANT');
     await setCategoryAction({}, formData({ transactionId: String(id), categoryId: String(coffee), teach: 'garbage' }));
     expect(listRules('category').map((r) => r.pattern)).not.toContain(normalizeMerchant('GARBAGE TEACH MERCHANT'));
+  });
+
+  // v1.57.1: the teach used to retarget the disabled rule and leave it off, filing nothing.
+  it("teach='1' over a disabled exact rule enables it again with the new category, and says so", async () => {
+    const { db, addTxn, userId } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const restaurants = categoryIdByName(db, 'Restaurants');
+    const merchant = normalizeMerchant('QUIET CAFE 12');
+    const old = upsertRuleFromCorrection({ pattern: merchant, matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: userId, actorRole: 'admin' });
+    if (!old.ok) throw new Error('unexpected refusal');
+    setRuleDisabledFlag(old.ruleId, true);
+    const id = addTxn('QUIET CAFE 12');
+    expect(await setCategoryAction({}, formData({ transactionId: String(id), categoryId: String(restaurants), teach: '1' }))).toEqual({
+      message: `Category updated. The disabled rule for ${merchant} is enabled again.`,
+    });
+    expect(listRules('category')).toMatchObject([{ id: old.ruleId, categoryId: restaurants, disabledAt: null }]);
   });
 
   it("teach='1' on an archived category saves the pick, writes no rule, and says so", async () => {

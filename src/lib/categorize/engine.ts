@@ -118,7 +118,8 @@ export interface CategorizeContext {
  * agreed to.
  */
 export type RuleGuardedWriteResult =
-  | { ok: true }
+  /** `ruleEnabledAgain`: confirmCategory's teach found its exact rule disabled and turned it back on. */
+  | { ok: true; ruleEnabledAgain?: true }
   | { ok: false; reason: 'has_splits' }
   | { ok: false; reason: 'owned_by_another'; ownerName: string };
 
@@ -1404,6 +1405,7 @@ export function confirmCategory(input: {
   }
 
   // R4 ownership check FIRST: resolved (and can refuse) before anything else below is touched.
+  let ruleEnabledAgain = false;
   if (input.createRule !== false && row.normalizedMerchant.length > 0 && mayLearnCategoryRule(input.categoryId) && !alwaysAsks) {
     const target = teachTarget(row.normalizedMerchant, row.amountCents);
     const upserted = upsertRuleFromCorrection({
@@ -1418,6 +1420,13 @@ export function confirmCategory(input: {
       at,
     });
     if (!upserted.ok) return { ok: false, reason: 'owned_by_another', ownerName: upserted.ownerName };
+    // v1.57.1: the upsert keeps a rule's disabled flag, so a teach over a disabled exact rule changed
+    // its category and filed nothing. Teaching says "file this merchant this way from now on", so
+    // the rule is turned back on, as marking a merchant again re-enables its recurring mark.
+    if (listRules('category').some((rule) => rule.id === upserted.ruleId && rule.disabledAt !== null)) {
+      setRuleDisabledFlag(upserted.ruleId, false, at);
+      ruleEnabledAgain = true;
+    }
   }
 
   if (row.source === 'manual' && row.categoryId !== null) {
@@ -1436,7 +1445,7 @@ export function confirmCategory(input: {
 
   if (!alwaysAsks) train(tokens, input.categoryId);
   applyPaymentMatchers([input.transactionId], at);
-  return { ok: true };
+  return ruleEnabledAgain ? { ok: true, ruleEnabledAgain: true } : { ok: true };
 }
 
 /**

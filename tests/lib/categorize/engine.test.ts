@@ -2430,3 +2430,41 @@ describe('categoryRuleThatFiled (spec 2026-10-21, fix from Budgets §2.3)', () =
     expect(categoryRuleThatFiled(asRow(sqlite, id))?.id).toBe(rule.ruleId);
   });
 });
+
+/** v1.57.1: a teach over a disabled exact rule turns it back on, as re-marking a recurring mark does. */
+describe('teaching over a disabled exact rule', () => {
+  it('updates the rule, enables it, reports it, and the next run files the merchant by it', () => {
+    const { db, sqlite, add, userId } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const restaurants = categoryIdByName(db, 'Restaurants');
+    const old = upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: userId, actorRole: 'admin' });
+    if (!old.ok) throw new Error('unexpected refusal');
+    setRuleDisabled({ ruleId: old.ruleId, disabled: true });
+    const taught = add('POS PURCHASE TIM HORTONS #4821 TORONTO ON');
+
+    expect(confirmCategory({ transactionId: taught, categoryId: restaurants, userId, createRule: true, actorRole: 'admin' })).toEqual({ ok: true, ruleEnabledAgain: true });
+    const rules = listRules('category');
+    expect(rules).toHaveLength(1);
+    expect(rules[0]).toMatchObject({ id: old.ruleId, categoryId: restaurants, disabledAt: null });
+
+    const next = add('POS PURCHASE TIM HORTONS #4821 TORONTO ON', -650, '2026-03-09');
+    runEngine([next]);
+    expect(readTxn(sqlite, next)).toMatchObject({ category_id: restaurants, categorization_source: 'rule' });
+  });
+
+  it('reports nothing turned back on for an enabled rule, a new rule, or a pick that teaches nothing', () => {
+    const { db, add, userId } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const restaurants = categoryIdByName(db, 'Restaurants');
+    const first = add('POS PURCHASE TIM HORTONS #4821 TORONTO ON');
+    expect(confirmCategory({ transactionId: first, categoryId: coffee, userId, createRule: true, actorRole: 'admin' })).toEqual({ ok: true });
+    expect(confirmCategory({ transactionId: first, categoryId: restaurants, userId, createRule: true, actorRole: 'admin' })).toEqual({ ok: true });
+
+    const rule = listRules('category')[0];
+    setRuleDisabled({ ruleId: rule.id, disabled: true });
+    const second = add('POS PURCHASE TIM HORTONS #4821 TORONTO ON', -650, '2026-03-09');
+    expect(confirmCategory({ transactionId: second, categoryId: coffee, userId, createRule: false, actorRole: 'admin' })).toEqual({ ok: true });
+    expect(listRules('category')[0]).toMatchObject({ categoryId: restaurants });
+    expect(listRules('category')[0].disabledAt).not.toBeNull();
+  });
+});
