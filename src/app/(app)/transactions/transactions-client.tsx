@@ -302,9 +302,13 @@ function filterHref(current: string, key: string, value: string | null): string 
 }
 
 /** One chip's destination href, changing only the `category` param -- see filterHref's own
- *  docblock for the reasoning this and every other filter-preserving link on this page shares. */
+ *  docblock for the reasoning this and every other filter-preserving link on this page shares.
+ *  v1.57.1: `exact` qualifies the category it came with, so a chip naming another category (or
+ *  All) drops it; re-selecting the same category keeps it. */
 function categoryChipHref(current: string, categoryId: string | null): string {
-  return filterHref(current, 'category', categoryId);
+  const params = new URLSearchParams(current);
+  if (params.get('category') !== categoryId) params.delete('exact');
+  return filterHref(params.toString(), 'category', categoryId);
 }
 
 /**

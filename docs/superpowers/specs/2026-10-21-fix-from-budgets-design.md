@@ -284,7 +284,8 @@ personal section's panels post with the person's scope as today; the viewer narr
 Person, note, transfer, recurring mark, loan link, receipt and rename from the card (one row on
 Transactions does them); bulk actions on the card; undo; a rollup link on a parent card (its
 breakdown rows each have their own); changing Transactions' inline select; a category chip keeping
-`exact=1` when it names another category (a pre-existing quirk, recorded as a follow-up);
+`exact=1` when it names another category (a pre-existing quirk, recorded as a follow-up; fixed in
+v1.57.1, where such a chip drops `exact`);
 revalidating Dashboard or Reports after a recategorize.
 
 ## 5. Process

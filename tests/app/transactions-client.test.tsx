@@ -2607,6 +2607,16 @@ describe('Task 3c: rows fold below sm only when their own filter is at default',
     expect(posted()).toEqual({ category: '1', exact: null });
   });
 
+  /** v1.57.1 (spec §4's follow-up): `exact` qualifies the category it came with, not the next one. */
+  it('a category chip naming another category drops exact=1, and re-selecting the same category keeps it', () => {
+    render(<TransactionsClient page={pageWithRow()} accounts={[]} categories={categories} people={[]} today="2026-03-02" currentQuery="category=1&exact=1&spend=1" />);
+    const chips = within(screen.getByRole('group', { name: 'Filter by category' }));
+    const query = (name: string) => Object.fromEntries(new URLSearchParams(chips.getByRole('link', { name }).getAttribute('href')!.split('?')[1] ?? ''));
+    expect(query('Housing')).toEqual({ category: '1', exact: '1', spend: '1' });
+    expect(query('Groceries')).toEqual({ category: '2', spend: '1' });
+    expect(query('All')).toEqual({ spend: '1' });
+  });
+
   // v1.56.1 (review M1): a search typed after arriving narrows the view it arrived in.
   it('the filter form starts at the filters already in the URL', () => {
     const { container } = render(
