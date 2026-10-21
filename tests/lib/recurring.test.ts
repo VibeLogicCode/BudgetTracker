@@ -666,6 +666,35 @@ describe('recurringCharges: the monthly figure and the price rise', () => {
     expect(result.looks.find((row) => row.merchant === 'MAPLE STREAMING')?.priceRise).toEqual({ fromCents: 1349, toCents: 1599 });
     expect(result.looks.find((row) => row.merchant === 'CEDAR PHONE CO')?.priceRise).toBeNull();
   });
+
+  it('uses the new price once a rise is found: typical, monthly and the Expected row', async () => {
+    const ctx = await setup();
+    for (const [daysAgo, cents] of [[93, 1349], [63, 1349], [33, 1349], [3, 1599]] as const) {
+      ctx.spend({ merchant: 'MAPLE STREAMING', date: addDaysIso(TODAY, -daysAgo), cents: -cents });
+    }
+    ctx.mark('MAPLE STREAMING', 'recurring');
+    const row = read(ctx).known.find((r) => r.merchant === 'MAPLE STREAMING');
+    expect(row?.typicalCents).toBe(1599);
+    expect(row?.monthlyCents).toBe(1599);
+    expect(row?.priceRise).toEqual({ fromCents: 1349, toCents: 1599 });
+    expect(expectedRecurringCharges({ today: TODAY, days: 30, viewer: household(ctx.adultId) })[0].typicalCents).toBe(1599);
+  });
+
+  it('reads the median of the last three charges when no rise is found', async () => {
+    const ctx = await setup();
+    // Eleven monthly charges, the newest three at 4500 after eight at 4000; the newest is 40 days old,
+    // outside the creep lookback, so no rise is found.
+    for (let k = 0; k < 11; k += 1) {
+      ctx.spend({ merchant: 'RIVERSIDE GYM', date: addDaysIso(TODAY, -40 - k * 30), cents: k < 3 ? -4500 : -4000 });
+    }
+    ctx.mark('RIVERSIDE GYM', 'recurring');
+    const row = read(ctx).known.find((r) => r.merchant === 'RIVERSIDE GYM');
+    expect(row?.priceRise).toBeNull();
+    expect(row?.typicalCents).toBe(4500);
+    expect(row?.monthlyCents).toBe(4500);
+    const expectedRows = expectedRecurringCharges({ today: TODAY, days: 30, viewer: household(ctx.adultId) });
+    expect(expectedRows.find((charge) => charge.merchant === 'RIVERSIDE GYM')?.typicalCents).toBe(4500);
+  });
 });
 
 /** Spec 2026-10-06 §2.6. What the Dashboard's Coming up card lists beside the bills. */

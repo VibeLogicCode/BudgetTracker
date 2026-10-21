@@ -11,6 +11,7 @@ import {
   formingRhythm,
   recurringVerdict,
   trailingRhythm,
+  type CreepVerdict,
   type RecurringCadence,
   type SpendRow,
 } from '@/lib/predict/anomalies';
@@ -98,7 +99,7 @@ export interface RecurringChargeRow {
   /** The band the charges sit in (trailingRhythm: the run it charges on now), or null: one charge, or irregular gaps. */
   cadence: RecurringCadence | null;
   chargeCount: number;
-  /** Median charge magnitude; null with a single charge, where there is no "usually" to state. */
+  /** What it charges now: the new price when a price rise is found, else the median of the last three charges. Null with a single charge, where there is no "usually" to state. */
   typicalCents: number | null;
   lastAmountCents: number;
   lastDate: string;
@@ -313,9 +314,18 @@ function monthlyEquivalent(cadence: RecurringCadence | null, typicalCents: numbe
   return cadence === 'monthly' ? typicalCents : divRound(typicalCents, 12);
 }
 
+/** The amount a merchant charges now: the new price when a rise was found, else the median of the last three charges. Null with one charge. */
+function currentAmount(charges: ChargeRow[], rise: CreepVerdict | null): number | null {
+  if (rise !== null) return rise.newAmountCents;
+  if (charges.length < 2) return null;
+  return medianCents(charges.slice(-3).map((charge) => Math.abs(charge.amountCents)));
+}
+
 interface Candidate {
   row: RecurringChargeRow;
   charges: ChargeRow[];
+  /** creepVerdict over the CREEP_BASELINE_DAYS slice; the price rise reads it. */
+  rise: CreepVerdict | null;
   /** The rhythm's median gap, which next expected is measured from; null without a rhythm. */
   gapDays: number | null;
   /** A three-charge rhythm that has gone quiet: listed only if a record makes it Known. */
@@ -360,6 +370,7 @@ export function recurringCharges(input: {
   const marks = listRecurringMarkRules();
   const names = accountNames();
   const candidates: Candidate[] = [];
+  const creepStart = addDaysIso(input.today, -CREEP_BASELINE_DAYS);
 
   for (const [merchant, all] of byMerchant) {
     const mark = recurringMarkFor(merchant, marks);
@@ -379,10 +390,13 @@ export function recurringCharges(input: {
     } else if (formingRhythm({ charges, today: input.today }) !== null) tier = 'forming';
     else continue;
     const latest = charges[charges.length - 1];
-    const typicalCents = charges.length > 1 ? medianCents(charges.map((charge) => Math.abs(charge.amountCents))) : null;
+    // Spec 2026-10-06 §2.4: the same verdict, over the same window, as Needs a look.
+    const rise = creepVerdict({ charges: charges.filter((charge) => charge.date >= creepStart), today: input.today });
+    const typicalCents = currentAmount(charges, rise);
     const cadence = rhythm?.cadence ?? null;
     candidates.push({
       charges,
+      rise,
       quiet,
       gapDays: rhythm?.medianGapDays ?? null,
       row: {
@@ -420,13 +434,10 @@ export function recurringCharges(input: {
 
   // Looks keeps its stale rule: an unmarked, uncovered rhythm that stopped is history.
   const listed = candidates.filter((candidate) => !candidate.quiet || candidate.row.tier === 'known');
-  const creepStart = addDaysIso(input.today, -CREEP_BASELINE_DAYS);
-  for (const { row, charges, gapDays } of listed) {
+  for (const { row, rise, gapDays } of listed) {
     row.nextExpected = gapDays === null ? null : addDaysIso(row.lastDate, gapDays);
     row.late =
       row.tier === 'known' && row.nextExpected !== null && daysBetweenIso(row.nextExpected, input.today) > RECURRING_LATE_GRACE_DAYS;
-    // Spec 2026-10-06 §2.4: the same verdict, over the same window, as Needs a look.
-    const rise = creepVerdict({ charges: charges.filter((charge) => charge.date >= creepStart), today: input.today });
     row.priceRise = rise === null ? null : { fromCents: rise.baselineCents, toCents: rise.newAmountCents };
   }
 
@@ -459,7 +470,7 @@ export interface ExpectedCharge {
   merchant: string;
   /** Last charge plus the median gap. May be in the past: late, or still inside the grace. */
   expectedDate: string;
-  /** The median charge; the card prints "about" it. */
+  /** What it charges now (the new price after a rise, else the median of the last three charges); the card prints "about" it. */
   typicalCents: number;
   late: boolean;
   /** The account the newest charge landed on. */

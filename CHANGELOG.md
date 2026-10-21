@@ -41,6 +41,7 @@ All notable changes to Budget Tracker are recorded here.
 - **Not recurring is offered for a merchant an item covers.** On the recurring charges page, a merchant listed only because a bill or a loan rule covers it can now be taken off the lists; the item and its bills are unchanged.
 - **Removing a receipt while it is being read stops reading it**, so it can no longer fill in the form afterwards. Try again names the file it retries, and screen readers hear the reading and scanner messages.
 - **Coming up lists a marked recurring charge whose item has no amount.** A merchant marked recurring and covered by a bill, contract or loan that gives Coming up no row of its own now shows its Expected row.
+- **Recurring amounts follow a price rise.** Coming up's Expected amount, the recurring charges page and the Insights summary use the new price once a rise is found, otherwise the median of the last three charges.
 
 ## [1.55.4] - 2026-10-20
 

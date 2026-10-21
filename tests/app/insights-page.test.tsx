@@ -82,6 +82,18 @@ describe('InsightsPage', () => {
     expect(screen.getByRole('link', { name: 'See all recurring charges' }).getAttribute('href')).toBe('/insights/recurring');
   });
 
+  it('states the rise-adjusted monthly figure once a marked merchant’s price went up', async () => {
+    const s = await seed();
+    for (const [daysAgo, cents] of [[93, 1349], [63, 1349], [33, 1349], [3, 1599]] as const) {
+      s.spend({ merchant: 'MAPLE STREAMING', daysAgo, cents, person: s.adult });
+    }
+    setRecurringMarks({ merchants: ['MAPLE STREAMING'], mark: 'recurring', userId: s.adult, actorRole: 'admin' });
+    currentUser.value = { id: s.adult, name: 'Alex', username: 'alex', role: 'admin', visibility: 'household' };
+    await renderPage();
+    const card = screen.getByRole('heading', { name: 'Recurring charges' }).closest('section') as HTMLElement;
+    expect(card.textContent).toContain('about $15.99 a month');
+  });
+
   it('links the late count to the full page', async () => {
     const s = await seed();
     for (const daysAgo of [100, 70]) s.spend({ merchant: 'RIVERSIDE GYM', daysAgo, cents: 4500, person: s.adult });
