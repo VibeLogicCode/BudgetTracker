@@ -93,6 +93,23 @@ describe('transactionsHref — the person scope the card was built with', () => 
 });
 
 describe('transactionsHref — the figure the link is under', () => {
+  /** Spec 2026-10-21 (fix from Budgets) §2.6. The card's rows: this category alone, counted toward a budget, with the way back. */
+  it('a Budgets card lists exactly its own category, only the rows that count toward a budget, and stamps the way back', () => {
+    const href = transactionsHref({ range: { from: '2026-03-01', to: '2026-03-31' }, person: 7 }, { kind: 'budget-category', categoryId: 12 });
+    const params: TransactionParams = Object.fromEntries(new URLSearchParams(href.slice(href.indexOf('?') + 1)));
+    expect(params.via).toBe('budgets');
+    const filter = filterFromHref(href);
+    expect({ categoryId: filter.categoryId, exact: filter.categoryExact, spend: filter.spendRowsOnly, spending: filter.spendingOnly, from: filter.from, to: filter.to, person: filter.attributedUserId })
+      .toEqual({ categoryId: 12, exact: true, spend: true, spending: false, from: '2026-03-01', to: '2026-03-31', person: 7 });
+  });
+
+  it('one transaction is the whole question: the id, nothing else, and the way back only when asked', () => {
+    expect(transactionsHref({ range: null, person: null }, { kind: 'transaction', transactionId: 77 })).toBe('/transactions?id=77');
+    const back = transactionsHref({ range: null, person: null }, { kind: 'transaction', transactionId: 77, via: 'budgets' });
+    expect(filterFromHref(back).id).toBe(77);
+    expect(back).toContain('via=budgets');
+  });
+
   /**
    * Spec 2026-10-21 §2.2, v1.56.1: Budgets' Categorize link. Uncategorized money-out spending for the
    * month on the plain list, never review mode: the queue hides loan-linked rows the card counts.

@@ -32,7 +32,7 @@ import { transactionImports } from '@/db/schema';
 // feature needs -- the split editor already proved this parser handles a person's typed amount.
 import { parseAmountToCents } from '@/lib/money';
 import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY, transactionHasSplits } from '@/lib/splits';
-import { SPENDING_OUT_WHERE } from '@/lib/spend-where';
+import { SPEND_ROW_WHERE, SPENDING_OUT_WHERE } from '@/lib/spend-where';
 
 /**
  * v1.13.0 ruling R4 (item I4). Thrown by createManualTransaction when the row's own category
@@ -81,6 +81,18 @@ export interface TransactionFilter {
    * card counts (uncategorizedSpend, src/lib/budgets.ts), loan repayments with no category included.
    */
   spendingOnly?: boolean;
+  /**
+   * Spec 2026-10-21 (fix from Budgets) §2.6. `?spend=1`: the rows that count toward a budget,
+   * SPEND_ROW_WHERE (src/lib/spend-where.ts) imported, never restated -- no transfers, no loan
+   * principal, but a categorized refund stays. Mirrors categoryTransactions (src/lib/budgets.ts),
+   * the set a Budgets card sums, so a card's rows add up to the figure it shows.
+   */
+  spendRowsOnly?: boolean;
+  /**
+   * Spec 2026-10-21 (fix from Budgets) §2.6. `?id=<n>`: one transaction. The id is the whole
+   * question; it is one more AND clause, so it never widens what a self viewer's owner scope allows.
+   */
+  id?: number | null;
   /**
    * v1.24.0 Lane A item 2 (reported: once a transfer is applied it is hard to find
    * that data again). Three states, not a boolean -- a mis-tagged transfer needs a way BACK.
@@ -438,6 +450,8 @@ function buildWhere(filter: TransactionFilter, viewer: Viewer): SQL | undefined 
 
   if (filter.uncategorizedOnly) clauses.push(UNCATEGORIZED_WHERE);
   if (filter.spendingOnly) clauses.push(...SPENDING_OUT_WHERE);
+  if (filter.spendRowsOnly) clauses.push(...SPEND_ROW_WHERE);
+  if (typeof filter.id === 'number') clauses.push(eq(transactions.id, filter.id));
   // v1.24.0 Lane A item 2: see TransactionFilter.transferView's own doc comment for why 'only'
   // exists at all -- it is the recovery path for a transfer REVIEW_WHERE (below) can never show.
   if (filter.transferView === 'none') clauses.push(eq(transactions.isTransfer, false));

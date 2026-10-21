@@ -745,6 +745,10 @@ export function TransactionsClient({
       params.get('queue') === 'suggested' || params.get('queue') === 'uncategorized' ? params.get('queue') : null,
       // v1.56.1: Budgets' Categorize link narrows to spending (TransactionFilter.spendingOnly).
       params.get('spending') === '1' ? '1' : null,
+      // Spec 2026-10-21 (fix from Budgets) §2.6: a card's rows and one transaction. `exact` is a
+      // qualifier of `category`, so it is not counted on its own.
+      params.get('spend') === '1' ? '1' : null,
+      /^\d+$/.test(params.get('id') ?? '') ? params.get('id') : null,
     ].filter((value) => value !== null && value !== '').length;
     if (count > 0) {
       setActiveFilterCount(count);
@@ -924,6 +928,11 @@ export function TransactionsClient({
   /** v1.56.1. `?spending=1`, which Budgets' Categorize link sets: a clearing chip like the import
    *  batch's, for the same reason -- a person arrives inside it without clicking a control here. */
   const spendingOnly = new URLSearchParams(currentQuery).get('spending') === '1';
+  /** Spec 2026-10-21 (fix from Budgets) §2.6. `?spend=1` (a Budgets card's rows) and `?id=<n>` (one
+   *  transaction): clearing chips, for the same reason as the spending one above. */
+  const spendRowsOnly = new URLSearchParams(currentQuery).get('spend') === '1';
+  const idParam = new URLSearchParams(currentQuery).get('id');
+  const singleId = idParam !== null && /^\d+$/.test(idParam) ? idParam : null;
   /**
    * v1.56.1 (review M1). The GET form's own fields start at what the URL already filters by, so
    * typing a search after arriving from a link (Budgets' Categorize: `category=uncategorized` and a
@@ -940,6 +949,13 @@ export function TransactionsClient({
       uncat: params.get('uncat') === '1',
     };
   })();
+  /**
+   * Spec 2026-10-21 (fix from Budgets) §2.6. `exact=1` qualifies the category the URL arrived with,
+   * so the form carries it only while the Category select still holds that category; choosing
+   * another category is a new question and drops it.
+   */
+  const exactActive = new URLSearchParams(currentQuery).get('exact') === '1';
+  const [categoryChoice, setCategoryChoice] = useState(formDefaults.category);
 
   // Fix round (reported, phone screenshot): six stacked control rows sat above the data at
   // every width, because ruling S7's disclosure (`filtersOpen`, above) only ever gated the four
@@ -3164,6 +3180,9 @@ export function TransactionsClient({
             {activeSource !== '' ? <input type="hidden" name="source" value={activeSource} /> : null}
             {activeImportId !== null ? <input type="hidden" name="import" value={activeImportId} /> : null}
             {spendingOnly ? <input type="hidden" name="spending" value="1" /> : null}
+            {spendRowsOnly ? <input type="hidden" name="spend" value="1" /> : null}
+            {singleId !== null ? <input type="hidden" name="id" value={singleId} /> : null}
+            {exactActive && categoryChoice === formDefaults.category ? <input type="hidden" name="exact" value="1" /> : null}
             {/* Fix round (asked for): one row, at every width, replaces the old "Filters (N)"
                 text button that only showed below `sm` plus a field block that was simply always
                 visible at `sm` and up -- two different shapes for the same fields depending on
@@ -3432,6 +3451,23 @@ export function TransactionsClient({
                   Spending only — clear
                 </Link>
               ) : null}
+              {spendRowsOnly ? (
+                <Link
+                  href={filterHref(currentQuery, 'spend', null)}
+                  className="badge badge--accent min-h-11 items-center px-3 sm:min-h-0"
+                  title="Rows that count toward a budget: no transfers, no loan principal"
+                >
+                  Counted in budgets — clear
+                </Link>
+              ) : null}
+              {singleId !== null ? (
+                <Link
+                  href={filterHref(currentQuery, 'id', null)}
+                  className="badge badge--accent min-h-11 items-center px-3 sm:min-h-0"
+                >
+                  One transaction — clear
+                </Link>
+              ) : null}
             </div>
 
             {/* Chip filters (ruling D6): TOP-LEVEL categories only, not folded behind the four-select
@@ -3495,7 +3531,7 @@ export function TransactionsClient({
                 </select>
               </Field>
               <Field label="Category">
-                <select name="category" defaultValue={formDefaults.category} className={selectClass}>
+                <select name="category" defaultValue={formDefaults.category} onChange={(e) => setCategoryChoice(e.target.value)} className={selectClass}>
                   <option value="">All</option>
                   <option value="uncategorized">Uncategorized</option>
                   {groupedCategories.map((opt) => (

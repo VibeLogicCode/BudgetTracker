@@ -127,6 +127,9 @@ export function readFilter(
     // v1.56.1: Budgets' Categorize link (TransactionFilter.spendingOnly). Only the literal '1' turns it
     // on, the same fall-back rule `uncat` just above follows.
     spendingOnly: one(params, 'spending') === '1',
+    // Spec 2026-10-21 (fix from Budgets) §2.6: a Budgets card's own rows and one transaction.
+    spendRowsOnly: one(params, 'spend') === '1',
+    id: num(params, 'id') ?? null,
     // v1.24.0 Lane A item 2. Backwards compatible with links people already have: `transfers=0`
     // keeps meaning "hide transfers", exactly as it always has. `transfers=only` is the new
     // recovery-path value (TransactionFilter.transferView's own doc comment, src/lib/transactions.ts,

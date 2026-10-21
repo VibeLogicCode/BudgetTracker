@@ -2569,6 +2569,31 @@ describe('Task 3c: rows fold below sm only when their own filter is at default',
     expect(container.querySelector('form[method="get"] input[type="hidden"][name="spending"]')?.getAttribute('value')).toBe('1');
   });
 
+  it('?spend=1 and ?id= each show a chip that clears only itself, a submit keeps them, and the funnel counts them', () => {
+    window.history.pushState({}, '', '/transactions?category=12&exact=1&spend=1&id=77');
+    const { container } = render(<TransactionsClient page={pageWithRow()} accounts={[]} categories={categories} people={[]} today="2026-03-02" currentQuery="category=12&exact=1&spend=1&id=77" />);
+    const spend = screen.getByRole('link', { name: 'Counted in budgets — clear' });
+    expect(spend.getAttribute('href')).not.toContain('spend=');
+    expect(spend.getAttribute('href')).toContain('id=77');
+    const one = screen.getByRole('link', { name: 'One transaction — clear' });
+    expect(one.getAttribute('href')).not.toContain('id=');
+    expect(one.getAttribute('href')).toContain('spend=1');
+    const form = container.querySelector('form[method="get"]') as HTMLFormElement;
+    const data = new FormData(form);
+    expect({ spend: data.get('spend'), id: data.get('id') }).toEqual({ spend: '1', id: '77' });
+    // category, spend and id count; exact is a qualifier of category, not a filter of its own.
+    expect(screen.getByRole('button', { name: 'Filters (3)' })).toBeTruthy();
+  });
+
+  /** Spec §2.6: the pre-existing drop. */
+  it('the filter form keeps exact=1 while the category is unchanged, and drops it once another category is chosen', () => {
+    const { container } = render(<TransactionsClient page={pageWithRow()} accounts={[]} categories={categories} people={[]} today="2026-03-02" currentQuery="category=42&exact=1" />);
+    const form = container.querySelector('form[method="get"]') as HTMLFormElement;
+    expect(new FormData(form).get('exact')).toBe('1');
+    fireEvent.change(container.querySelector('form[method="get"] select[name="category"]') as HTMLSelectElement, { target: { value: '7' } });
+    expect(new FormData(form).get('exact')).toBeNull();
+  });
+
   // v1.56.1 (review M1): a search typed after arriving narrows the view it arrived in.
   it('the filter form starts at the filters already in the URL', () => {
     const { container } = render(

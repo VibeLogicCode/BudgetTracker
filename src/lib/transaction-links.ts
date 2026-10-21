@@ -91,7 +91,18 @@ export type TransactionsLinkTarget =
    * a repayment on a loan the household owes is spending the card rightly counts (uncategorizedSpend's
    * docblock, src/lib/budgets.ts). The same for every viewer, so a self viewer is no special case.
    */
-  | { kind: 'uncategorized-spending' };
+  | { kind: 'uncategorized-spending' }
+  /**
+   * Spec 2026-10-21 (fix from Budgets) §2.6: a Budgets card's own rows. Exactly that category (every
+   * panel is exact), the rows that count toward a budget (TransactionFilter.spendRowsOnly), with the
+   * way back stamped. Like every target here, the link lists the rows of the figure it sits under.
+   */
+  | { kind: 'budget-category'; categoryId: number }
+  /**
+   * Spec 2026-10-21 (fix from Budgets) §2.6: one transaction. The id is the whole question, like an
+   * import: callers pass { range: null, person: null }. See TransactionFilter.id.
+   */
+  | { kind: 'transaction'; transactionId: number; via?: 'budgets' };
 
 /** rangeParams() for a preset (one definition of "a range as query parameters", MUST-11.8), and
  *  the same `custom` shape it produces for a card carrying its own two dates. */
@@ -124,6 +135,14 @@ export function transactionsHref(scope: TransactionsLinkScope, target: Transacti
   } else if (target.kind === 'uncategorized-spending') {
     params.set('category', 'uncategorized');
     params.set('spending', '1');
+  } else if (target.kind === 'budget-category') {
+    params.set('category', String(target.categoryId));
+    params.set('exact', '1');
+    params.set('spend', '1');
+    params.set('via', 'budgets');
+  } else if (target.kind === 'transaction') {
+    params.set('id', String(target.transactionId));
+    if (target.via) params.set('via', target.via);
   } else {
     params.set('import', String(target.importId));
   }

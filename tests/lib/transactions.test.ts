@@ -25,7 +25,7 @@ import { listRules, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { setTransactionDisplayName, upsertRenameRule } from '@/lib/categorize/engine';
 import { nowIso } from '@/lib/clock';
 import { setTransactionSplits } from '@/lib/splits';
-import { loanLinksForTransactions } from '@/lib/loans';
+import { assignTransactionToLoan, loanLinksForTransactions } from '@/lib/loans';
 import { createWarrantyItem } from '@/lib/warranty/items';
 import { createItemType } from '@/lib/warranty/types';
 import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
@@ -191,6 +191,39 @@ describe('listTransactions', () => {
 
     expect(listTransactions({ categoryId: food, categoryExact: true }, VIEWER).rows.map((r) => r.id)).toEqual([direct]);
     expect(child).toBeGreaterThan(0);
+  });
+
+  /** Spec 2026-10-21 (fix from Budgets) §2.6, Review Focus 3: the rows categoryTransactions sums. */
+  it('spendRowsOnly keeps a categorized refund and drops a transfer and a loan principal row', () => {
+    const { db, alice, add } = setup();
+    const food = categoryIdByName(db, 'Food');
+    const spend = add({ categoryId: food, amountCents: -4217, description: 'MAPLE GROCER' });
+    const refund = add({ categoryId: food, amountCents: 1000, description: 'MAPLE GROCER REFUND' });
+    add({ categoryId: food, amountCents: -900, description: 'E-TRANSFER ***AB1', isTransfer: true });
+    const lentId = db.get<{ id: number }>(sql`
+      insert into warranty_item_types (name, is_subscription, kind, created_at)
+      values ('Loan type T6', 0, 'loan', ${nowIso()}) returning id`).id;
+    const loan = db.get<{ id: number }>(sql`
+      insert into warranty_items
+        (name, purchase_date, is_lifetime, owner_user_id, type_id, loan_direction, current_balance_cents, balance_updated_at, created_at, updated_at)
+      values ('Test loan', '2026-01-01', 0, ${alice}, ${lentId}, 'lent', 5000000, ${nowIso()}, ${nowIso()}, ${nowIso()})
+      returning id`).id;
+    const loanRow = add({ categoryId: food, amountCents: -5000, description: 'GIFTS R US 12' });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: loanRow, itemId: loan });
+
+    const ids = (f: TransactionFilter) => listTransactions({ categoryId: food, categoryExact: true, page: 1, pageSize: 50, ...f }, HOUSEHOLD_VIEWER).rows.map((r) => r.id).sort();
+    expect(ids({ spendRowsOnly: true })).toEqual([spend, refund].sort());
+    expect(ids({})).toHaveLength(4);
+  });
+
+  it('id narrows the list to one row, whatever else matches', () => {
+    const { db, add } = setup();
+    const food = categoryIdByName(db, 'Food');
+    add({ categoryId: food, description: 'MAPLE GROCER' });
+    const second = add({ categoryId: food, description: 'GIFTS R US 12' });
+    const page = listTransactions({ categoryId: food, id: second, page: 1, pageSize: 50 }, HOUSEHOLD_VIEWER);
+    expect(page.rows.map((r) => r.id)).toEqual([second]);
+    expect(page.total).toBe(1);
   });
 
   /**
