@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useActionState, useEffect, useRef, useState } from 'react';
+import { createContext, useActionState, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { AutoSaveCheckbox, AutoSaveTextInput, useAutoSave } from '@/components/ui/AutoSave';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
@@ -18,7 +18,7 @@ import { categoryIcon, ExpandIcon } from '@/components/ui/icons';
 import { monthEnd, monthLabel, monthStart } from '@/lib/dates';
 import { formatCents } from '@/lib/money';
 import type { SinkingFund } from '@/lib/bills';
-import type { BudgetRow, BudgetScope, CategoryTransactionRow, UncategorizedSpend } from '@/lib/budgets';
+import type { BudgetRow, BudgetScope, UncategorizedSpend } from '@/lib/budgets';
 import type { CategoryLike } from '@/lib/category-order';
 import { transactionsHref } from '@/lib/transaction-links';
 import { UncategorizedSpendCard } from '@/components/UncategorizedSpendCard';
@@ -49,8 +49,17 @@ import { categoryTransactionsAction } from './category-transactions-action';
 // this file's @/-qualified value imports never has a reason to follow it into src/lib/budgets.ts.
 import { categoryHistoryAction, type CategoryHistoryMonth } from './category-history-action';
 import { buttonClass } from '@/components/ui/Button';
+import { RowMenu, RowMenuButton } from '@/components/ui/RowMenu';
+import { RecategorizeDialog } from '@/components/transactions/RecategorizeDialog';
+import { SplitDialog, type SplitTarget } from '@/components/transactions/SplitDialog';
+import { categoryOptions } from '@/lib/category-order';
+// Relative, not '@/...', for the same reason ./actions is: tests/ops/client-bundle.test.ts only
+// follows '@/' value-import edges, and the Transactions actions module is 'use server'.
+import { saveSplitsAction, setCategoryAction, type ActionState } from '../transactions/actions';
+import type { CategoryPanelResult, CategoryPanelRow } from './category-transactions-action';
 
 const initial: BudgetActionState = {};
+const initialFix: ActionState = {};
 
 /** Bound once: both actions are `(prevState, formData)` for useActionState, and the auto-save
  *  controls want `(formData)`. No server-side change of any kind. */
@@ -418,6 +427,10 @@ function CategoryHistoryStrip({
  * words for categoryTransactions, src/lib/budgets.ts) is really asking for on the CLIENT side
  * too: a household might open one child out of thirty without ever wanting the other twenty-nine
  * fetched.
+ *
+ * Spec 2026-10-21 (fix from Budgets) §2.1, §2.2, §2.5: each row has a menu to change its category
+ * or split it, through the Transactions actions. The list is fetched again after a change and the
+ * outcome is reported above it.
  */
 function CategoryTransactionsPanel({
   scope,
@@ -435,16 +448,34 @@ function CategoryTransactionsPanel({
   type PanelState =
     | { status: 'loading' }
     | { status: 'error'; message: string }
-    | { status: 'loaded'; rows: CategoryTransactionRow[] };
+    | { status: 'loaded'; rows: CategoryPanelRow[]; splits: CategoryPanelResult['splits'] };
+  const { categories, canAuthorRules, isAdmin } = useContext(BudgetsPageContext);
+  const options = useMemo(() => categoryOptions(categories), [categories]);
   const [state, setState] = useState<PanelState>({ status: 'loading' });
+  /** Bumped after a change posts, so the list is fetched again without flashing back to Loading. */
+  const [version, setVersion] = useState(0);
+  const [recat, setRecat] = useState<CategoryPanelRow | null>(null);
+  const [splitting, setSplitting] = useState<SplitTarget | null>(null);
+  const [fixState, fixAction] = useActionState(setCategoryAction, initialFix);
+  const [splitState, splitAction] = useActionState(saveSplitsAction, initialFix);
+  /** The newest outcome of either dialog, so an old error never outlives a later success. */
+  const [notice, setNotice] = useState<ActionState | null>(null);
+  const fetchedFor = useRef('');
 
   useEffect(() => {
     let cancelled = false;
-    setState({ status: 'loading' });
+    const key = `${scope}:${userId}:${month}:${categoryId}`;
+    // Only a different category or month goes back to Loading; a refetch after a change keeps the list.
+    if (fetchedFor.current !== key) setState({ status: 'loading' });
+    fetchedFor.current = key;
     categoryTransactionsAction({ scope, userId, month, categoryId })
       .then((result) => {
         if (cancelled) return;
-        setState('error' in result ? { status: 'error', message: result.error } : { status: 'loaded', rows: result.rows });
+        setState(
+          'error' in result
+            ? { status: 'error', message: result.error }
+            : { status: 'loaded', rows: result.rows, splits: result.splits },
+        );
       })
       .catch(() => {
         if (!cancelled) setState({ status: 'error', message: 'Could not load transactions. Try again.' });
@@ -452,7 +483,17 @@ function CategoryTransactionsPanel({
     return () => {
       cancelled = true;
     };
-  }, [scope, userId, month, categoryId]);
+  }, [scope, userId, month, categoryId, version]);
+
+  // A refused change reports and does not refetch; only a saved one does.
+  useEffect(() => {
+    if (fixState.error || fixState.message) setNotice(fixState);
+    if (fixState.message && !fixState.error) setVersion((v) => v + 1);
+  }, [fixState]);
+  useEffect(() => {
+    if (splitState.error || splitState.message) setNotice(splitState);
+    if (splitState.message && !splitState.error) setVersion((v) => v + 1);
+  }, [splitState]);
 
   if (state.status === 'loading') {
     return <p className="px-4 py-3 text-xs text-muted sm:px-5">Loading transactions…</p>;
@@ -464,21 +505,77 @@ function CategoryTransactionsPanel({
       </p>
     );
   }
-  if (state.rows.length === 0) {
-    return <p className="px-4 py-3 text-xs text-subtle sm:px-5">No transactions in {categoryName} this month.</p>;
-  }
   return (
-    <ul className="flex flex-col divide-y divide-line">
-      {state.rows.map((row) => (
-        <ListRow
-          key={row.id}
-          direction={row.amountCents >= 0 ? 'in' : 'out'}
-          title={row.merchant}
-          meta={row.date}
-          amount={<Money cents={row.amountCents} />}
+    <>
+      {notice?.error ? (
+        <p role="alert" className="px-4 py-3 text-xs font-medium text-negative-soft-fg sm:px-5">
+          {notice.error}
+        </p>
+      ) : notice?.message ? (
+        <p role="status" className="px-4 py-3 text-xs font-medium text-muted sm:px-5">
+          {notice.message}
+        </p>
+      ) : null}
+      {state.rows.length === 0 ? (
+        <p className="px-4 py-3 text-xs text-subtle sm:px-5">No transactions in {categoryName} this month.</p>
+      ) : (
+        <ul className="flex flex-col divide-y divide-line">
+          {state.rows.map((row) => (
+            <ListRow
+              key={`${row.id}:${row.splitId ?? 0}`}
+              direction={row.amountCents >= 0 ? 'in' : 'out'}
+              title={row.merchant}
+              meta={row.date}
+              amount={<Money cents={row.amountCents} />}
+              trailing={
+                <RowMenu label={`Actions for ${row.merchant} on ${row.date}, ${formatCents(row.amountCents)}`}>
+                  {row.splitId === null ? <RowMenuButton onSelect={() => setRecat(row)}>Change category…</RowMenuButton> : null}
+                  <RowMenuButton
+                    onSelect={() =>
+                      setSplitting({ id: row.id, merchant: row.merchant, date: row.date, amountCents: row.parentAmountCents })
+                    }
+                  >
+                    {row.splitId === null ? 'Split…' : 'Edit split…'}
+                  </RowMenuButton>
+                </RowMenu>
+              }
+            />
+          ))}
+        </ul>
+      )}
+      {recat ? (
+        <RecategorizeDialog
+          key={recat.id}
+          row={{
+            id: recat.id,
+            merchant: recat.merchant,
+            normalizedMerchant: recat.normalizedMerchant,
+            date: recat.date,
+            amountCents: recat.amountCents,
+            categoryId,
+            source: recat.source,
+            filedBy: recat.filedBy,
+            alwaysAsked: recat.alwaysAsked,
+          }}
+          options={options}
+          action={fixAction}
+          canAuthorRules={canAuthorRules}
+          isAdmin={isAdmin}
+          onClose={() => setRecat(null)}
+          onAlwaysAsk={() => {}}
         />
-      ))}
-    </ul>
+      ) : null}
+      {splitting ? (
+        <SplitDialog
+          key={splitting.id}
+          target={splitting}
+          existing={state.splits[splitting.id] ?? []}
+          options={options}
+          action={splitAction}
+          onClose={() => setSplitting(null)}
+        />
+      ) : null}
+    </>
   );
 }
 

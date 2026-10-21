@@ -4,6 +4,8 @@ import { render, cleanup, fireEvent, screen, waitFor, within } from '@testing-li
 import { BudgetsClient } from '@/app/(app)/budgets/budgets-client';
 import { sectionFrom } from '@/app/(app)/budgets/page';
 import type { BudgetRow } from '@/lib/budgets';
+import type { CategoryPanelRow } from '@/app/(app)/budgets/category-transactions-action';
+import type { SplitRow } from '@/lib/splits';
 import type { BudgetPredictions, CategorySuggestion } from '@/lib/predict/suggest';
 // Type-only (see budgets-client.tsx's own import of this module for why): never evaluated at
 // runtime, so this line does not need Lane 1's src/lib/savings-target.ts to exist to compile or
@@ -26,6 +28,15 @@ vi.mock('@/app/(app)/budgets/actions', () => ({
 // does can rely on a predictable, empty result rather than a real query.
 vi.mock('@/app/(app)/budgets/category-transactions-action', () => ({
   categoryTransactionsAction: vi.fn(async () => ({ rows: [], splits: {} })),
+}));
+
+// Spec 2026-10-21 (fix from Budgets): the card's row menu posts the Transactions actions.
+vi.mock('@/app/(app)/transactions/actions', () => ({
+  setCategoryAction: vi.fn(async () => ({ message: 'Category updated.' })),
+  saveSplitsAction: vi.fn(async () => ({ message: 'Split saved.' })),
+  previewAlwaysAskAction: vi.fn(async () => ({ message: 'Matches 1 transaction.' })),
+  setAlwaysAskAction: vi.fn(async () => ({ message: 'Rows matching "PHONEMART" will always be asked about.', ruleId: 41, sendBackCount: 0 })),
+  sendBackToReviewAction: vi.fn(async () => ({})),
 }));
 
 // F-06 (2026-09-02 review): the six-month history strip's own fetch-on-open module, mocked the
@@ -1309,5 +1320,95 @@ describe('BudgetsClient — Not categorized yet', () => {
     render(<BudgetsClient {...props({ householdUncategorized: { totalCents: 5750, count: 2 } })} />);
     fireEvent.click(screen.getAllByRole('button', { name: /edit limits/i })[0]!);
     expect(screen.queryByText('Not categorized yet')).toBeNull();
+  });
+});
+
+function panelRow(over: Partial<CategoryPanelRow> = {}): CategoryPanelRow {
+  return {
+    id: 77,
+    date: '2026-03-12',
+    merchant: 'Phonemart',
+    normalizedMerchant: 'PHONEMART 884',
+    amountCents: -4217,
+    parentAmountCents: -4217,
+    source: 'rule',
+    splitId: null,
+    filedBy: { ruleId: 9, pattern: 'PHONEMART', matchType: 'contains' },
+    alwaysAsked: false,
+    ...over,
+  };
+}
+
+const CATEGORIES = [
+  { id: 1, name: 'Groceries', parentId: null, isArchived: false, sortOrder: 0 },
+  { id: 2, name: 'Phone', parentId: null, isArchived: false, sortOrder: 1 },
+];
+
+async function renderWithRows(rows: CategoryPanelRow[], splits: Record<number, SplitRow[]> = {}, over: Record<string, unknown> = {}) {
+  const { categoryTransactionsAction } = await import('@/app/(app)/budgets/category-transactions-action');
+  vi.mocked(categoryTransactionsAction).mockClear();
+  vi.mocked(categoryTransactionsAction).mockResolvedValueOnce({ rows, splits });
+  render(
+    <BudgetsClient
+      month="2026-03"
+      currentUserId={1}
+      household={[makeRow()]}
+      householdTotals={{ budgetedLimitCents: 20000, budgetedSpentCents: 5000, totalSpentCents: 5000 }}
+      personal={[]}
+      predictions={null}
+      savingsProgress={null}
+      categories={CATEGORIES}
+      {...over}
+    />,
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'View transactions' }));
+}
+
+/** Spec 2026-10-21 (fix from Budgets) §2.1, §2.2, §2.5: the two frequent fixes, where the row was found. */
+describe('BudgetsClient — fixing a row from the card', () => {
+  it('offers Change category and Split on a row, and changes the category through the Transactions action, then refetches and reports', async () => {
+    const { categoryTransactionsAction } = await import('@/app/(app)/budgets/category-transactions-action');
+    const { setCategoryAction } = await import('@/app/(app)/transactions/actions');
+    await renderWithRows([panelRow()]);
+    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    expect(screen.getByRole('menuitem', { name: 'Split…' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
+    const input = within(screen.getByRole('dialog')).getByRole('combobox');
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'Pho' } });
+    fireEvent.mouseDown(screen.getByRole('option', { name: 'Phone' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save category' }));
+    await waitFor(() => expect(setCategoryAction).toHaveBeenCalled());
+    const posted = vi.mocked(setCategoryAction).mock.calls.at(-1)![1] as FormData;
+    expect({ id: posted.get('transactionId'), category: posted.get('categoryId'), teach: posted.get('teach') }).toEqual({ id: '77', category: '2', teach: null });
+    // By text, not by role: the savings target control on the same page already renders a role="status" span.
+    expect(await screen.findByText('Category updated.')).toBeTruthy();
+    expect(vi.mocked(categoryTransactionsAction).mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  /** Review Focus 2. */
+  it('a split part offers Edit split with the whole amount and every part, never Change category', async () => {
+    const { saveSplitsAction } = await import('@/app/(app)/transactions/actions');
+    const parts = [{ id: 501, txnId: 77, categoryId: 1, amountCents: -2000, note: null }, { id: 502, txnId: 77, categoryId: 2, amountCents: -2217, note: null }];
+    await renderWithRows([panelRow({ amountCents: -2000, parentAmountCents: -4217, source: 'manual', splitId: 501, filedBy: null })], { 77: parts });
+    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    expect(screen.queryByRole('menuitem', { name: 'Change category…' })).toBeNull();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit split…' }));
+    expect(screen.getByRole('dialog', { name: /^Split Phonemart/ }).textContent).toContain('-$42.17');
+    // Scoped to the dialog: the page itself has a native select (a combobox role) of its own.
+    expect(within(screen.getByRole('dialog')).getAllByRole('combobox')).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Save split' }));
+    await waitFor(() => expect(saveSplitsAction).toHaveBeenCalled());
+    expect((vi.mocked(saveSplitsAction).mock.calls.at(-1)![1] as FormData).get('txnId')).toBe('77');
+  });
+
+  it('a refused change is reported in the panel', async () => {
+    const { setCategoryAction } = await import('@/app/(app)/transactions/actions');
+    vi.mocked(setCategoryAction).mockResolvedValueOnce({ error: 'This transaction is split — clear its split first, then change its category.' });
+    await renderWithRows([panelRow()]);
+    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save category' }));
+    expect(await screen.findByText(/clear its split first/)).toBeTruthy();
   });
 });
