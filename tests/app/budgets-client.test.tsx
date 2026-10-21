@@ -1471,6 +1471,30 @@ describe('BudgetsClient — fixing a row from the card', () => {
     await waitFor(() => expect(vi.mocked(categoryTransactionsAction).mock.calls.length).toBeGreaterThan(callsBefore));
   });
 
+  /** v1.57.1: rows are not sent back, but the list learns the merchant is now asked about. */
+  it('after the Always ask rule is saved, no row of that merchant offers Always ask', async () => {
+    const { categoryTransactionsAction } = await import('@/app/(app)/budgets/category-transactions-action');
+    const second = panelRow({ id: 78, date: '2026-03-19', amountCents: -1999, parentAmountCents: -1999 });
+    await renderWithRows([panelRow(), second]);
+    // After the category save the moved row is gone; after the rule save the other row is asked about.
+    vi.mocked(categoryTransactionsAction)
+      .mockResolvedValueOnce({ rows: [second], splits: {} })
+      .mockResolvedValueOnce({ rows: [{ ...second, alwaysAsked: true }], splits: {} });
+    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart on 2026-03-12/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
+    fireEvent.click(screen.getByLabelText(/Always ask about PHONEMART 884/));
+    fireEvent.click(screen.getByRole('button', { name: 'Save category' }));
+    const dialog = await screen.findByRole('dialog', { name: /^Always ask for rows like this/ });
+    await waitFor(() => expect(categoryTransactionsAction).toHaveBeenCalledTimes(2));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Always ask' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(categoryTransactionsAction).toHaveBeenCalledTimes(3));
+    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart on 2026-03-19/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
+    expect(screen.getByRole('group', { name: 'Future PHONEMART 884 rows' })).toBeTruthy();
+    expect(screen.queryByLabelText(/Always ask about PHONEMART 884/)).toBeNull();
+  });
+
   it('a refusal from the action is shown in the panel and nothing moves', async () => {
     const { categoryTransactionsAction } = await import('@/app/(app)/budgets/category-transactions-action');
     const { setCategoryAction } = await import('@/app/(app)/transactions/actions');

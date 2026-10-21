@@ -678,6 +678,7 @@ function RowFixHost({ children }: { children: ReactNode }) {
           key={asking.merchant}
           merchant={asking.merchant}
           onClose={() => setAsking(null)}
+          onSaved={() => asking.owner.refresh()}
           onSent={(message) => asking.owner.report({ message })}
         />
       ) : null}

@@ -31,11 +31,14 @@ const initial: AlwaysAskState = {};
 export function AlwaysAskDialog({
   merchant,
   onClose,
+  onSaved,
   onSent,
 }: {
   /** normalizedMerchant; the pattern starts at alwaysAskPattern(merchant), Contains. */
   merchant: string;
   onClose: () => void;
+  /** The rule was saved: the caller refreshes what it lists, so its rows know they are asked about. */
+  onSaved?: () => void;
   /** Rows went back to review: the caller refreshes what it lists and shows the action's message. Called before onClose. */
   onSent?: (message: string) => void;
 }) {
@@ -60,7 +63,12 @@ export function AlwaysAskDialog({
   }, [pattern, matchType, saved]);
 
   useEffect(() => {
-    if (saveState.ruleId !== undefined && !saveState.error) setSaved(true);
+    if (saveState.ruleId !== undefined && !saveState.error) {
+      setSaved(true);
+      onSaved?.();
+    }
+    // onSaved is the caller's inline closure; only a new save result should re-run this.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [saveState]);
 
   useEffect(() => {
