@@ -21,6 +21,27 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.57.1] - 2026-10-21
+
+### Fixed
+
+- Budgets: a dialog opened from a card's row (Always ask, Change category or Split) stays open when
+  the fix takes the card off the page, until you close it.
+- Budgets: a card opened by the way back from Transactions no longer opens itself again after you
+  close it; the card's name is cleared from the address once it has opened.
+- Budgets: saving an Always ask rule from a card refreshes the card's rows, so other rows of that
+  merchant stop offering Always ask.
+- Transactions: after moving to another category's own rows by a link on the page, the filter form
+  keeps that list as it is; it used to compare against the category the page first opened with.
+- Transactions: a category chip for a different category no longer keeps the previous category's
+  "this category only" narrowing; choosing the same category again keeps it.
+- Choosing "Also file this merchant this way from now on" over a disabled rule for that merchant now
+  enables the rule again with the new category, and says so; it used to change the category and
+  leave the rule off.
+- Budgets: a row a rule filed, whose rule has changed since, no longer shows the guess hint under
+  "Also file"; it says the row was set by a rule that has changed since.
+- The category picker in a dialog opened from a list no longer closes as soon as it opens.
+
 ## [1.57.0] - 2026-10-21
 
 ### Added
