@@ -93,6 +93,12 @@ export type TransactionsLinkTarget =
    */
   | { kind: 'uncategorized-spending' }
   /**
+   * Spec 2026-10-21 (fix from Budgets) §2.7: the same card's link when the review queue's
+   * Uncategorized tab would list exactly the rows it counts (UncategorizedSpend.queueShowsSameRows),
+   * so a pick there can teach a rule. Transfers are hidden, as the queue itself hides them.
+   */
+  | { kind: 'uncategorized-queue' }
+  /**
    * Spec 2026-10-21 (fix from Budgets) §2.6: a Budgets card's own rows. Exactly that category (every
    * panel is exact), the rows that count toward a budget (TransactionFilter.spendRowsOnly), with the
    * way back stamped. Like every target here, the link lists the rows of the figure it sits under.
@@ -135,6 +141,11 @@ export function transactionsHref(scope: TransactionsLinkScope, target: Transacti
   } else if (target.kind === 'uncategorized-spending') {
     params.set('category', 'uncategorized');
     params.set('spending', '1');
+  } else if (target.kind === 'uncategorized-queue') {
+    params.set('review', '1');
+    params.set('queue', 'uncategorized');
+    params.set('category', 'uncategorized');
+    params.set('transfers', '0');
   } else if (target.kind === 'budget-category') {
     params.set('category', String(target.categoryId));
     params.set('exact', '1');

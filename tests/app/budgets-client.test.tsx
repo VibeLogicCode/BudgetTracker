@@ -1283,7 +1283,7 @@ describe('BudgetsClient — Not categorized yet', () => {
   const queryOf = (href: string) => Object.fromEntries(new URLSearchParams(href.slice(href.indexOf('?') + 1)));
 
   it('puts the card first in the household grid, linking to the month’s uncategorized spending on Transactions', () => {
-    const { container } = render(<BudgetsClient {...props({ householdUncategorized: { totalCents: 5750, count: 2 } })} />);
+    const { container } = render(<BudgetsClient {...props({ householdUncategorized: { totalCents: 5750, count: 2, queueShowsSameRows: false } })} />);
     const cards = container.querySelectorAll('article');
     expect(cards[0]!.textContent).toContain('Not categorized yet');
     expect(cards[1]!.textContent).toContain('Groceries');
@@ -1292,8 +1292,22 @@ describe('BudgetsClient — Not categorized yet', () => {
     });
   });
 
+  /** Spec 2026-10-21 (fix from Budgets) §2.7. */
+  it('Categorize opens the review queue when the queue shows the same rows, and the plain list when it would not', () => {
+    const hrefFor = (queueShowsSameRows: boolean) => {
+      const { unmount } = render(<BudgetsClient {...props({ householdUncategorized: { totalCents: 5750, count: 2, queueShowsSameRows } })} />);
+      const href = screen.getByRole('link', { name: 'Categorize' }).getAttribute('href')!;
+      unmount();
+      return queryOf(href);
+    };
+    expect(hrefFor(true)).toEqual({
+      range: 'custom', from: '2026-03-01', to: '2026-03-31', review: '1', queue: 'uncategorized', category: 'uncategorized', transfers: '0',
+    });
+    expect(hrefFor(false)).toEqual({ range: 'custom', from: '2026-03-01', to: '2026-03-31', category: 'uncategorized', spending: '1' });
+  });
+
   it('the header names the money not categorized yet, and stops calling the categorized figure the total', () => {
-    render(<BudgetsClient {...props({ householdUncategorized: { totalCents: 5750, count: 2 } })} />);
+    render(<BudgetsClient {...props({ householdUncategorized: { totalCents: 5750, count: 2, queueShowsSameRows: true } })} />);
     const heading = screen.getByText(/Household — spent/);
     expect(heading.textContent).toContain('$50.00 spent in categories');
     expect(heading.textContent).toContain('$57.50 not categorized yet');
@@ -1303,7 +1317,7 @@ describe('BudgetsClient — Not categorized yet', () => {
   it('a person’s grid shows their own figure and links with their person', () => {
     render(
       <BudgetsClient
-        {...props({ selectedPersonId: 7, personal: [{ userId: 7, name: 'Sam', rows: [makeRow()], uncategorized: { totalCents: 1200, count: 1 } }] })}
+        {...props({ selectedPersonId: 7, personal: [{ userId: 7, name: 'Sam', rows: [makeRow()], uncategorized: { totalCents: 1200, count: 1, queueShowsSameRows: true } }] })}
       />,
     );
     expect(screen.getByText('$12.00')).toBeTruthy();
@@ -1311,13 +1325,13 @@ describe('BudgetsClient — Not categorized yet', () => {
   });
 
   it('shows nothing when nothing is uncategorized, and keeps the header as it was', () => {
-    render(<BudgetsClient {...props({ householdUncategorized: { totalCents: 0, count: 0 } })} />);
+    render(<BudgetsClient {...props({ householdUncategorized: { totalCents: 0, count: 0, queueShowsSameRows: true } })} />);
     expect(screen.queryByText('Not categorized yet')).toBeNull();
     expect(screen.getByText(/Household — spent/).textContent).toContain('$50.00 total spent');
   });
 
   it('is not part of Edit limits, which has no cards', () => {
-    render(<BudgetsClient {...props({ householdUncategorized: { totalCents: 5750, count: 2 } })} />);
+    render(<BudgetsClient {...props({ householdUncategorized: { totalCents: 5750, count: 2, queueShowsSameRows: true } })} />);
     fireEvent.click(screen.getAllByRole('button', { name: /edit limits/i })[0]!);
     expect(screen.queryByText('Not categorized yet')).toBeNull();
   });

@@ -1,9 +1,9 @@
 import { and, asc, desc, eq, gte, isNull, lte, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
-import { budgetRollover, budgets, transactions, transactionSplits } from '@/db/schema';
-import { ownerScope, type Viewer } from '@/lib/auth/viewer';
+import { budgetRollover, budgets, loanPayments, transactions, transactionSplits } from '@/db/schema';
+import { isSelfScoped, ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { listCategories, type CategoryRecord } from '@/lib/categories';
-import { UNCATEGORIZED_WHERE } from '@/lib/categorize/engine';
+import { REVIEW_WHERE, UNCATEGORIZED_WHERE } from '@/lib/categorize/engine';
 import { nowIso } from '@/lib/clock';
 import { addMonths, isMonthKey, monthEnd, monthRange, monthStart } from '@/lib/dates';
 import { netSpentCents, pctOf } from '@/lib/money';
@@ -303,6 +303,12 @@ export interface UncategorizedSpend {
   /** Positive: money out. */
   totalCents: number;
   count: number;
+  /**
+   * Spec 2026-10-21 (fix from Budgets) §2.7. True only when the review queue's Uncategorized tab,
+   * for this month and person, lists exactly the rows counted here: no counted row is one the queue
+   * hides, and the queue shows no row the card leaves out. Equal counts would not prove equal sets.
+   */
+  queueShowsSameRows: boolean;
 }
 
 /**
@@ -319,7 +325,14 @@ export interface UncategorizedSpend {
  * hides every loan-linked row (REVIEW_WHERE). It is spending (MUST-13.2), and with no category it is
  * in no category's figure, so leaving it out would hide real money from the page. The Categorize
  * link therefore opens Transactions with this same filter (`category=uncategorized&spending=1`),
- * not the queue, so the count and the rows it opens are one set.
+ * unless `queueShowsSameRows` says the queue would list exactly these rows.
+ *
+ * `queueShowsSameRows` (spec 2026-10-21 (fix from Budgets) §2.7) compares the two predicates. They
+ * share not-a-transfer, no category, no split parts, the month, the person and the viewer. They
+ * differ in three ways, each counted with a positive clause (never a negated compound predicate):
+ * `hidden` is a counted row that has a loan link, which the queue hides; `extra` is a row the queue
+ * lists that this card does not count, an uncategorized row of zero or positive amount with no loan
+ * link; and a self viewer, for whom the Transactions page ignores review mode, never gets the queue.
  *
  * `opts` answers "whose card is this" and `viewer` answers "who is asking"; the viewer's owner
  * scope is appended after the person clause for the reason categoryTransactions gives. One query
@@ -334,17 +347,13 @@ export function uncategorizedSpend(
   if (opts.scope === 'personal' && opts.attributedUserId === null) {
     throw new Error('Personal uncategorized spend requires a user');
   }
-  const clauses = [
-    gte(transactions.date, monthStart(month)),
-    lte(transactions.date, monthEnd(month)),
-    ...SPENDING_OUT_WHERE,
-    UNCATEGORIZED_WHERE,
-  ];
+  const scoped = [gte(transactions.date, monthStart(month)), lte(transactions.date, monthEnd(month))];
   if (opts.scope !== 'household' && opts.attributedUserId !== null) {
-    clauses.push(eq(transactions.attributedUserId, opts.attributedUserId));
+    scoped.push(eq(transactions.attributedUserId, opts.attributedUserId));
   }
   const viewerScope = ownerScope(viewer);
-  if (viewerScope !== null) clauses.push(eq(transactions.attributedUserId, viewerScope));
+  if (viewerScope !== null) scoped.push(eq(transactions.attributedUserId, viewerScope));
+  const clauses = [...scoped, ...SPENDING_OUT_WHERE, UNCATEGORIZED_WHERE];
 
   const row = getDb()
     .select({
@@ -354,7 +363,24 @@ export function uncategorizedSpend(
     .from(transactions)
     .where(and(...clauses))
     .get();
-  return { totalCents: Number(row?.totalCents ?? 0), count: Number(row?.count ?? 0) };
+
+  const hiddenRow = getDb()
+    .select({ n: sql<number>`count(*)` })
+    .from(transactions)
+    .where(
+      and(
+        ...clauses,
+        sql`exists (select 1 from ${loanPayments} where ${loanPayments.txnId} = ${transactions.id})`,
+      ),
+    )
+    .get();
+  const extraRow = getDb()
+    .select({ n: sql<number>`count(*)` })
+    .from(transactions)
+    .where(and(...scoped, REVIEW_WHERE, UNCATEGORIZED_WHERE, gte(transactions.amountCents, 0)))
+    .get();
+  const queueShowsSameRows = !isSelfScoped(viewer) && Number(hiddenRow?.n ?? 0) === 0 && Number(extraRow?.n ?? 0) === 0;
+  return { totalCents: Number(row?.totalCents ?? 0), count: Number(row?.count ?? 0), queueShowsSameRows };
 }
 
 /**

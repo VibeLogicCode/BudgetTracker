@@ -307,7 +307,7 @@ describe('uncategorizedSpend', () => {
     spend({ categoryId: groceries, amountCents: -3000 });
     spend({ categoryId: null, amountCents: -7000, date: '2026-02-27' });
     addSplitParts(spend({ categoryId: null, amountCents: -6000 }), groceries, [-4000, -2000]);
-    expect(uncategorizedSpend('2026-03', { scope: 'household', attributedUserId: null }, HOUSEHOLD_VIEWER)).toEqual({ totalCents: 5750, count: 2 });
+    expect(uncategorizedSpend('2026-03', { scope: 'household', attributedUserId: null }, HOUSEHOLD_VIEWER)).toEqual({ totalCents: 5750, count: 2, queueShowsSameRows: false });
   });
 
   it('leaves out money lent on a loan, which is not spending (SPEND_ROW_WHERE)', () => {
@@ -316,7 +316,7 @@ describe('uncategorizedSpend', () => {
     const payout = spend({ categoryId: null, amountCents: -50000 });
     assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: payout, itemId: lent });
     spend({ categoryId: null, amountCents: -800 });
-    expect(uncategorizedSpend('2026-03', { scope: 'household', attributedUserId: null }, HOUSEHOLD_VIEWER)).toEqual({ totalCents: 800, count: 1 });
+    expect(uncategorizedSpend('2026-03', { scope: 'household', attributedUserId: null }, HOUSEHOLD_VIEWER)).toEqual({ totalCents: 800, count: 1, queueShowsSameRows: true });
   });
 
   it('a personal scope counts that person only; the household counts everyone', () => {
@@ -324,8 +324,8 @@ describe('uncategorizedSpend', () => {
     spend({ categoryId: null, amountCents: -1000, attributedUserId: alice });
     spend({ categoryId: null, amountCents: -2000, attributedUserId: bob });
     spend({ categoryId: null, amountCents: -3000 });
-    expect(uncategorizedSpend('2026-03', { scope: 'personal', attributedUserId: alice }, HOUSEHOLD_VIEWER)).toEqual({ totalCents: 1000, count: 1 });
-    expect(uncategorizedSpend('2026-03', { scope: 'household', attributedUserId: null }, HOUSEHOLD_VIEWER)).toEqual({ totalCents: 6000, count: 3 });
+    expect(uncategorizedSpend('2026-03', { scope: 'personal', attributedUserId: alice }, HOUSEHOLD_VIEWER)).toEqual({ totalCents: 1000, count: 1, queueShowsSameRows: true });
+    expect(uncategorizedSpend('2026-03', { scope: 'household', attributedUserId: null }, HOUSEHOLD_VIEWER)).toEqual({ totalCents: 6000, count: 3, queueShowsSameRows: true });
   });
 
   it('a self viewer reads only their own rows, whatever scope is asked for', () => {
@@ -333,8 +333,59 @@ describe('uncategorizedSpend', () => {
     spend({ categoryId: null, amountCents: -1000, attributedUserId: alice });
     spend({ categoryId: null, amountCents: -2000, attributedUserId: bob });
     const self: Viewer = { id: alice, role: 'member', visibility: 'self' };
-    expect(uncategorizedSpend('2026-03', { scope: 'household', attributedUserId: null }, self)).toEqual({ totalCents: 1000, count: 1 });
-    expect(uncategorizedSpend('2026-03', { scope: 'personal', attributedUserId: bob }, self)).toEqual({ totalCents: 0, count: 0 });
+    expect(uncategorizedSpend('2026-03', { scope: 'household', attributedUserId: null }, self)).toEqual({ totalCents: 1000, count: 1, queueShowsSameRows: false });
+    expect(uncategorizedSpend('2026-03', { scope: 'personal', attributedUserId: bob }, self)).toEqual({ totalCents: 0, count: 0, queueShowsSameRows: false });
+  });
+
+  /** Spec 2026-10-21 (fix from Budgets) §2.7. */
+  it('says the review queue shows the same rows only when no counted row is loan-linked and no uncategorized deposit sits in the month', () => {
+    const { spend, alice } = setup();
+    const ask = () => uncategorizedSpend('2026-03', { scope: 'household', attributedUserId: null }, HOUSEHOLD_VIEWER);
+    // (a) two uncategorized spends: the queue lists exactly them
+    spend({ categoryId: null, amountCents: -2300 });
+    spend({ categoryId: null, amountCents: -1150 });
+    expect(ask()).toEqual({ totalCents: 3450, count: 2, queueShowsSameRows: true });
+    // (b) a counted repayment on a loan owed is hidden by the queue
+    const repayment = spend({ categoryId: null, amountCents: -18000 });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: repayment, itemId: seedLoanItem(alice, 'owed') });
+    expect(ask()).toEqual({ totalCents: 21450, count: 3, queueShowsSameRows: false });
+  });
+
+  it('an uncategorized deposit in the month alone makes the queue show more than the card counts', () => {
+    const { spend } = setup();
+    const ask = () => uncategorizedSpend('2026-03', { scope: 'household', attributedUserId: null }, HOUSEHOLD_VIEWER);
+    spend({ categoryId: null, amountCents: -2300 });
+    spend({ categoryId: null, amountCents: -1150 });
+    spend({ categoryId: null, amountCents: 2500 });
+    expect(ask()).toEqual({ totalCents: 3450, count: 2, queueShowsSameRows: false });
+  });
+
+  it('a zero-amount uncategorized row alone makes the queue show more than the card counts', () => {
+    const { spend } = setup();
+    spend({ categoryId: null, amountCents: -2300 });
+    spend({ categoryId: null, amountCents: 0 });
+    expect(uncategorizedSpend('2026-03', { scope: 'household', attributedUserId: null }, HOUSEHOLD_VIEWER)).toEqual({
+      totalCents: 2300,
+      count: 1,
+      queueShowsSameRows: false,
+    });
+  });
+
+  it('a deposit in another month, another person or a transfer does not count against the flag', () => {
+    const { spend, alice, bob } = setup();
+    spend({ categoryId: null, amountCents: -2300, attributedUserId: alice });
+    spend({ categoryId: null, amountCents: 2500, date: '2026-02-27', attributedUserId: alice });
+    spend({ categoryId: null, amountCents: 2500, isTransfer: true, attributedUserId: alice });
+    spend({ categoryId: null, amountCents: 2500, attributedUserId: bob });
+    expect(uncategorizedSpend('2026-03', { scope: 'personal', attributedUserId: alice }, HOUSEHOLD_VIEWER).queueShowsSameRows).toBe(true);
+    expect(uncategorizedSpend('2026-03', { scope: 'household', attributedUserId: null }, HOUSEHOLD_VIEWER).queueShowsSameRows).toBe(false);
+  });
+
+  it('a self viewer never gets the queue, because the page ignores review mode for them', () => {
+    const { spend, alice } = setup();
+    spend({ categoryId: null, amountCents: -2300, attributedUserId: alice });
+    const self: Viewer = { id: alice, role: 'member', visibility: 'self' };
+    expect(uncategorizedSpend('2026-03', { scope: 'personal', attributedUserId: alice }, self).queueShowsSameRows).toBe(false);
   });
 
   it('a personal scope needs a person', () => {
@@ -382,7 +433,7 @@ describe('the Not categorized yet card and its Categorize link list the same row
     const { repayment } = fixture();
     const card = uncategorizedSpend(MONTH, { scope: 'household', attributedUserId: null }, HOUSEHOLD_VIEWER);
     const listed = destination(null, HOUSEHOLD_VIEWER);
-    expect(card).toEqual({ totalCents: 31500 + 1875 + 2640 + 990, count: 4 });
+    expect(card).toEqual({ totalCents: 31500 + 1875 + 2640 + 990, count: 4, queueShowsSameRows: false });
     expect(listed.total).toBe(card.count);
     expect(-listed.outCents).toBe(card.totalCents);
     expect(listed.rows.map((row) => row.id)).toContain(repayment);
@@ -391,7 +442,7 @@ describe('the Not categorized yet card and its Categorize link list the same row
   it('one person: the count equals the rows listed, for a household viewer and for that person seeing only their own', () => {
     const { alice, repayment } = fixture();
     const card = uncategorizedSpend(MONTH, { scope: 'personal', attributedUserId: alice }, HOUSEHOLD_VIEWER);
-    expect(card).toEqual({ totalCents: 31500 + 1875, count: 2 });
+    expect(card).toEqual({ totalCents: 31500 + 1875, count: 2, queueShowsSameRows: false });
     const listed = destination(alice, HOUSEHOLD_VIEWER);
     expect(listed.total).toBe(card.count);
     expect(-listed.outCents).toBe(card.totalCents);
@@ -401,7 +452,7 @@ describe('the Not categorized yet card and its Categorize link list the same row
     const selfCard = uncategorizedSpend(MONTH, { scope: 'personal', attributedUserId: alice }, self);
     const selfListed = destination(alice, self);
     expect(selfCard).toEqual(card);
-    expect({ count: selfListed.total, totalCents: -selfListed.outCents }).toEqual(selfCard);
+    expect({ count: selfListed.total, totalCents: -selfListed.outCents }).toEqual({ count: selfCard.count, totalCents: selfCard.totalCents });
     expect(selfListed.rows.map((row) => row.id).sort((a, b) => a - b)).toEqual(listed.rows.map((row) => row.id).sort((a, b) => a - b));
   });
 });

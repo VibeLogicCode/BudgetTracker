@@ -130,6 +130,19 @@ describe('transactionsHref — the figure the link is under', () => {
     });
   });
 
+  /** Spec 2026-10-21 (fix from Budgets) §2.7. */
+  it('the uncategorized-queue target opens the review queue’s Uncategorized tab for the month and person', () => {
+    const href = transactionsHref({ range: { from: '2026-03-01', to: '2026-03-31' }, person: 7 }, { kind: 'uncategorized-queue' });
+    const params: TransactionParams = Object.fromEntries(new URLSearchParams(href.slice(href.indexOf('?') + 1)));
+    expect(params.review).toBe('1');
+    expect(params.queue).toBe('uncategorized');
+    const filter = filterFromHref(href);
+    expect({
+      reviewOnly: filter.reviewOnly, categoryId: filter.categoryId, transferView: filter.transferView,
+      from: filter.from, to: filter.to, person: filter.attributedUserId,
+    }).toEqual({ reviewOnly: false, categoryId: 'uncategorized', transferView: 'none', from: '2026-03-01', to: '2026-03-31', person: 7 });
+  });
+
   it('a rolled-up category row means the category AND its children', () => {
     const filter = filterFromHref(transactionsHref({ range: LAST_6, person: null }, { kind: 'category', categoryId: 7 }));
     expect({ categoryId: filter.categoryId, categoryExact: filter.categoryExact }).toEqual({ categoryId: 7, categoryExact: false });

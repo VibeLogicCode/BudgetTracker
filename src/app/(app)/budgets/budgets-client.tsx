@@ -1403,7 +1403,7 @@ function BudgetSectionBody({
         spend={uncategorized}
         href={transactionsHref(
           { range: { from: monthStart(month), to: monthEnd(month) }, person: scope === 'personal' ? userId : null },
-          { kind: 'uncategorized-spending' },
+          uncategorized?.queueShowsSameRows ? { kind: 'uncategorized-queue' } : { kind: 'uncategorized-spending' },
         )}
       />
       {rows.map((row) => (

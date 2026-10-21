@@ -10,7 +10,7 @@ describe('UncategorizedSpendCard', () => {
   const HREF = '/transactions?range=custom&from=2026-03-01&to=2026-03-31&category=uncategorized&spending=1';
 
   it('shows the amount, the count and Categorize, with the attention icon and the Needs attention label', () => {
-    const { container } = render(<UncategorizedSpendCard spend={{ totalCents: 5750, count: 2 }} href={HREF} />);
+    const { container } = render(<UncategorizedSpendCard spend={{ totalCents: 5750, count: 2, queueShowsSameRows: true }} href={HREF} />);
     expect(screen.getByText('Not categorized yet')).toBeTruthy();
     expect(screen.getByTestId('needs-attention-icon')).toBeTruthy();
     expect(screen.getByText('Needs attention')).toBeTruthy();
@@ -21,12 +21,12 @@ describe('UncategorizedSpendCard', () => {
   });
 
   it('says 1 transaction for one', () => {
-    render(<UncategorizedSpendCard spend={{ totalCents: 1200, count: 1 }} href={HREF} />);
+    render(<UncategorizedSpendCard spend={{ totalCents: 1200, count: 1, queueShowsSameRows: true }} href={HREF} />);
     expect(screen.getByText('1 transaction')).toBeTruthy();
   });
 
   it('renders nothing when nothing is uncategorized', () => {
-    expect(render(<UncategorizedSpendCard spend={{ totalCents: 0, count: 0 }} href={HREF} />).container.firstChild).toBeNull();
+    expect(render(<UncategorizedSpendCard spend={{ totalCents: 0, count: 0, queueShowsSameRows: true }} href={HREF} />).container.firstChild).toBeNull();
     expect(render(<UncategorizedSpendCard spend={null} href={HREF} />).container.firstChild).toBeNull();
   });
 });
