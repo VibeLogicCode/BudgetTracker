@@ -55,6 +55,18 @@ describe('MetricCard', () => {
     );
     expect(screen.getByTestId('metric-card-footer')).toBeTruthy();
   });
+
+  /** Spec 2026-10-21 §2.2: a card that needs attention reads differently from the cards around it. */
+  it('a warning card carries the warning border and a warning icon tile; a default card neither', () => {
+    const { container, unmount } = render(<MetricCard tone="warning" icon={<span>!</span>} title="Not categorized yet" value="$57.50" />);
+    const article = container.querySelector('article')!;
+    expect(article.className).toContain('border-warning');
+    expect(article.querySelector('header > span')!.className).toContain('bg-warning-soft');
+    unmount();
+    const plain = render(<MetricCard icon={<span>G</span>} title="Groceries" value="$12.00" />).container.querySelector('article')!;
+    expect(plain.className).not.toContain('border-warning');
+    expect(plain.querySelector('header > span')!.className).toContain('bg-accent-soft');
+  });
 });
 
 describe('ProgressBar', () => {

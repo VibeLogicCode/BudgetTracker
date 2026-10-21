@@ -144,3 +144,62 @@ describe('BudgetsPage (rulings R2, R11 / M9)', () => {
     expect(container.textContent).toContain('20% of income');
   });
 });
+
+/** Spec 2026-10-21 §2.2, against the real page and a seeded database. */
+describe('BudgetsPage — Not categorized yet', () => {
+  let t: TestDb | null = null;
+  afterEach(() => { t?.cleanup(); t = null; });
+
+  function seed() {
+    t = createSeededTestDb();
+    const db = t.db;
+    const adultId = insertTestUser(db, { name: 'Adult', username: 'adult', role: 'admin' });
+    const kidId = insertTestUser(db, { name: 'Kid', username: 'kid', role: 'member' });
+    insertTestAccount(db, { name: 'Chequing', ownerUserId: adultId });
+    const groceries = categoryIdByName(db, 'Groceries');
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-03', amountCents: 50000 });
+    const add = (amountCents: number, over: { categoryId?: number | null; attributedUserId?: number | null; isTransfer?: boolean } = {}) =>
+      db.get<{ id: number }>(sql`
+        insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, category_id, categorization_source, is_transfer, attributed_user_id, created_by, created_at, updated_at)
+        values ((select id from accounts limit 1), '2026-03-12', 'X', 'X', ${amountCents}, ${over.categoryId ?? null}, 'none', ${over.isTransfer ? 1 : 0}, ${over.attributedUserId ?? null}, ${adultId}, ${nowIso()}, ${nowIso()})
+        returning id`).id;
+    return { db, adultId, kidId, groceries, add };
+  }
+
+  it('shows uncategorized spending for the month on the household grid and in the header', async () => {
+    const { adultId, groceries, add } = seed();
+    add(-4500, { attributedUserId: adultId });
+    add(-1250);
+    add(-3000, { categoryId: groceries });
+    add(-9900, { isTransfer: true });
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: BudgetsPage } = await import('@/app/(app)/budgets/page');
+    const { container } = render(await BudgetsPage({ searchParams: Promise.resolve({ month: '2026-03' }) }));
+    expect(screen.getByText('Not categorized yet')).toBeTruthy();
+    expect(screen.getByText('2 transactions')).toBeTruthy();
+    expect(container.textContent).toContain('$57.50 not categorized yet');
+  });
+
+  it('leaves out a split row', async () => {
+    const { adultId, groceries, add } = seed();
+    const split = add(-6000);
+    t!.sqlite.prepare('insert into transaction_splits (txn_id, category_id, amount_cents, created_at) values (?, ?, ?, ?), (?, ?, ?, ?)')
+      .run(split, groceries, -4000, nowIso(), split, groceries, -2000, nowIso());
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: BudgetsPage } = await import('@/app/(app)/budgets/page');
+    render(await BudgetsPage({ searchParams: Promise.resolve({ month: '2026-03' }) }));
+    expect(screen.queryByText('Not categorized yet')).toBeNull();
+  });
+
+  it('a self viewer sees only their own uncategorized spending', async () => {
+    const { adultId, kidId, add } = seed();
+    add(-1000, { attributedUserId: kidId });
+    add(-2000, { attributedUserId: adultId });
+    currentUser.value = { id: kidId, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+    const { default: BudgetsPage } = await import('@/app/(app)/budgets/page');
+    const { container } = render(await BudgetsPage({ searchParams: Promise.resolve({ month: '2026-03' }) }));
+    expect(screen.getByText('$10.00')).toBeTruthy();
+    expect(container.textContent).not.toContain('$30.00');
+    expect(container.textContent).not.toContain('$20.00');
+  });
+});

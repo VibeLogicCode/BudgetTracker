@@ -84,6 +84,7 @@ const TEXT: Pair[] = [
   ['neutral-soft-fg', 'neutral-soft', 4.5, '.badge--slate'],
   ['positive', 'surface', 4.5, 'money in'],
   ['negative', 'surface', 4.5, 'money out'],
+  ['warning', 'surface', 4.5, "the Budgets header's not categorized figure"],
 ];
 
 /**
@@ -101,6 +102,7 @@ const NON_TEXT: Pair[] = [
   ['positive-solid', 'surface', 3, 'a meter filled to a good value'],
   ['warning-solid', 'surface', 3, 'a meter near its limit'],
   ['negative-solid', 'surface', 3, 'a meter over its limit'],
+  ['warning', 'canvas', 3, 'the border of the Not categorized yet card'],
 ];
 
 /**

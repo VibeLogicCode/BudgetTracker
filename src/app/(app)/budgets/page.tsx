@@ -2,7 +2,7 @@ import { requireUser } from '@/lib/auth/session';
 import { isSelfScoped } from '@/lib/auth/viewer';
 import { listAttributablePeople } from '@/lib/auth/users';
 import { sinkingFundsFor } from '@/lib/bills';
-import { budgetProgress, budgetTotals, rolloverStartMonth, type BudgetRow, type BudgetScope } from '@/lib/budgets';
+import { budgetProgress, budgetTotals, rolloverStartMonth, uncategorizedSpend, type BudgetRow, type BudgetScope } from '@/lib/budgets';
 import { currentMonth, isMonthKey, monthEnd, todayIso } from '@/lib/dates';
 import { readEnv } from '@/lib/env';
 import { flattenBudgetRows } from '@/lib/notify/evaluate/pace';
@@ -74,6 +74,8 @@ export default async function BudgetsPage({
   // Ruling R2: a self viewer sees no household scope at all -- a household limit is a household
   // total, which is the thing R2 names. And the personal loop is themselves and nobody else.
   const household = selfScoped ? null : budgetProgress(month, 'household', null);
+  // Ruling R2: no household figure is computed for a self viewer -- the same gate as `household`.
+  const householdUncategorized = selfScoped ? null : uncategorizedSpend(month, { scope: 'household', attributedUserId: null }, viewer);
   const householdRolloverIds = household === null ? [] : rolloverIdsFor('household', null, household);
   // Ruling T3: household scope only, so this is null exactly when `household` is -- there is no
   // per-person target to resolve for a self viewer, the same pairing householdTotals below uses.
@@ -131,6 +133,7 @@ export default async function BudgetsPage({
       userId: person.id,
       name: person.name,
       rows,
+      uncategorized: uncategorizedSpend(month, { scope: 'personal', attributedUserId: person.id }, viewer),
       rolloverIds: rolloverIdsFor('personal', person.id, rows),
       sinkingFunds: Object.fromEntries(sinkingFundsFor({ month, today, rows, viewer })),
     };
@@ -186,6 +189,7 @@ export default async function BudgetsPage({
       household={household}
       householdRolloverIds={householdRolloverIds}
       householdTotals={household === null ? null : budgetTotals(household)}
+      householdUncategorized={householdUncategorized}
       personal={personal}
       predictions={predictions}
       // A Map is not a valid Server-Component prop -- each section's sinkingFundsFor() result

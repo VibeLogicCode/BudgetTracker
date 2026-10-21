@@ -30,6 +30,7 @@ export function MetricCard({
   action,
   children,
   className = '',
+  tone = 'default',
 }: {
   /** Rendered inside the 40px rounded tile. Usually a lucide icon from ./icons -- categoryIcon()
    *  for a budget category, a fixed glyph for a goal or an account. Decorative: the title text
@@ -55,14 +56,18 @@ export function MetricCard({
   /** Expanded content -- a child breakdown, a transaction list -- below the footer strip. */
   children?: React.ReactNode;
   className?: string;
+  /** Spec 2026-10-21 §2.2. 'warning' marks a card that needs attention: a warning border and a
+   *  warning icon tile. The icon and the words carry the meaning too; this is never the only signal. */
+  tone?: 'default' | 'warning';
 }) {
+  const warning = tone === 'warning';
   return (
-    <article className={`card flex flex-col gap-3 p-4 sm:p-5 ${className}`}>
+    <article className={`card flex flex-col gap-3 p-4 sm:p-5 ${warning ? 'border-warning ' : ''}${className}`}>
       <header className="flex items-start gap-3">
         {icon ? (
           <span
             aria-hidden="true"
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent-soft-fg"
+            className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${warning ? 'bg-warning-soft text-warning-soft-fg' : 'bg-accent-soft text-accent-soft-fg'}`}
           >
             {icon}
           </span>

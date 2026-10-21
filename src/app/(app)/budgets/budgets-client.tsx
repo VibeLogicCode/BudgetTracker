@@ -15,10 +15,12 @@ import { Pill, type PillTone } from '@/components/ui/Pill';
 import { PillNav } from '@/components/ui/PillNav';
 import { ProgressBar } from '@/components/ui/ProgressBar';
 import { categoryIcon, ExpandIcon } from '@/components/ui/icons';
-import { monthLabel } from '@/lib/dates';
+import { monthEnd, monthLabel, monthStart } from '@/lib/dates';
 import { formatCents } from '@/lib/money';
 import type { SinkingFund } from '@/lib/bills';
-import type { BudgetRow, BudgetScope, CategoryTransactionRow } from '@/lib/budgets';
+import type { BudgetRow, BudgetScope, CategoryTransactionRow, UncategorizedSpend } from '@/lib/budgets';
+import { transactionsHref } from '@/lib/transaction-links';
+import { UncategorizedSpendCard } from '@/components/UncategorizedSpendCard';
 import { MIN_HISTORY_MONTHS } from '@/lib/predict/constants';
 import type { BudgetPredictions, CategorySuggestion, SectionPredictions } from '@/lib/predict/suggest';
 // Type-only: a 'use client' file may never VALUE-import from a module that reaches @/db (Lane
@@ -1193,6 +1195,7 @@ function BudgetSectionBody({
   sinkingFunds,
   applyAction,
   groupState,
+  uncategorized,
 }: {
   rows: BudgetRow[];
   scope: BudgetScope;
@@ -1206,6 +1209,8 @@ function BudgetSectionBody({
   sinkingFunds: Record<number, SinkingFund>;
   applyAction: (formData: FormData) => void;
   groupState: GroupOpenState;
+  /** Spec 2026-10-21 §2.2: this section's uncategorized spending; the grid's first card when non-zero. */
+  uncategorized: UncategorizedSpend | null;
 }) {
   if (editMode) {
     return (
@@ -1236,6 +1241,13 @@ function BudgetSectionBody({
   }
   return (
     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+      <UncategorizedSpendCard
+        spend={uncategorized}
+        href={transactionsHref(
+          { range: { from: monthStart(month), to: monthEnd(month) }, person: scope === 'personal' ? userId : null },
+          { kind: 'uncategorized-queue' },
+        )}
+      />
       {rows.map((row) => (
         <BudgetCategoryCard
           key={row.categoryId}
@@ -1279,6 +1291,7 @@ function PersonalCard({
     rows: BudgetRow[];
     rolloverIds?: number[];
     sinkingFunds?: Record<number, SinkingFund>;
+    uncategorized?: UncategorizedSpend;
   };
   month: string;
   currentUserId: number;
@@ -1396,6 +1409,7 @@ function PersonalCard({
           sinkingFunds={person.sinkingFunds ?? {}}
           applyAction={applyAction}
           groupState={groupState}
+          uncategorized={person.uncategorized ?? null}
         />
       ) : null}
     </section>
@@ -1410,6 +1424,7 @@ export function BudgetsClient({
   household,
   householdRolloverIds = [],
   householdTotals,
+  householdUncategorized = null,
   personal,
   predictions = null,
   householdSinkingFunds = {},
@@ -1443,6 +1458,8 @@ export function BudgetsClient({
   householdRolloverIds?: number[];
   /** Ruling R2: null exactly when `household` is -- always both together. */
   householdTotals: { budgetedLimitCents: number; budgetedSpentCents: number; totalSpentCents: number } | null;
+  /** Spec 2026-10-21 §2.2: household uncategorized spending; null for a self viewer, like `household`. */
+  householdUncategorized?: UncategorizedSpend | null;
   personal: {
     userId: number;
     name: string;
@@ -1453,6 +1470,7 @@ export function BudgetsClient({
      *  (see budgets/page.tsx) -- never shared with the household section's own map, since
      *  sinkingFundsFor's Map is keyed by categoryId alone with no scope of its own. */
     sinkingFunds?: Record<number, SinkingFund>;
+    uncategorized?: UncategorizedSpend;
   }[];
   /** MUST-14.1: null for a past or future month, and on any caller that has none. */
   predictions?: BudgetPredictions | null;
@@ -1648,7 +1666,16 @@ export function BudgetsClient({
                 ) : (
                   <>
                     Household — spent {formatCents(householdTotals.budgetedSpentCents)} of {formatCents(householdTotals.budgetedLimitCents)} budgeted
-                    <span className="font-normal text-muted"> · {formatCents(householdTotals.totalSpentCents)} total spent</span>
+                    {/* Decision 10: the figure is categorized spending only and is unchanged, so
+                        when money is not categorized yet the words change instead of the number. */}
+                    {householdUncategorized !== null && householdUncategorized.count > 0 ? (
+                      <>
+                        <span className="font-normal text-muted"> · {formatCents(householdTotals.totalSpentCents)} spent in categories</span>
+                        <span className="font-normal text-warning"> · {formatCents(householdUncategorized.totalCents)} not categorized yet</span>
+                      </>
+                    ) : (
+                      <span className="font-normal text-muted"> · {formatCents(householdTotals.totalSpentCents)} total spent</span>
+                    )}
                   </>
                 )
               }
@@ -1736,6 +1763,7 @@ export function BudgetsClient({
               sinkingFunds={householdSinkingFunds}
               applyAction={applyAction}
               groupState={householdGroupState}
+              uncategorized={householdUncategorized}
             />
           ) : null}
         </section>

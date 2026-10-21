@@ -1258,3 +1258,56 @@ describe('F-06: the six-month history strip', () => {
     expect(categoryHistoryAction).toHaveBeenCalledWith({ scope: 'household', userId: null, month: '2026-03', categoryId: 10 });
   });
 });
+
+/** Spec 2026-10-21 §2.2. First in the grid, beside the categories, never folded into one. */
+describe('BudgetsClient — Not categorized yet', () => {
+  const props = (over: Partial<React.ComponentProps<typeof BudgetsClient>> = {}) => ({
+    month: '2026-03',
+    currentUserId: 1,
+    household: [makeRow()],
+    householdTotals: { budgetedLimitCents: 20000, budgetedSpentCents: 5000, totalSpentCents: 5000 },
+    personal: [],
+    ...over,
+  });
+  const queryOf = (href: string) => Object.fromEntries(new URLSearchParams(href.slice(href.indexOf('?') + 1)));
+
+  it('puts the card first in the household grid, linking to the review queue for the month', () => {
+    const { container } = render(<BudgetsClient {...props({ householdUncategorized: { totalCents: 5750, count: 2 } })} />);
+    const cards = container.querySelectorAll('article');
+    expect(cards[0]!.textContent).toContain('Not categorized yet');
+    expect(cards[1]!.textContent).toContain('Groceries');
+    expect(queryOf(screen.getByRole('link', { name: 'Categorize' }).getAttribute('href')!)).toEqual({
+      range: 'custom', from: '2026-03-01', to: '2026-03-31', review: '1', queue: 'uncategorized', category: 'uncategorized', transfers: '0',
+    });
+  });
+
+  it('the header names the money not categorized yet, and stops calling the categorized figure the total', () => {
+    render(<BudgetsClient {...props({ householdUncategorized: { totalCents: 5750, count: 2 } })} />);
+    const heading = screen.getByText(/Household — spent/);
+    expect(heading.textContent).toContain('$50.00 spent in categories');
+    expect(heading.textContent).toContain('$57.50 not categorized yet');
+    expect(heading.textContent).not.toContain('total spent');
+  });
+
+  it('a person’s grid shows their own figure and links with their person', () => {
+    render(
+      <BudgetsClient
+        {...props({ selectedPersonId: 7, personal: [{ userId: 7, name: 'Sam', rows: [makeRow()], uncategorized: { totalCents: 1200, count: 1 } }] })}
+      />,
+    );
+    expect(screen.getByText('$12.00')).toBeTruthy();
+    expect(queryOf(screen.getByRole('link', { name: 'Categorize' }).getAttribute('href')!).person).toBe('7');
+  });
+
+  it('shows nothing when nothing is uncategorized, and keeps the header as it was', () => {
+    render(<BudgetsClient {...props({ householdUncategorized: { totalCents: 0, count: 0 } })} />);
+    expect(screen.queryByText('Not categorized yet')).toBeNull();
+    expect(screen.getByText(/Household — spent/).textContent).toContain('$50.00 total spent');
+  });
+
+  it('is not part of Edit limits, which has no cards', () => {
+    render(<BudgetsClient {...props({ householdUncategorized: { totalCents: 5750, count: 2 } })} />);
+    fireEvent.click(screen.getAllByRole('button', { name: /edit limits/i })[0]!);
+    expect(screen.queryByText('Not categorized yet')).toBeNull();
+  });
+});
