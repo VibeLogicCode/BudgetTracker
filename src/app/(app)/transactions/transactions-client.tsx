@@ -8,6 +8,7 @@ import { alwaysAskPattern } from '@/lib/categorize/normalize';
 import { FormError } from '@/components/FormError';
 import { QuickAddTransaction } from '@/components/QuickAddTransaction';
 import { SubmitButton } from '@/components/SubmitButton';
+import { SplitDialog, type SplitTarget } from '@/components/transactions/SplitDialog';
 import { CheckIcon, TransactionsIcon } from '@/components/icons';
 import { Card, CardBody, CardFooter } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -39,7 +40,7 @@ import { RowDialog } from '@/components/ui/RowDialog';
 import { categoryOptionGroups, categoryOptions, type CategoryLike, type CategoryOptionGroup } from '@/lib/category-order';
 import { type ResolvedRange } from '@/lib/date-range';
 import type { LoanLink } from '@/lib/loans';
-import { absCents, formatCents, parseAmountToCents, sumCents } from '@/lib/money';
+import { absCents, formatCents } from '@/lib/money';
 // F-01 (v1.31.0): the same builder Reports and the dashboard link their figures with. Reaching
 // for it here rather than writing `?q=${encodeURIComponent(...)}` inline is the whole point of
 // the module -- see its docblock on why a second, hand-built definition is the defect shape.
@@ -110,17 +111,6 @@ interface BillOption {
   name: string;
   installments: { id: number; dueDate: string; amountCents: number }[];
 }
-
-/** Draft state for one row of the split editor. Amounts are kept as the raw dollar text the
- *  person is typing (parsed with parseAmountToCents only at remainder/submit time) so a
- *  half-typed value like "12." never gets silently rewritten under someone's cursor. */
-interface SplitPartDraft {
-  categoryId: string;
-  amount: string;
-  note: string;
-}
-
-const blankSplitPart = (): SplitPartDraft => ({ categoryId: '', amount: '', note: '' });
 
 const initial: ActionState = {};
 
@@ -569,17 +559,7 @@ export function TransactionsClient({
   // posts empty, and bulkCatAction refuses an empty category exactly as it always did.
   const [bulkCategoryId, setBulkCategoryId] = useState<number | null>(null);
   const [renaming, setRenaming] = useState<{ id: number; current: string; merchant: string } | null>(null);
-  const [splitting, setSplitting] = useState<{
-    id: number;
-    /** Reported (item 1): the modal dialog names the transaction it is editing (merchant,
-     *  date, amount) in its own header, so a person is never left wondering which row Split…
-     *  was for once the row itself is out of view behind the backdrop. Captured here, at open
-     *  time, rather than re-looked-up from `page.rows` on every render of the dialog. */
-    merchant: string;
-    date: string;
-    amountCents: number;
-    parts: SplitPartDraft[];
-  } | null>(null);
+  const [splitting, setSplitting] = useState<SplitTarget | null>(null);
   // Unify-the-editors task (2026-08-30): the backdrop, focus trap, Escape handling, body-scroll
   // lock and opener-focus-restore this state used to need its OWN ref pair and two effects for
   // (see git history) now live once, generically, in RowDialog -- see that component's own
@@ -1145,56 +1125,12 @@ export function TransactionsClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [applyAllState]);
 
-  // Opens this row's split editor, prefilled from its existing parts (or two blank parts for
-  // a fresh split) -- the same "one editor, one nullable slot of state" shape `renaming` uses,
-  // so opening a different row's editor always replaces whichever one was already open.
+  // Opens this row's split editor -- the same "one editor, one nullable slot of state" shape
+  // `renaming` uses, so opening a different row's editor always replaces whichever one was
+  // already open. The existing parts are read at the call site below; SplitDialog seeds its draft.
   const openSplitEditor = (row: TransactionRow) => {
-    const existing = splits[row.id] ?? [];
-    setSplitting({
-      id: row.id,
-      merchant: row.normalizedMerchant,
-      date: row.date,
-      amountCents: row.amountCents,
-      parts:
-        existing.length > 0
-          ? existing.map((part) => ({
-              categoryId: String(part.categoryId),
-              amount: (Math.abs(part.amountCents) / 100).toFixed(2),
-              note: part.note ?? '',
-            }))
-          : [blankSplitPart(), blankSplitPart()],
-    });
+    setSplitting({ id: row.id, merchant: row.normalizedMerchant, date: row.date, amountCents: row.amountCents });
   };
-
-  const updateSplitPart = (index: number, patch: Partial<SplitPartDraft>) => {
-    setSplitting((prev) => (prev ? { ...prev, parts: prev.parts.map((part, i) => (i === index ? { ...part, ...patch } : part)) } : prev));
-  };
-  const addSplitPart = () => {
-    setSplitting((prev) => (prev ? { ...prev, parts: [...prev.parts, blankSplitPart()] } : prev));
-  };
-  const removeSplitPart = (index: number) => {
-    setSplitting((prev) => (prev ? { ...prev, parts: prev.parts.filter((_, i) => i !== index) } : prev));
-  };
-
-  // Amounts are always typed as a plain positive dollar figure -- the parent's own sign is
-  // applied here rather than asked of the person, so splitting a $50 expense means typing
-  // "30.00" and "20.00", never "-30.00". parseAmountToCents (not hand-rolled parsing) does the
-  // actual decimal-to-cents conversion; an unparsable/blank amount counts as 0 toward the
-  // remainder rather than blocking every other keystroke with an error.
-  const splitSign = splitting !== null && splitting.amountCents < 0 ? -1 : 1;
-  const draftPartCents = (part: SplitPartDraft): number => {
-    const parsed = parseAmountToCents(part.amount);
-    return parsed === null ? 0 : Math.abs(parsed) * splitSign;
-  };
-  // A blank row added by "Add a part" and never given a category is dropped rather than
-  // submitted (and left out of the remainder math below) -- it was never really a part.
-  const activeSplitParts = splitting ? splitting.parts.filter((part) => part.categoryId !== '') : [];
-  const splitPartsPayload = activeSplitParts.map((part) => ({
-    categoryId: Number(part.categoryId),
-    amountCents: draftPartCents(part),
-    note: part.note.trim() === '' ? null : part.note.trim(),
-  }));
-  const splitRemainderCents = splitting ? splitting.amountCents - sumCents(activeSplitParts.map(draftPartCents)) : 0;
 
   /**
    * Reported (item 2), THIRD pass -- the first two both shipped and were both rejected from
@@ -3258,102 +3194,19 @@ export function TransactionsClient({
       <FormError message={error} />
       {notice ? <Notice tone="success">{notice}</Notice> : null}
 
-      {/*
-        Reported (item 1): this used to be a plain Card rendered wherever `splitting` happened
-        to sit in the JSX (the very top of the page) -- so pressing Split… appeared to do nothing
-        until a person scrolled up to find it, and once there they had lost sight of which row it
-        belonged to. Unify-the-editors task (2026-08-30): the dimmed/blurred backdrop, role=dialog/
-        aria-modal, the focus trap, Escape, body-scroll lock and focus-restore-to-trigger all now
-        live once in RowDialog (see its own docblock) rather than being hand-wired here -- this is
-        the shell's first and original caller. The FORM inside is byte-for-byte what it was before
-        this task -- same fields, same action (splitAction), same validation (Save stays disabled
-        until the remainder is exactly zero) and the same error surface (FormError/`error` in the
-        top banner) -- only the shell around it changed. `key={splitting.id}` forces a fresh
-        RowDialog instance (fresh opener capture, fresh initial focus) when one row's editor is
-        replaced by another's without passing through `null` in between -- see RowDialog's own
-        docblock on why a plain `splitting !== null` boolean would not refire for that case.
-      */}
+      {/* The split editor is SplitDialog (spec 2026-10-21 (fix from Budgets) §2.2), shared with the
+          Budgets card; this page owns the dispatcher and reads its result through the top banner.
+          `key={splitting.id}` gives a fresh dialog and draft when one row's editor is replaced by
+          another's without passing through null. */}
       {splitting ? (
-        <RowDialog
-          dialogId="split-dialog"
+        <SplitDialog
           key={splitting.id}
-          title={`Split ${splitting.merchant}`}
-          description={
-            <>
-              {`${splitting.date} · ${formatCents(splitting.amountCents)} — `}
-              Divide this transaction across more than one category. The parts must add up to the full amount.
-            </>
-          }
+          target={splitting}
+          existing={splits[splitting.id] ?? []}
+          options={groupedCategories}
+          action={splitAction}
           onClose={() => setSplitting(null)}
-        >
-          <form action={splitAction} onSubmit={() => setSplitting(null)} className="flex flex-col gap-4">
-            <input type="hidden" name="txnId" value={splitting.id} />
-            <input type="hidden" name="parts" value={JSON.stringify(splitPartsPayload)} />
-            <div className="flex flex-col gap-2">
-              <div className="flex flex-wrap gap-2 text-xs font-medium text-muted">
-                <span className="w-44">Category</span>
-                <span className="w-24">Amount</span>
-                <span className="flex-1">Note</span>
-              </div>
-              {splitting.parts.map((part, index) => (
-                <div key={index} className="flex flex-wrap items-center gap-2">
-                  {/* Backlog BZ (deferred half): a split is where a long category list is worst
-                      -- several parts, each needing a different branch. Same unchosen semantics as
-                      the recategorize dialog above. */}
-                  <CategoryCombobox
-                    options={groupedCategories}
-                    value={part.categoryId === '' ? null : Number(part.categoryId)}
-                    onChange={(id) => updateSplitPart(index, { categoryId: id === null ? '' : String(id) })}
-                    label={`Category for part ${index + 1}`}
-                    includeUncategorized={false}
-                    placeholder="Choose a category"
-                    className="w-44"
-                  />
-                  <input
-                    value={part.amount}
-                    onChange={(e) => updateSplitPart(index, { amount: e.target.value })}
-                    placeholder="0.00"
-                    inputMode="decimal"
-                    aria-label={`Amount for part ${index + 1}`}
-                    className={`${inputClass} w-24`}
-                  />
-                  <input
-                    value={part.note}
-                    onChange={(e) => updateSplitPart(index, { note: e.target.value })}
-                    placeholder="Note (optional)"
-                    aria-label={`Note for part ${index + 1}`}
-                    className={`${inputClass} flex-1 min-w-[10rem]`}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => removeSplitPart(index)}
-                    disabled={splitting.parts.length <= 2}
-                    className={buttonClass('ghost', 'sm', 'px-2 text-xs')}
-                  >
-                    Remove part
-                  </button>
-                </div>
-              ))}
-            </div>
-            <div className="flex flex-wrap items-center gap-3">
-              <button type="button" onClick={addSplitPart} className={buttonClass('secondary', 'sm')}>
-                Add a part
-              </button>
-              <span className="text-sm text-muted">Remaining to assign: {formatCents(splitRemainderCents)}</span>
-            </div>
-            <div className="flex gap-2">
-              <SubmitButton disabled={splitRemainderCents !== 0}>Save split</SubmitButton>
-              <button type="button" onClick={() => setSplitting(null)} className={buttonClass('secondary')}>
-                Cancel
-              </button>
-            </div>
-          </form>
-          <form action={splitAction} onSubmit={() => setSplitting(null)}>
-            <input type="hidden" name="txnId" value={splitting.id} />
-            <input type="hidden" name="parts" value="[]" />
-            <SubmitButton variant="secondary">Remove split</SubmitButton>
-          </form>
-        </RowDialog>
+        />
       ) : null}
 
       {/* The remaining four row editors, unified onto the same RowDialog shell -- see
