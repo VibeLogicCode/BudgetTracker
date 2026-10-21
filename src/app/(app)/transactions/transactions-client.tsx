@@ -1,13 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import { Fragment, startTransition, useActionState, useEffect, useState } from 'react';
+import { Fragment, useActionState, useEffect, useState } from 'react';
 import { CategoryCombobox } from '@/components/CategoryCombobox';
 import { defaultBoundsAround } from '@/lib/categorize/amount-bounds';
-import { alwaysAskPattern } from '@/lib/categorize/normalize';
 import { FormError } from '@/components/FormError';
 import { QuickAddTransaction } from '@/components/QuickAddTransaction';
 import { SubmitButton } from '@/components/SubmitButton';
+import { AlwaysAskDialog } from '@/components/transactions/AlwaysAskDialog';
 import { SplitDialog, type SplitTarget } from '@/components/transactions/SplitDialog';
 import { CheckIcon, TransactionsIcon } from '@/components/icons';
 import { Card, CardBody, CardFooter } from '@/components/ui/Card';
@@ -61,11 +61,7 @@ import {
   acceptGuessAction,
   applyToAllMatchingAction,
   createRulesFromRowAction,
-  previewAlwaysAskAction,
   previewRowRuleAction,
-  sendBackToReviewAction,
-  setAlwaysAskAction,
-  type AlwaysAskState,
   assignToLoanAction,
   bulkAssignToLoanAction,
   bulkCategorizeAction,
@@ -617,10 +613,9 @@ export function TransactionsClient({
   } | null>(null);
   /**
    * Spec 2026-10-21 §2.1. The kebab's "Always ask for rows like this…" dialog: one nullable slot like
-   * the rule editor. `saved` flips once the rule is written and the dialog turns into the
-   * send-back offer.
+   * the rule editor. AlwaysAskDialog owns its own pattern, count and save/send-back states.
    */
-  const [askRow, setAskRow] = useState<{ id: number; pattern: string; matchType: 'contains' | 'exact'; saved: boolean } | null>(null);
+  const [askRow, setAskRow] = useState<{ id: number; merchant: string } | null>(null);
   /**
    * v1.25.0 Lane R item R3. The two new bulk actions' own dialog state -- one nullable slot
    * each, the same "one editor, replacing whichever was open" shape `newLoan`/`noting` already
@@ -685,11 +680,6 @@ export function TransactionsClient({
   // acceptAllState already keep.
   const [rulePreviewState, previewRuleAction] = useActionState(previewRowRuleAction, initial);
   const [ruleCreateState, createRuleAction] = useActionState(createRulesFromRowAction, initial);
-  // Three instances for the same reason as the two above: count, save and send back must never show
-  // each other's error.
-  const [askPreviewState, askPreview] = useActionState(previewAlwaysAskAction, initial);
-  const [askSaveState, askSave] = useActionState<AlwaysAskState, FormData>(setAlwaysAskAction, initial);
-  const [sendBackState, sendBack] = useActionState(sendBackToReviewAction, initial);
   const [splitState, splitAction] = useActionState(saveSplitsAction, initial);
   const [noteState, noteAction] = useActionState(saveNoteAction, initial);
   const [newLoanState, newLoanAction] = useActionState(createLoanFromTransactionAction, initial);
@@ -1024,8 +1014,7 @@ export function TransactionsClient({
     // banner at all, so each one landed its write in silence. They sit with
     // assignState/unassignState: one-off actions whose result is only ever seen here.
     billState.message ?? deleteState.message ?? ruleCreateState.message ??
-    acceptState.message ?? acceptAllState.message ?? rowTransferState.message ?? rowRecurringState.message ??
-    sendBackState.message;
+    acceptState.message ?? acceptAllState.message ?? rowTransferState.message ?? rowRecurringState.message;
   const error =
     newLoanState.error ?? applyAllState.error ??
     attrState.error ?? bulkCatState.error ?? bulkTfrState.error ?? bulkRecurringState.error ??
@@ -1033,8 +1022,7 @@ export function TransactionsClient({
     bulkLoanState.error ?? bulkNoteState.error ??
     lastGroupState?.error ?? confirmGroupState.error ?? recatGroupState.error ?? confirmViewState.error ??
     billState.error ?? deleteState.error ?? ruleCreateState.error ??
-    acceptState.error ?? acceptAllState.error ?? rowTransferState.error ?? rowRecurringState.error ??
-    sendBackState.error;
+    acceptState.error ?? acceptAllState.error ?? rowTransferState.error ?? rowRecurringState.error;
 
   // Review round: unlike renaming/noting/splitting (which close their own form onSubmit right
   // away, before the action even settles), the new-loan editor must stay open on a REFUSAL --
@@ -1076,37 +1064,6 @@ export function TransactionsClient({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ruleCreateState]);
-
-  // Spec 2026-10-21 §2.1. The live count: once on open and after each change, 300 ms after the last
-  // keystroke, and never once the rule is saved.
-  const askId = askRow?.id;
-  const askPattern = askRow?.pattern;
-  const askMatchType = askRow?.matchType;
-  const askSaved = askRow?.saved ?? false;
-  useEffect(() => {
-    if (askId === undefined || askSaved) return;
-    const timer = setTimeout(() => {
-      const fd = new FormData();
-      fd.set('pattern', askPattern ?? '');
-      fd.set('matchType', askMatchType ?? 'contains');
-      startTransition(() => askPreview(fd));
-    }, 300);
-    return () => clearTimeout(timer);
-    // askPreview is stable for the life of the component.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [askId, askPattern, askMatchType, askSaved]);
-
-  // Flips to the send-back offer on the SAVE action's success only; a refusal leaves the text on screen.
-  useEffect(() => {
-    if (askSaveState.ruleId !== undefined && !askSaveState.error) {
-      setAskRow((current) => (current ? { ...current, saved: true } : current));
-    }
-  }, [askSaveState]);
-
-  // Closes once the rows are sent back; the result is read in the page banner.
-  useEffect(() => {
-    if (sendBackState.message && !sendBackState.error) setAskRow(null);
-  }, [sendBackState]);
 
   useEffect(() => {
     if (billState.message && !billState.error) {
@@ -1452,7 +1409,7 @@ export function TransactionsClient({
             where a second rule would do nothing (the rule is managed under Settings). */}
         {row.isTransfer || selfScoped || alwaysAskMerchants.includes(row.normalizedMerchant) ? null : (
           <RowMenuButton
-            onSelect={() => setAskRow({ id: row.id, pattern: alwaysAskPattern(row.normalizedMerchant), matchType: 'contains', saved: false })}
+            onSelect={() => setAskRow({ id: row.id, merchant: row.normalizedMerchant })}
           >
             Always ask for rows like this…
           </RowMenuButton>
@@ -1769,78 +1726,6 @@ export function TransactionsClient({
    * a person who opened this from a $140 insurance charge is nearly always here BECAUSE of the
    * amount. Unticking it writes the merchant-wide rule instead.
    */
-  /** Spec 2026-10-21 §2.1. The dialog behind the row menu's "Always ask for rows like this…". */
-  function alwaysAskDialog() {
-    if (!askRow) return null;
-    const sendBackCount = askSaveState.sendBackCount ?? 0;
-    return (
-      <RowDialog dialogId="always-ask-dialog" key={askRow.id} title="Always ask for rows like this" onClose={() => setAskRow(null)}>
-        {askRow.saved ? (
-          <div className="flex flex-col gap-3">
-            <p className="text-sm text-ink">{askSaveState.message}</p>
-            {sendBackCount > 0 ? (
-              <>
-                <p className="text-sm text-muted">
-                  {sendBackCount === 1 ? '1 of them was filed by a rule or a guess.' : `${sendBackCount} of them were filed by a rule or a guess.`}
-                </p>
-                <form action={sendBack} className="flex flex-col gap-3">
-                  <input type="hidden" name="ruleId" value={askSaveState.ruleId ?? ''} />
-                  <SubmitButton size="sm" className="w-fit">
-                    {`Send ${sendBackCount} back to review`}
-                  </SubmitButton>
-                </form>
-              </>
-            ) : null}
-            <div className="flex gap-2">
-              <button type="button" className={buttonClass('secondary', 'sm')} onClick={() => setAskRow(null)}>
-                Done
-              </button>
-            </div>
-          </div>
-        ) : (
-          <>
-            <p className="text-sm text-muted">No rule or guess will file a matching row. Each one waits in review for you to choose.</p>
-            <FormError message={askSaveState.error ?? askPreviewState.error} />
-            <form action={askSave} className="flex flex-col gap-3" data-testid="always-ask-form">
-              <Field label="Text to match">
-                <input
-                  name="pattern"
-                  value={askRow.pattern}
-                  onChange={(e) => setAskRow({ ...askRow, pattern: e.target.value })}
-                  className={inputClass}
-                />
-              </Field>
-              <Field label="Match">
-                <select
-                  name="matchType"
-                  value={askRow.matchType}
-                  onChange={(e) => setAskRow({ ...askRow, matchType: e.target.value === 'exact' ? 'exact' : 'contains' })}
-                  className={selectClass}
-                >
-                  <option value="contains">Contains</option>
-                  <option value="exact">Exact</option>
-                </select>
-              </Field>
-              {askPreviewState.message ? (
-                <p role="status" className="text-sm text-ink" data-testid="always-ask-count">
-                  {askPreviewState.message}
-                </p>
-              ) : null}
-              <div className="flex gap-2">
-                <button type="button" className={buttonClass('ghost', 'sm')} onClick={() => setAskRow(null)}>
-                  Cancel
-                </button>
-                <SubmitButton size="sm" className="w-fit">
-                  Always ask
-                </SubmitButton>
-              </div>
-            </form>
-          </>
-        )}
-      </RowDialog>
-    );
-  }
-
   function ruleDialog() {
     if (!ruleRow) return null;
     const row = findRow(ruleRow.id);
@@ -3216,7 +3101,7 @@ export function TransactionsClient({
       {noteDialog()}
       {assignBillDialog()}
       {ruleDialog()}
-      {alwaysAskDialog()}
+      {askRow ? <AlwaysAskDialog key={askRow.id} merchant={askRow.merchant} onClose={() => setAskRow(null)} /> : null}
       {newLoanDialog()}
       {applyAllDialog()}
       {/* v1.26.0 Lane 1: same "rendered once here, looked up by row id" reasoning as the four row
