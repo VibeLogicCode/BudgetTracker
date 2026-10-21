@@ -7,6 +7,7 @@ import { renderEmphasis } from '@/components/render-emphasis';
 import { SubmitButton } from '@/components/SubmitButton';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Notice } from '@/components/ui/Notice';
+import { COULD_NOT_REACH_GITHUB } from '@/lib/update/network-error';
 import { markRestartExpected } from '@/lib/update/restart-notice';
 import type { UpdateSeverity } from '@/lib/update/semver';
 import { GITHUB_INTERACTIVE_TIMEOUT_MS, timeoutSeconds } from '@/lib/update/timeouts';
@@ -368,6 +369,11 @@ export function UpdatesClient(props: UpdatesViewProps) {
         </p>
 
         {props.lastCheckError === null ? null : <Notice tone="error">{props.lastCheckError}</Notice>}
+        {props.lastCheckError?.startsWith(COULD_NOT_REACH_GITHUB) ? (
+          <p className="text-sm text-muted">
+            Check that the server can look up api.github.com and make outbound HTTPS connections.
+          </p>
+        ) : null}
         {props.lastApplyError === null ? null : <Notice tone="error">{props.lastApplyError}</Notice>}
         {props.watchtowerError === null ? null : <Notice tone="error">{props.watchtowerError}</Notice>}
         <FormError message={error} />

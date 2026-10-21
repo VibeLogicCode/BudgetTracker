@@ -470,6 +470,19 @@ describe('UP-1: a person waiting on a button waits less than the 04:00 tick', ()
     expect(timeout).toHaveBeenCalledWith(GITHUB_SCHEDULED_TIMEOUT_MS);
   });
 
+  it('a check that cannot reach GitHub stores the reason and still stamps the attempt', async () => {
+    globalThis.fetch = vi.fn(async () => {
+      throw new TypeError('fetch failed', { cause: Object.assign(new Error('x'), { code: 'ENOTFOUND' }) });
+    }) as unknown as typeof fetch;
+
+    const result = await runUpdateCheck({ now: at, manual: true });
+
+    const sentence = "Couldn't reach GitHub: DNS lookup failed (ENOTFOUND).";
+    expect(result.error).toBe(sentence);
+    expect(readUpdateState().lastCheckError).toBe(sentence);
+    expect(readUpdateState().lastCheckedAt).not.toBeNull();
+  });
+
   it('a manual check that times out reports the budget it actually had', async () => {
     globalThis.fetch = vi.fn(async () => {
       throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');

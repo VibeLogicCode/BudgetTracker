@@ -182,6 +182,30 @@ describe('UP-1: an expired budget says so in words a household can act on', () =
   });
 });
 
+describe('an unreachable GitHub says why', () => {
+  it('turns fetch failed plus a cause code into a plain sentence with no address in it', async () => {
+    stub(() => {
+      const cause = Object.assign(new Error('getaddrinfo ENOTFOUND api.github.com 203.0.113.77'), {
+        code: 'ENOTFOUND',
+      });
+      throw new TypeError('fetch failed', { cause });
+    });
+    const error = (await fetchLatestRelease().catch((e: unknown) => e)) as UpdateCheckError;
+    expect(error.message).toBe("Couldn't reach GitHub: DNS lookup failed (ENOTFOUND).");
+    expect(error.message).not.toMatch(/203|113|77/);
+    expect(error.permanent).toBe(false);
+  });
+
+  it('says the request failed for a bare fetch failed', async () => {
+    stub(() => {
+      throw new TypeError('fetch failed');
+    });
+    const error = (await fetchLatestRelease().catch((e: unknown) => e)) as UpdateCheckError;
+    expect(error.message).toBe("Couldn't reach GitHub: the request failed.");
+    expect(error.permanent).toBe(false);
+  });
+});
+
 describe('MUST-4.7: error classification', () => {
   it.each([401, 403, 404, 422])('treats HTTP %i as permanent', async (status) => {
     stub(() => new Response('', { status }));

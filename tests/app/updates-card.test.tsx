@@ -98,6 +98,15 @@ describe('MUST-9.4: the on state', () => {
     expect(screen.getByText('Not now')).toBeTruthy();
   });
 
+  it('adds one line on what to check when GitHub could not be reached', () => {
+    const help = 'Check that the server can look up api.github.com and make outbound HTTPS connections.';
+    render(<UpdatesClient {...base} lastCheckError="Couldn't reach GitHub: DNS lookup failed (ENOTFOUND)." />);
+    expect(screen.getByText(help)).toBeTruthy();
+    cleanup();
+    render(<UpdatesClient {...base} lastCheckError="GitHub returned 500." />);
+    expect(screen.queryByText(help)).toBeNull();
+  });
+
   it('surfaces a check error and an apply error in error notices', () => {
     render(<UpdatesClient {...base} lastCheckError="GitHub returned 500." lastApplyError="Watchtower said no." />);
     expect(screen.getByText('GitHub returned 500.')).toBeTruthy();

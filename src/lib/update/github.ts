@@ -1,6 +1,7 @@
 import { parseChangelog, type ChangelogRelease } from '@/lib/changelog';
 import { truncateText } from '@/lib/notify/render';
 import { GITHUB_API_ORIGIN, GITHUB_CHANGELOG_PATH, GITHUB_RELEASES_PATH, assertGithubUrl } from '@/lib/update/egress';
+import { COULD_NOT_REACH_GITHUB, describeNetworkFailure } from '@/lib/update/network-error';
 import { formatSemver, parseSemver } from '@/lib/update/semver';
 import {
   GITHUB_INTERACTIVE_TIMEOUT_MS,
@@ -113,7 +114,16 @@ function requestFailure(error: unknown, timeoutMs: number): UpdateCheckError {
       permanent: false,
     });
   }
+  const network = describeNetworkFailure(error);
+  if (network !== null) {
+    return new UpdateCheckError(`${COULD_NOT_REACH_GITHUB}: ${network.reason} (${network.code}).`, {
+      permanent: false,
+    });
+  }
   const message = error instanceof Error ? error.message : 'The GitHub request failed.';
+  if (message === 'fetch failed') {
+    return new UpdateCheckError(`${COULD_NOT_REACH_GITHUB}: the request failed.`, { permanent: false });
+  }
   return new UpdateCheckError(message, { permanent: false });
 }
 
