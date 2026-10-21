@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { createContext, useActionState, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useActionState, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { FormError } from '@/components/FormError';
 import { AutoSaveCheckbox, AutoSaveTextInput, useAutoSave } from '@/components/ui/AutoSave';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
@@ -52,7 +52,7 @@ import { categoryTransactionsAction } from './category-transactions-action';
 import { categoryHistoryAction, type CategoryHistoryMonth } from './category-history-action';
 import { buttonClass } from '@/components/ui/Button';
 import { RowMenu, RowMenuButton, RowMenuLink } from '@/components/ui/RowMenu';
-import { RecategorizeDialog } from '@/components/transactions/RecategorizeDialog';
+import { RecategorizeDialog, type RecategorizeRow } from '@/components/transactions/RecategorizeDialog';
 import { AlwaysAskDialog } from '@/components/transactions/AlwaysAskDialog';
 import { SplitDialog, type SplitTarget } from '@/components/transactions/SplitDialog';
 import { categoryOptions } from '@/lib/category-order';
@@ -60,6 +60,7 @@ import { categoryOptions } from '@/lib/category-order';
 // follows '@/' value-import edges, and the Transactions actions module is 'use server'.
 import { saveSplitsAction, setCategoryAction, type ActionState } from '../transactions/actions';
 import type { CategoryPanelResult, CategoryPanelRow } from './category-transactions-action';
+import type { SplitRow } from '@/lib/splits';
 
 const initial: BudgetActionState = {};
 const initialFix: ActionState = {};
@@ -437,7 +438,7 @@ function CategoryHistoryStrip({
  *
  * Spec 2026-10-21 (fix from Budgets) §2.1, §2.2, §2.5: each row has a menu to change its category
  * or split it, through the Transactions actions. The list is fetched again after a change and the
- * outcome is reported above it.
+ * outcome is reported above it. The dialogs themselves live in RowFixHost, above the card list.
  */
 function CategoryTransactionsPanel({
   scope,
@@ -456,20 +457,24 @@ function CategoryTransactionsPanel({
     | { status: 'loading' }
     | { status: 'error'; message: string }
     | { status: 'loaded'; rows: CategoryPanelRow[]; splits: CategoryPanelResult['splits'] };
-  const { categories, canAuthorRules, isAdmin } = useContext(BudgetsPageContext);
-  const options = useMemo(() => categoryOptions(categories), [categories]);
+  const fixes = useContext(RowFixContext);
   const [state, setState] = useState<PanelState>({ status: 'loading' });
   /** Bumped after a change posts, so the list is fetched again without flashing back to Loading. */
   const [version, setVersion] = useState(0);
-  const [recat, setRecat] = useState<CategoryPanelRow | null>(null);
-  const [splitting, setSplitting] = useState<SplitTarget | null>(null);
-  /** The merchant the Always ask dialog is open for, once Always ask was chosen and the category saved. */
-  const [asking, setAsking] = useState<string | null>(null);
-  const [fixState, fixAction] = useActionState(setCategoryAction, initialFix);
-  const [splitState, splitAction] = useActionState(saveSplitsAction, initialFix);
   /** The newest outcome of either dialog, so an old error never outlives a later success. */
   const [notice, setNotice] = useState<ActionState | null>(null);
   const fetchedFor = useRef('');
+  // A refused change reports and does not refetch; only a saved one does.
+  const owner = useMemo<RowFixOwner>(
+    () => ({
+      report: (outcome) => {
+        if (outcome.error || outcome.message) setNotice(outcome);
+        if (outcome.message && !outcome.error) setVersion((v) => v + 1);
+      },
+      refresh: () => setVersion((v) => v + 1),
+    }),
+    [],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -493,16 +498,6 @@ function CategoryTransactionsPanel({
       cancelled = true;
     };
   }, [scope, userId, month, categoryId, version]);
-
-  // A refused change reports and does not refetch; only a saved one does.
-  useEffect(() => {
-    if (fixState.error || fixState.message) setNotice(fixState);
-    if (fixState.message && !fixState.error) setVersion((v) => v + 1);
-  }, [fixState]);
-  useEffect(() => {
-    if (splitState.error || splitState.message) setNotice(splitState);
-    if (splitState.message && !splitState.error) setVersion((v) => v + 1);
-  }, [splitState]);
 
   if (state.status === 'loading') {
     return <p className="px-4 py-3 text-xs text-muted sm:px-5">Loading transactions…</p>;
@@ -547,10 +542,35 @@ function CategoryTransactionsPanel({
               amount={<Money cents={row.amountCents} />}
               trailing={
                 <RowMenu label={`Actions for ${row.merchant} on ${row.date}, ${formatCents(row.amountCents)}`}>
-                  {row.splitId === null ? <RowMenuButton onSelect={() => setRecat(row)}>Change category…</RowMenuButton> : null}
+                  {row.splitId === null ? (
+                    <RowMenuButton
+                      onSelect={() =>
+                        fixes.recategorize(
+                          {
+                            id: row.id,
+                            merchant: row.merchant,
+                            normalizedMerchant: row.normalizedMerchant,
+                            date: row.date,
+                            amountCents: row.amountCents,
+                            categoryId,
+                            source: row.source,
+                            filedBy: row.filedBy,
+                            alwaysAsked: row.alwaysAsked,
+                          },
+                          owner,
+                        )
+                      }
+                    >
+                      Change category…
+                    </RowMenuButton>
+                  ) : null}
                   <RowMenuButton
                     onSelect={() =>
-                      setSplitting({ id: row.id, merchant: row.merchant, date: row.date, amountCents: row.parentAmountCents })
+                      fixes.split(
+                        { id: row.id, merchant: row.merchant, date: row.date, amountCents: row.parentAmountCents },
+                        state.splits[row.id] ?? [],
+                        owner,
+                      )
                     }
                   >
                     {row.splitId === null ? 'Split…' : 'Edit split…'}
@@ -579,50 +599,102 @@ function CategoryTransactionsPanel({
           </Link>
         </div>
       ) : null}
+    </>
+  );
+}
+
+/** Who a card-row dialog reports to: the panel it was opened from. */
+interface RowFixOwner {
+  /** A change was posted: show its outcome, and fetch the rows again when it was saved. */
+  report: (outcome: ActionState) => void;
+  /** Fetch the rows again, keeping the outcome on screen. */
+  refresh: () => void;
+}
+
+/** Opens a card-row dialog in RowFixHost. */
+interface RowFixes {
+  recategorize: (row: RecategorizeRow, owner: RowFixOwner) => void;
+  split: (target: SplitTarget, existing: SplitRow[], owner: RowFixOwner) => void;
+}
+
+const RowFixContext = createContext<RowFixes>({ recategorize: () => {}, split: () => {} });
+
+/**
+ * Spec 2026-10-21 (fix from Budgets) §2.1, §2.2. The card-row dialogs (Change category, Always ask,
+ * Split) and the action states behind them, held above the card list rather than inside the panel
+ * that opens them. A fix can take its card off the page: an archived category's card goes once its
+ * last row moves out, and a parent's "Not in a sub-category" row goes once its direct spend is zero.
+ * The dialog a person is still using stays until they close it. Each outcome goes to the panel that
+ * posted it; once that panel is gone the outcome is dropped, and the dialog is unaffected.
+ */
+function RowFixHost({ children }: { children: ReactNode }) {
+  const { categories, canAuthorRules, isAdmin } = useContext(BudgetsPageContext);
+  const options = useMemo(() => categoryOptions(categories), [categories]);
+  const [recat, setRecat] = useState<{ row: RecategorizeRow; owner: RowFixOwner } | null>(null);
+  const [splitting, setSplitting] = useState<{ target: SplitTarget; existing: SplitRow[]; owner: RowFixOwner } | null>(null);
+  /** Opened once Always ask was chosen and the category posted. */
+  const [asking, setAsking] = useState<{ merchant: string; owner: RowFixOwner } | null>(null);
+  const [fixState, fixAction] = useActionState(setCategoryAction, initialFix);
+  const [splitState, splitAction] = useActionState(saveSplitsAction, initialFix);
+  // Set when a dialog posts, so the result goes to the panel that posted it.
+  const fixOwner = useRef<RowFixOwner | null>(null);
+  const splitOwner = useRef<RowFixOwner | null>(null);
+
+  useEffect(() => {
+    fixOwner.current?.report(fixState);
+  }, [fixState]);
+  useEffect(() => {
+    splitOwner.current?.report(splitState);
+  }, [splitState]);
+
+  const fixes = useMemo<RowFixes>(
+    () => ({
+      recategorize: (row, owner) => setRecat({ row, owner }),
+      split: (target, existing, owner) => setSplitting({ target, existing, owner }),
+    }),
+    [],
+  );
+
+  return (
+    <RowFixContext.Provider value={fixes}>
+      {children}
       {recat ? (
         <RecategorizeDialog
-          key={recat.id}
-          row={{
-            id: recat.id,
-            merchant: recat.merchant,
-            normalizedMerchant: recat.normalizedMerchant,
-            date: recat.date,
-            amountCents: recat.amountCents,
-            categoryId,
-            source: recat.source,
-            filedBy: recat.filedBy,
-            alwaysAsked: recat.alwaysAsked,
-          }}
+          key={recat.row.id}
+          row={recat.row}
           options={options}
-          action={fixAction}
+          action={(formData) => {
+            fixOwner.current = recat.owner;
+            fixAction(formData);
+          }}
           canAuthorRules={canAuthorRules}
           isAdmin={isAdmin}
           onClose={() => setRecat(null)}
-          onAlwaysAsk={() => setAsking(recat.normalizedMerchant)}
+          onAlwaysAsk={() => setAsking({ merchant: recat.row.normalizedMerchant, owner: recat.owner })}
         />
       ) : null}
       {asking !== null ? (
         <AlwaysAskDialog
-          key={asking}
-          merchant={asking}
+          key={asking.merchant}
+          merchant={asking.merchant}
           onClose={() => setAsking(null)}
-          onSent={(message) => {
-            setNotice({ message });
-            setVersion((v) => v + 1);
-          }}
+          onSent={(message) => asking.owner.report({ message })}
         />
       ) : null}
       {splitting ? (
         <SplitDialog
-          key={splitting.id}
-          target={splitting}
-          existing={state.splits[splitting.id] ?? []}
+          key={splitting.target.id}
+          target={splitting.target}
+          existing={splitting.existing}
           options={options}
-          action={splitAction}
+          action={(formData) => {
+            splitOwner.current = splitting.owner;
+            splitAction(formData);
+          }}
           onClose={() => setSplitting(null)}
         />
       ) : null}
-    </>
+    </RowFixContext.Provider>
   );
 }
 
@@ -1735,6 +1807,7 @@ export function BudgetsClient({
 
   return (
     <BudgetsPageContext.Provider value={{ categories, canAuthorRules: household !== null, isAdmin: currentUserIsAdmin }}>
+    <RowFixHost>
     <div className="flex flex-col gap-4 sm:gap-5">
       {/* Ruling U1 (v1.18.0): no eyebrow. MonthNav in `actions` already names the month, in the
           control that changes it -- an eyebrow beside it made the header state one fact twice,
@@ -1970,6 +2043,7 @@ export function BudgetsClient({
         change them again.
       </p>
     </div>
+    </RowFixHost>
     </BudgetsPageContext.Provider>
   );
 }

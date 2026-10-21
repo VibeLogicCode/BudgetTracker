@@ -1508,6 +1508,37 @@ describe('BudgetsClient — fixing a row from the card', () => {
     expect(screen.getByRole('menuitem', { name: 'More in Transactions' }).getAttribute('href')).toBe('/transactions?id=77&via=budgets');
   });
 
+  /** v1.57.1: a fix can take its card off the page; the dialog the person is using stays. */
+  it('a card whose rows all move away keeps its open dialog until it is closed', async () => {
+    const { categoryTransactionsAction } = await import('@/app/(app)/budgets/category-transactions-action');
+    vi.mocked(categoryTransactionsAction).mockClear();
+    vi.mocked(categoryTransactionsAction).mockResolvedValueOnce({ rows: [panelRow()], splits: {} });
+    const props = {
+      month: '2026-03',
+      currentUserId: 1,
+      householdTotals: { budgetedLimitCents: 20000, budgetedSpentCents: 5000, totalSpentCents: 5000 },
+      personal: [],
+      predictions: null,
+      savingsProgress: null,
+      categories: CATEGORIES,
+    };
+    const archived = makeRow({ isArchived: true, limitCents: null, baseLimitCents: null, pct: null, remainingCents: null, spentCents: 4217 });
+    const phone = makeRow({ categoryId: 2, categoryName: 'Phone', spentCents: 0, remainingCents: 20000, pct: 0 });
+    const { rerender } = render(<BudgetsClient {...props} household={[archived, phone]} />);
+    fireEvent.click(within(document.getElementById('budget-card-household-h-1')!).getByRole('button', { name: 'View transactions' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
+    fireEvent.click(screen.getByLabelText(/Always ask about PHONEMART 884/));
+    fireEvent.click(screen.getByRole('button', { name: 'Save category' }));
+    expect(await screen.findByRole('dialog', { name: /^Always ask for rows like this/ })).toBeTruthy();
+    // The move revalidates Budgets: the archived card, now with no spend and no limit, leaves the page.
+    rerender(<BudgetsClient {...props} household={[phone]} />);
+    expect(document.getElementById('budget-card-household-h-1')).toBeNull();
+    const dialog = screen.getByRole('dialog', { name: /^Always ask for rows like this/ });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog', { name: /^Always ask for rows like this/ })).toBeNull();
+  });
+
   it('a card named by the URL hash opens itself on mount', async () => {
     window.location.hash = '#budget-card-household-h-1';
     const { categoryTransactionsAction } = await import('@/app/(app)/budgets/category-transactions-action');
