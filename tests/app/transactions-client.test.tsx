@@ -2569,6 +2569,25 @@ describe('Task 3c: rows fold below sm only when their own filter is at default',
     expect(container.querySelector('form[method="get"] input[type="hidden"][name="spending"]')?.getAttribute('value')).toBe('1');
   });
 
+  // v1.56.1 (review M1): a search typed after arriving narrows the view it arrived in.
+  it('the filter form starts at the filters already in the URL', () => {
+    const { container } = render(
+      <TransactionsClient
+        page={pageWithRow()}
+        accounts={[]}
+        categories={categories}
+        people={[{ id: 7, name: 'Sam' }]}
+        today="2026-03-02"
+        currentQuery="category=uncategorized&person=7&q=bakery&uncat=1&spending=1"
+      />,
+    );
+    const form = container.querySelector('form[method="get"]') as HTMLFormElement;
+    const data = new FormData(form);
+    expect({ category: data.get('category'), person: data.get('person'), q: data.get('q'), uncat: data.get('uncat'), spending: data.get('spending') }).toEqual({
+      category: 'uncategorized', person: '7', q: 'bakery', uncat: '1', spending: '1',
+    });
+  });
+
   it('the funnel badge counts a filter hidden behind a folded row (?group=category)', () => {
     window.history.pushState({}, '', '/transactions?group=category');
     render(

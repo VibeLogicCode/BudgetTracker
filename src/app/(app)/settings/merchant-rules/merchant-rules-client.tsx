@@ -1157,8 +1157,9 @@ export function MerchantRulesClient({
                     <td className="tabnum text-right text-xs text-muted cell-stack-amount" data-label="Affects">
                       {/* v1.56.1 (review M-4): an Always ask rule's figure is the dialog's "Matches N"
                           (alwaysAskMatchCount), overlap with another Always ask rule included, and
-                          says so in the dialog's words. */}
-                      {rule.ruleKind === 'always_ask' ? 'Matches ' : ''}
+                          says so in the dialog's words. A rule that is off matches nothing, so it
+                          reads "0 transactions" like any other disabled rule, not "Matches 0". */}
+                      {rule.ruleKind === 'always_ask' && !disabled ? 'Matches ' : ''}
                       {impact} transaction{impact === 1 ? '' : 's'}
                     </td>
                     <td className="text-right cell-stack-actions" data-label="">

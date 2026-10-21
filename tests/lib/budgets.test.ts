@@ -376,10 +376,15 @@ describe('the Not categorized yet card and its Categorize link list the same row
     expect(card).toEqual({ totalCents: 31500 + 1875, count: 2 });
     const listed = destination(alice, HOUSEHOLD_VIEWER);
     expect(listed.total).toBe(card.count);
+    expect(-listed.outCents).toBe(card.totalCents);
     expect(listed.rows.map((row) => row.id)).toContain(repayment);
 
     const self: Viewer = { id: alice, role: 'member', visibility: 'self' };
-    expect(uncategorizedSpend(MONTH, { scope: 'personal', attributedUserId: alice }, self).count).toBe(destination(alice, self).total);
+    const selfCard = uncategorizedSpend(MONTH, { scope: 'personal', attributedUserId: alice }, self);
+    const selfListed = destination(alice, self);
+    expect(selfCard).toEqual(card);
+    expect({ count: selfListed.total, totalCents: -selfListed.outCents }).toEqual(selfCard);
+    expect(selfListed.rows.map((row) => row.id).sort((a, b) => a - b)).toEqual(listed.rows.map((row) => row.id).sort((a, b) => a - b));
   });
 });
 

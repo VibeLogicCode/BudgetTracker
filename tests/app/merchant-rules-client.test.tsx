@@ -1285,6 +1285,17 @@ describe('MerchantRulesClient — Always ask', () => {
     expect(cells).toEqual(['Matches 3 transactions', '2 transactions']);
   });
 
+  it('a disabled Always ask rule reads 0 transactions, not "Matches 0"', () => {
+    render(
+      <MerchantRulesClient
+        {...baseProps({
+          rows: [rule({ id: 4, pattern: 'E-TRANSFER', matchType: 'contains', ruleKind: 'always_ask', categoryId: null, disabledAt: '2026-09-01T00:00:00.000Z' })],
+        })}
+      />,
+    );
+    expect(document.querySelector('td[data-label="Affects"]')?.textContent).toBe('0 transactions');
+  });
+
   it('says what deleting it does', () => {
     render(<MerchantRulesClient {...baseProps({ rows: [rule({ pattern: 'E-TRANSFER', matchType: 'contains', ruleKind: 'always_ask', categoryId: null })] })} />);
     openRowMenu('Actions for E-TRANSFER');

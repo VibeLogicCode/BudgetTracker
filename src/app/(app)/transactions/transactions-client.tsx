@@ -952,6 +952,22 @@ export function TransactionsClient({
   /** v1.56.1. `?spending=1`, which Budgets' Categorize link sets: a clearing chip like the import
    *  batch's, for the same reason -- a person arrives inside it without clicking a control here. */
   const spendingOnly = new URLSearchParams(currentQuery).get('spending') === '1';
+  /**
+   * v1.56.1 (review M1). The GET form's own fields start at what the URL already filters by, so
+   * typing a search after arriving from a link (Budgets' Categorize: `category=uncategorized` and a
+   * person) narrows that view instead of submitting "All" over it. Read from `currentQuery`, the
+   * server's own querystring, like every other filter-preserving value here.
+   */
+  const formDefaults = (() => {
+    const params = new URLSearchParams(currentQuery);
+    return {
+      account: params.get('account') ?? '',
+      category: params.get('category') ?? '',
+      person: params.get('person') ?? '',
+      q: params.get('q') ?? '',
+      uncat: params.get('uncat') === '1',
+    };
+  })();
 
   // Fix round (reported, phone screenshot): six stacked control rows sat above the data at
   // every width, because ruling S7's disclosure (`filtersOpen`, above) only ever gated the four
@@ -3463,6 +3479,7 @@ export function TransactionsClient({
                   rather than a second field beside it. */}
               <input
                 name="q"
+                defaultValue={formDefaults.q}
                 placeholder="Search by merchant name, description, or an amount"
                 aria-label="Search by merchant name, description, or an amount"
                 className={`${inputClass} min-h-11 min-w-[12rem] flex-1 sm:min-h-0`}
@@ -3729,7 +3746,7 @@ export function TransactionsClient({
               className={`${filtersOpen ? 'flex' : 'hidden'} flex-wrap items-end gap-3`}
             >
               <Field label="Account">
-                <select name="account" className={selectClass}>
+                <select name="account" defaultValue={formDefaults.account} className={selectClass}>
                   <option value="">All</option>
                   {accounts.map((a) => (
                     <option key={a.id} value={a.id}>{a.name}</option>
@@ -3737,7 +3754,7 @@ export function TransactionsClient({
                 </select>
               </Field>
               <Field label="Category">
-                <select name="category" className={selectClass}>
+                <select name="category" defaultValue={formDefaults.category} className={selectClass}>
                   <option value="">All</option>
                   <option value="uncategorized">Uncategorized</option>
                   {groupedCategories.map((opt) => (
@@ -3750,7 +3767,7 @@ export function TransactionsClient({
                   somebody else is not rendered at all rather than shown-but-ineffective. */}
               {selfScoped ? null : (
                 <Field label="Person">
-                  <select name="person" className={selectClass}>
+                  <select name="person" defaultValue={formDefaults.person} className={selectClass}>
                     <option value="">Everyone</option>
                     <option value="unattributed">Household/unattributed</option>
                     {people.map((p) => (
@@ -3768,7 +3785,7 @@ export function TransactionsClient({
               />
               <div className="flex flex-wrap items-center gap-4 py-2">
                 <label className="flex items-center gap-2 text-sm text-muted">
-                  <input type="checkbox" name="uncat" value="1" className="accent-accent" /> Uncategorized only
+                  <input type="checkbox" name="uncat" value="1" defaultChecked={formDefaults.uncat} className="accent-accent" /> Uncategorized only
                 </label>
                 {/* v1.24.0 Lane A item 2: the "Hide transfers" checkbox that used to live here is
                     gone -- it's the always-visible transfer-view control above the search row now
