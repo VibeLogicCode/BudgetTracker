@@ -21,6 +21,18 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.56.1] - 2026-10-21
+
+### Fixed
+
+- Budgets: Categorize on the Not categorized yet card now lists exactly the transactions the card counts
+  for that month, including a loan payment that still has no category, which the review queue left out.
+- Settings → Merchant rules: an Always ask rule's menu can send matching rows back to review at any time,
+  not only from the dialog when the rule is saved. Only rows a rule or a guess filed go back; rows you
+  categorized yourself and split rows stay as they are.
+- An Always ask rule's figure on the Rules page reads "Matches N transactions" and agrees with the number
+  the dialog shows, even when two Always ask rules overlap.
+
 ## [1.56.0] - 2026-10-21
 
 ### Added
