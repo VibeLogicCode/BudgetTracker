@@ -21,6 +21,8 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.57.0] - 2026-10-21
+
 ### Added
 
 - **Fix a row from the Budgets card.** Each row in a card's transaction list has a menu: change its
