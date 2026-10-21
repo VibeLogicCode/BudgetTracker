@@ -20,9 +20,11 @@ import {
   listRules,
   matchRule,
   MERCHANT_MARK_KINDS,
+  patternMatches,
   ruleCategoryArchived,
   setRuleDisabledFlag,
   upsertRuleFromCorrection,
+  type AlwaysAskMatchType,
   type MatchType,
   type MerchantRuleRecord,
   type RuleKind,
@@ -1922,6 +1924,68 @@ export function applyCategoryToMatching(input: {
     });
   }
   return { ok: true, count: ids.length };
+}
+
+/**
+ * Spec 2026-10-21 §2.1, and decision 8 of that plan: the Always ask dialog's live count and its
+ * Send back to review. The count is every non-transfer row the pattern matches (the rows the
+ * rule's Affects column will show), the pattern trimmed and uppercased the way
+ * upsertRuleFromCorrection stores it. Send back offers only the rows REVIEW_WHERE would show once
+ * cleared: filed by a rule or a guess, with a category, not a transfer, no split parts and no loan
+ * link, so a person's own decision never goes back. The two `not exists` clauses stay inside
+ * `.where()`, never the select list (transactionHasSplits' docblock says why).
+ */
+export function alwaysAskMatchCount(input: { pattern: string; matchType: AlwaysAskMatchType }): number {
+  const pattern = input.pattern.trim().toUpperCase();
+  if (pattern.length === 0) return 0;
+  const groups = getDb()
+    .select({ merchant: transactions.normalizedMerchant, count: sql<number>`count(*)` })
+    .from(transactions)
+    .where(eq(transactions.isTransfer, false))
+    .groupBy(transactions.normalizedMerchant)
+    .all();
+  let total = 0;
+  for (const group of groups) {
+    if (patternMatches(pattern, input.matchType, group.merchant)) total += group.count;
+  }
+  return total;
+}
+
+export function alwaysAskSendBackIds(ruleId: number): number[] {
+  const rule = listRules('always_ask').find((candidate) => candidate.id === ruleId);
+  if (!rule || rule.disabledAt !== null) return [];
+  return getDb()
+    .select({ id: transactions.id, merchant: transactions.normalizedMerchant })
+    .from(transactions)
+    .where(
+      and(
+        inArray(transactions.categorizationSource, ['rule', 'bayes']),
+        isNotNull(transactions.categoryId),
+        eq(transactions.isTransfer, false),
+        sql`not exists (select 1 from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id})`,
+        sql`not exists (select 1 from ${loanPayments} where ${loanPayments.txnId} = ${transactions.id})`,
+      ),
+    )
+    .orderBy(asc(transactions.id))
+    .all()
+    .filter((row) => patternMatches(rule.pattern, rule.matchType, row.merchant))
+    .map((row) => row.id);
+}
+
+export function sendAlwaysAskRowsToReview(input: { ruleId: number; at?: Date }): { sent: number } {
+  const ids = alwaysAskSendBackIds(input.ruleId);
+  if (ids.length === 0) return { sent: 0 };
+  const updatedAt = nowIso(input.at);
+  // No untrain: a rule-filed row and a guess on an Always ask merchant were never trained.
+  getDb().transaction((tx) => {
+    for (let offset = 0; offset < ids.length; offset += ID_CHUNK) {
+      tx.update(transactions)
+        .set({ categoryId: null, categorizationSource: 'none', confidence: null, updatedAt })
+        .where(inArray(transactions.id, ids.slice(offset, offset + ID_CHUNK)))
+        .run();
+    }
+  });
+  return { sent: ids.length };
 }
 
 /**

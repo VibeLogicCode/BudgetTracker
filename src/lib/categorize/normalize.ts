@@ -153,6 +153,20 @@ export function normalizeMerchant(raw: string): string {
   return result.length > 0 ? result : base;
 }
 
+/**
+ * Spec 2026-10-21 §2.1. The text the Always ask dialog starts from: the stored merchant without a
+ * trailing masked code (two or more asterisks and the letters or digits after them), which often
+ * names the recipient and would make the rule match one person's rows only. normalizeMerchant
+ * keeps such a code (its reference-token rule needs five digits), so this runs on the stored text.
+ * A single asterisk is part of many merchant names and is left alone.
+ */
+export function alwaysAskPattern(normalizedMerchant: string): string {
+  let text = normalizedMerchant;
+  while (/\s*\*{2,}[0-9A-Z]*$/.test(text)) text = text.replace(/\s*\*{2,}[0-9A-Z]*$/, '');
+  text = text.trim();
+  return text.length > 0 ? text : normalizedMerchant;
+}
+
 /** Multinomial Bayes needs the token multiset, so duplicates are preserved. */
 export function tokenize(normalizedMerchant: string): string[] {
   return normalizedMerchant

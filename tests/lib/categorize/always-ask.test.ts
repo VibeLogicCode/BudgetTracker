@@ -2,12 +2,16 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
 import {
+  alwaysAskMatchCount,
+  alwaysAskSendBackIds,
   applyCategoryToMatching,
   buildContext,
   categorizeTransaction,
   confirmCategory,
   createRulesFromRow,
+  reviewQueueIds,
   runEngine,
+  sendAlwaysAskRowsToReview,
 } from '@/lib/categorize/engine';
 import {
   listRules,
@@ -64,6 +68,33 @@ function setup() {
       category_id: number | null;
       categorization_source: string;
     };
+  const file = (id: number, source: string, categoryId: number) =>
+    current!.sqlite
+      .prepare('update transactions set categorization_source = ?, category_id = ?, confidence = ? where id = ?')
+      .run(source, categoryId, source === 'bayes' ? 3 : null, id);
+  const transfer = (id: number) => current!.sqlite.prepare('update transactions set is_transfer = 1 where id = ?').run(id);
+  const split = (id: number, categoryId: number) => {
+    const insert = current!.sqlite.prepare(
+      'insert into transaction_splits (txn_id, category_id, amount_cents, created_at) values (?, ?, ?, ?)',
+    );
+    insert.run(id, categoryId, -600, nowIso());
+    insert.run(id, categoryId, -400, nowIso());
+  };
+  const loanLink = (id: number) => {
+    const now = nowIso();
+    const typeId = current!.db.get<{ id: number }>(sql`
+      insert into warranty_item_types (name, is_subscription, kind, created_at)
+      values (${'Loan type'}, 0, 'loan', ${now})
+      returning id`).id;
+    const itemId = current!.db.get<{ id: number }>(sql`
+      insert into warranty_items
+        (name, purchase_date, is_lifetime, owner_user_id, type_id, loan_direction, current_balance_cents, balance_updated_at, created_at, updated_at)
+      values (${'Test loan'}, '2026-01-01', 0, ${userId}, ${typeId}, 'owed', ${5_000_000}, ${now}, ${now}, ${now})
+      returning id`).id;
+    current!.sqlite
+      .prepare('insert into loan_payments (txn_id, item_id, amount_cents, applied_cents, source, created_at) values (?, ?, ?, ?, ?, ?)')
+      .run(id, itemId, 1000, 1000, 'manual', now);
+  };
   return {
     db: current.db,
     sqlite: current.sqlite,
@@ -72,6 +103,10 @@ function setup() {
     rule,
     ask,
     read,
+    file,
+    transfer,
+    split,
+    loanLink,
     coffee: categoryIdByName(current.db, 'Coffee'),
     groceries: categoryIdByName(current.db, 'Groceries'),
   };
@@ -176,5 +211,74 @@ describe('an Always ask row teaches nothing', () => {
     confirmCategory({ transactionId: id, categoryId: groceries, userId, createRule: true, actorRole: 'admin' });
     expect(listRules('category').map((r) => r.pattern)).toEqual(['MAPLE GROCER']);
     expect(bayesRows()).toBeGreaterThan(0);
+  });
+});
+
+/** Spec 2026-10-21 §2.1. The dialog's live count: every non-transfer row the pattern matches. */
+describe('alwaysAskMatchCount', () => {
+  it('counts the non-transfer rows the pattern matches, under either type', () => {
+    const { add, transfer } = setup();
+    add('E-TRANSFER ***AB1');
+    add('E-TRANSFER ***QX7');
+    transfer(add('E-TRANSFER ***QX7'));
+    add('TIM HORTONS');
+    expect(alwaysAskMatchCount({ pattern: ' e-transfer ', matchType: 'contains' })).toBe(2);
+    expect(alwaysAskMatchCount({ pattern: 'E-TRANSFER ***QX7', matchType: 'exact' })).toBe(1);
+    expect(alwaysAskMatchCount({ pattern: '   ', matchType: 'contains' })).toBe(0);
+  });
+});
+
+/** Spec 2026-10-21 §2.1. Only what a rule or a guess filed goes back; a person's decision never does. */
+describe('Send back to review', () => {
+  it('offers back rows a rule or a guess filed, and never a hand-set, split, transfer or loan-linked row', () => {
+    const { add, ask, file, transfer, split, loanLink, groceries, coffee } = setup();
+    const byRule = add('E-TRANSFER ***LL9');
+    const byGuess = add('E-TRANSFER ***AB1');
+    const byHand = add('E-TRANSFER ***AB1');
+    const splitRow = add('E-TRANSFER ***QX7');
+    const transferRow = add('E-TRANSFER ***QX7');
+    const linked = add('E-TRANSFER ***LL9');
+    const otherMerchant = add('MAPLE GROCER');
+    file(byRule, 'rule', groceries);
+    file(byGuess, 'bayes', groceries);
+    file(byHand, 'manual', coffee);
+    file(splitRow, 'rule', groceries);
+    split(splitRow, groceries);
+    file(transferRow, 'rule', groceries);
+    transfer(transferRow);
+    file(linked, 'rule', groceries);
+    loanLink(linked);
+    file(otherMerchant, 'rule', groceries);
+    const ruleId = ask('E-TRANSFER', 'contains');
+    expect(alwaysAskSendBackIds(ruleId)).toEqual([byRule, byGuess]);
+  });
+
+  it('clears exactly those rows, so they wait in the Uncategorized tab', () => {
+    const { add, ask, file, read, groceries, coffee } = setup();
+    const byRule = add('E-TRANSFER ***LL9');
+    const byGuess = add('E-TRANSFER ***AB1');
+    const byHand = add('E-TRANSFER ***AB1');
+    file(byRule, 'rule', groceries);
+    file(byGuess, 'bayes', groceries);
+    file(byHand, 'manual', coffee);
+    const ruleId = ask('E-TRANSFER', 'contains');
+    expect(sendAlwaysAskRowsToReview({ ruleId })).toEqual({ sent: 2 });
+    expect(read(byRule)).toEqual({ category_id: null, categorization_source: 'none' });
+    expect(read(byGuess)).toEqual({ category_id: null, categorization_source: 'none' });
+    expect(read(byHand)).toEqual({ category_id: coffee, categorization_source: 'manual' });
+    expect(reviewQueueIds()).toEqual(expect.arrayContaining([byRule, byGuess]));
+    expect(sendAlwaysAskRowsToReview({ ruleId })).toEqual({ sent: 0 });
+  });
+
+  it('sends nothing for a disabled rule, a missing one, or a rule of another kind', () => {
+    const { add, ask, file, rule, groceries } = setup();
+    file(add('E-TRANSFER ***LL9'), 'rule', groceries);
+    const ruleId = ask('E-TRANSFER', 'contains');
+    const categoryRuleId = rule('E-TRANSFER', 'contains', groceries);
+    expect(alwaysAskSendBackIds(categoryRuleId)).toEqual([]);
+    expect(alwaysAskSendBackIds(999_999)).toEqual([]);
+    setRuleDisabledFlag(ruleId, true);
+    expect(alwaysAskSendBackIds(ruleId)).toEqual([]);
+    expect(sendAlwaysAskRowsToReview({ ruleId })).toEqual({ sent: 0 });
   });
 });

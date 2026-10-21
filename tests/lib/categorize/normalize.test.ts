@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { CHANNEL_PREFIXES, PROVINCE_CODES, normalizeMerchant, tokenize } from '@/lib/categorize/normalize';
+import { CHANNEL_PREFIXES, PROVINCE_CODES, alwaysAskPattern, normalizeMerchant, tokenize } from '@/lib/categorize/normalize';
 import { dedupDescription, dedupHash } from '@/lib/import/dedup';
 
 describe('normalizeMerchant — basics', () => {
@@ -164,5 +164,26 @@ describe('tokenize', () => {
 
   it('returns an empty array for empty input', () => {
     expect(tokenize('')).toEqual([]);
+  });
+});
+
+/** Spec 2026-10-21 §2.1. The Always ask dialog's starting text: the merchant without its masked code. */
+describe('alwaysAskPattern', () => {
+  it('drops a trailing masked code, so every recipient of the same kind of payment matches', () => {
+    expect(alwaysAskPattern('E-TRANSFER ***AB1')).toBe('E-TRANSFER');
+    expect(alwaysAskPattern('INTERAC E-TRANSFER ***7QK')).toBe('INTERAC E-TRANSFER');
+    expect(alwaysAskPattern('E-TRANSFER***QX7')).toBe('E-TRANSFER');
+    expect(alwaysAskPattern('E-TRANSFER ***')).toBe('E-TRANSFER');
+  });
+
+  it('works on what the normaliser stores, which keeps the code', () => {
+    expect(normalizeMerchant('E-TRANSFER ***AB1')).toBe('E-TRANSFER ***AB1');
+    expect(alwaysAskPattern(normalizeMerchant('E-TRANSFER ***AB1'))).toBe('E-TRANSFER');
+  });
+
+  it('leaves a merchant with no masked code alone, and never empties one that is only a code', () => {
+    expect(alwaysAskPattern('TIM HORTONS')).toBe('TIM HORTONS');
+    expect(alwaysAskPattern('UBER *TRIP')).toBe('UBER *TRIP');
+    expect(alwaysAskPattern('***AB1')).toBe('***AB1');
   });
 });
