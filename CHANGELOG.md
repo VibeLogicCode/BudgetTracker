@@ -58,6 +58,7 @@ All notable changes to Budget Tracker are recorded here.
 - **Delete rule and clear works on a rule whose category is archived.** It clears the transactions that rule filed, and another rule on the same merchant is no longer credited with them.
 - **A rule on an archived category can be edited.** The form shows its category marked archived, and saves once you pick a live one.
 - **The category picker behaves inside dialogs and under the page header.** Escape closes only its list, a right or middle click no longer picks a category, and its list no longer covers the page header.
+- **The import summary's "needs review" count matches the review queue**, no longer counting a payment the import linked to a loan.
 
 ## [1.55.4] - 2026-10-20
 

@@ -1,6 +1,6 @@
 import { acceptsTransactions, getAccount } from '@/lib/accounts';
 import { reconcileAccount, type Discrepancy } from '@/lib/balance-reconcile';
-import { runEngine, type EngineResult } from '@/lib/categorize/engine';
+import { REVIEW_WHERE, runEngine, type EngineResult } from '@/lib/categorize/engine';
 import { applyPaymentMatchers } from '@/lib/loans';
 import { isSimplefinManaged } from '@/lib/simplefin/connection';
 import { commitImport } from './commit';
@@ -12,7 +12,7 @@ import { forkProfileIfBuiltin, setAccountProfile } from './presets';
 import { deleteStagedFile, readStagedFile } from './staging';
 import { getDb } from '@/db/client';
 import { transactions } from '@/db/schema';
-import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 
 export interface CommitFlowResult {
   importId: number;
@@ -172,25 +172,8 @@ export function commitStagedImport(input: {
     deleteStagedFile(input.stagingId);
   }
 
-  let needsReview = 0;
-  if (committed.insertedTransactionIds.length > 0) {
-    const row = getDb()
-      .select({ c: sql<number>`count(*)` })
-      .from(transactions)
-      .where(
-        and(
-          inArray(transactions.id, committed.insertedTransactionIds),
-          eq(transactions.isTransfer, false),
-          or(isNull(transactions.categoryId), eq(transactions.categorizationSource, 'bayes')),
-        ),
-      )
-      .get();
-    needsReview = row?.c ?? 0;
-  }
-
-  // v1.26.0 Lane 2 item 4. A second small count over the same id list rather than a CASE folded
-  // into the one above: that query is the definition of `needsReview` and has its own history, and
-  // this question ("which rows did a RULE claim") is the complement of it, not a variation on it.
+  // v1.26.0 Lane 2 item 4. A small count over the same id list as the needs-review count below,
+  // kept separate: this question ("which rows did a RULE claim") is the complement of it.
   //
   // NOTHING IS WRITTEN TO imports.rules_reviewed_at HERE, on purpose. A fresh import must be
   // UNREVIEWED, and the column is nullable with no default precisely so that is the state a new
@@ -215,6 +198,19 @@ export function commitStagedImport(input: {
   // type changing for every other call site.
   const loanMatchReport = { failed: false };
   const loanLinksCreated = applyPaymentMatchers(committed.insertedTransactionIds, undefined, loanMatchReport);
+
+  // Counted AFTER the matcher, with the review queue's own definition (REVIEW_WHERE), so the summary
+  // agrees with the queue: a row the matcher just linked to a loan is not in the queue, split and
+  // transfer rows are not either.
+  let needsReview = 0;
+  if (committed.insertedTransactionIds.length > 0) {
+    const row = getDb()
+      .select({ c: sql<number>`count(*)` })
+      .from(transactions)
+      .where(and(inArray(transactions.id, committed.insertedTransactionIds), REVIEW_WHERE))
+      .get();
+    needsReview = row?.c ?? 0;
+  }
 
   return {
     importId: committed.importId,

@@ -47,7 +47,6 @@ const ALLOWED_BARE_TRANSFER_FILTERS: Record<string, string> = {
   'src/lib/tax.ts': "taxYears() asks whether a year has any data at all, not what was spent in it",
   'src/lib/predict/history.ts': 'firstDataMonth() is the same kind of has-any-data probe',
   'src/lib/categorize/engine.ts': 'ELIGIBLE/REVIEW_WHERE gate the review queue and auto-categorisation eligibility, not a money total',
-  'src/lib/import/flow.ts': 'the import flow reads whether a row is a transfer to route it, not to sum spend',
   'src/lib/loans.ts': 'a loan/warranty read keyed on transfer status, not a spend or income aggregate',
   'src/lib/transactions.ts': 'listTransactions\' transferView filter and duplicate-merchant lookup are row filters/lookups, not money aggregates',
 };
