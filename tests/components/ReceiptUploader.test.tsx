@@ -272,8 +272,109 @@ describe('ReceiptUploader', () => {
 
     await pickAndPoll(container, fetchMock);
 
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Try again with bill.pdf' })).toBeTruthy();
     expect(screen.getByText(/No text was found on this image/)).toBeTruthy();
+  });
+
+  it('names Try again after its file', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(stageResponse({ originalFilename: 'bill.pdf', mime: 'application/pdf' }))
+      .mockResolvedValue({ ok: false, json: async () => ({}) } as Response);
+    vi.stubGlobal('fetch', fetchMock);
+    const { container } = render(<ReceiptUploader onStagedChange={vi.fn()} />);
+
+    await pickAndPoll(container, fetchMock);
+
+    expect(screen.getByRole('button', { name: 'Try again with bill.pdf' })).toBeTruthy();
+  });
+
+  /**
+   * A stage POST that answers at once and a poll that never does, with the poll's signal captured.
+   * `release` settles the held poll the way a server finally answering would.
+   */
+  function holdPoll(mime = 'application/pdf', filename = 'bill.pdf') {
+    const signals: AbortSignal[] = [];
+    let release!: (response: Response) => void;
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith('/stage')) return Promise.resolve(stageResponse({ originalFilename: filename, mime }));
+      if (init?.signal) signals.push(init.signal);
+      return new Promise<Response>((resolve) => {
+        release = resolve;
+      });
+    });
+    return { fetchMock, signals, release: (response: Response) => release(response) };
+  }
+
+  /** The poll calls so far: every fetch but the stage POST. */
+  const pollCalls = (fetchMock: ReturnType<typeof vi.fn>) =>
+    fetchMock.mock.calls.filter((call) => !String(call[0]).endsWith('/stage'));
+
+  it('stops polling and aborts the in-flight poll when a tile is removed', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { fetchMock, signals } = holdPoll();
+    vi.stubGlobal('fetch', fetchMock);
+    const { container } = render(<ReceiptUploader onStagedChange={vi.fn()} />);
+    await pickAndPoll(container, fetchMock);
+    expect(pollCalls(fetchMock)).toHaveLength(1);
+    expect(signals[0].aborted).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove bill.pdf' }));
+
+    expect(signals[0].aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 3);
+    expect(pollCalls(fetchMock)).toHaveLength(1);
+  });
+
+  it('does not fill the form from a receipt removed while it was being read', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { fetchMock, release } = holdPoll();
+    vi.stubGlobal('fetch', fetchMock);
+    const onSuggestions = vi.fn();
+    const { container } = render(<ReceiptUploader onStagedChange={vi.fn()} onSuggestions={onSuggestions} />);
+    await pickAndPoll(container, fetchMock);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove bill.pdf' }));
+    release({ ok: true, json: async () => ({ status: 'done', suggestions: { vendor: 'MAPLE GROCER' } }) } as Response);
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+
+    expect(onSuggestions).not.toHaveBeenCalled();
+    expect(screen.queryByText(READING_MESSAGE)).toBeNull();
+  });
+
+  it('aborts the poll and revokes the preview on unmount', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { fetchMock, signals } = holdPoll('image/jpeg', 'receipt.jpg');
+    vi.stubGlobal('fetch', fetchMock);
+    const { container, unmount } = render(<ReceiptUploader onStagedChange={vi.fn()} />);
+    fireEvent.change(container.querySelector('input[type="file"]')!, {
+      target: { files: [new File(['x'], 'receipt.jpg', { type: 'image/jpeg' })] },
+    });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+    expect(signals).toHaveLength(1);
+
+    unmount();
+
+    expect(signals[0].aborted).toBe(true);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:mock-preview');
+  });
+
+  it('keeps one polite live region for the reading and scanner lines', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { fetchMock } = holdPoll();
+    vi.stubGlobal('fetch', fetchMock);
+    const { container } = render(<ReceiptUploader onStagedChange={vi.fn()} />);
+    const region = screen.getByRole('status');
+    expect(region.getAttribute('aria-live')).toBe('polite');
+    expect(region.textContent).toBe('');
+
+    fireEvent.change(container.querySelector('input[type="file"]')!, {
+      target: { files: [new File(['x'], 'bill.pdf', { type: 'application/pdf' })] },
+    });
+    await vi.waitFor(() => expect(screen.getByRole('status').textContent).toContain(READING_MESSAGE));
+    expect(screen.getByRole('status')).toBe(region);
   });
 
   it('Try again stages the same file again in place of the failed tile', async () => {
@@ -289,7 +390,7 @@ describe('ReceiptUploader', () => {
     await pickAndPoll(container, fetchMock);
     const first = (fetchMock.mock.calls[0][1].body as FormData).getAll('file')[0];
 
-    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again with bill.pdf' }));
 
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
     expect((fetchMock.mock.calls[2][1].body as FormData).getAll('file')[0]).toBe(first);
@@ -416,6 +517,14 @@ describe('ReceiptUploader', () => {
 
     const chipsIn = (row: string) => within(screen.getByRole('group', { name: row })).getAllByRole('button');
     const pressed = (row: string) => chipsIn(row).map((chip) => chip.getAttribute('aria-pressed'));
+
+    it('gives each figure chip a name that says the figure and where it was read', async () => {
+      await renderBill();
+
+      const chip = screen.getByRole('button', { name: /^\$171\.89,/ });
+      expect(chip.getAttribute('aria-label')).toContain('$171.89');
+      expect(chip.getAttribute('aria-label')).toContain('Sewer charges 171.89');
+    });
 
     it('shows at most two rows in use and counts the rest under Other figures', async () => {
       const { container } = await renderBill();

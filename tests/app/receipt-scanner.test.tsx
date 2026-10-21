@@ -249,6 +249,10 @@ describe('F5 (v1.8.0): scanner progress text', () => {
     pick(container, [original]);
 
     expect(await screen.findByText(SCANNER_PREPARING_MESSAGE)).toBeTruthy();
+    // The one always-mounted polite region carries it, not a line mounted with its text.
+    const region = screen.getByRole('status');
+    expect(region.getAttribute('aria-live')).toBe('polite');
+    expect(region.textContent).toContain(SCANNER_PREPARING_MESSAGE);
 
     resolveScan({ file: original });
     await screen.findByText('receipt.jpg');

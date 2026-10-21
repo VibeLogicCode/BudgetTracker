@@ -344,7 +344,13 @@ export function ReceiptUploader({
   const [scanning, setScanning] = useState(false);
   const [pending, setPending] = useState<Pending | null>(null);
   const [secondsLeft, setSecondsLeft] = useState(0);
-  const timers = useRef<ReturnType<typeof setInterval>[]>([]);
+  // Every receipt still being read: its interval and the controller that aborts the poll fetch in
+  // flight. Removing a tile or unmounting stops both, so a read nobody wants can write nothing.
+  const pollsRef = useRef(new Map<string, { timer: ReturnType<typeof setInterval>; controller: AbortController }>());
+  // The stage POSTs in flight, aborted on unmount.
+  const uploadControllersRef = useRef(new Set<AbortController>());
+  // False once unmounted, so a response that lands late creates no preview URL nobody would revoke.
+  const mountedRef = useRef(true);
   // IMPORTANT 4: mirrors `files` so the unmount-cleanup effect below (which must run only
   // once, with empty deps, to avoid re-registering on every render) can still revoke
   // whatever object URLs exist AT UNMOUNT TIME rather than the ones captured in its stale
@@ -365,17 +371,26 @@ export function ReceiptUploader({
     onStagedChange(files);
   }, [files, onStagedChange]);
 
-  useEffect(
-    () => () => {
-      for (const timer of timers.current) clearInterval(timer);
+  useEffect(() => {
+    mountedRef.current = true;
+    const polls = pollsRef.current;
+    const uploads = uploadControllersRef.current;
+    return () => {
+      mountedRef.current = false;
+      for (const { timer, controller } of polls.values()) {
+        clearInterval(timer);
+        controller.abort();
+      }
+      polls.clear();
+      for (const controller of uploads) controller.abort();
+      uploads.clear();
       for (const file of filesRef.current) if (file.previewUrl) URL.revokeObjectURL(file.previewUrl);
       for (const url of previewUrlsRef.current) URL.revokeObjectURL(url);
       resolvePendingRef.current = null;
-    },
+    };
     // Cleanup on unmount only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
-  );
+  }, []);
 
   useEffect(() => {
     if (pending === null) return;
@@ -388,14 +403,39 @@ export function ReceiptUploader({
     };
   }, [pending]);
 
+  /** The reading notice goes only once no receipt is left reading. */
+  const clearReadingNotice = useCallback(() => {
+    if (readingRef.current.size === 0) setNotice((current) => (current === READING_MESSAGE ? null : current));
+  }, []);
+
+  /** Stops one receipt's read: its interval, the fetch in flight, and its share of the notice. */
+  const stopPolling = useCallback(
+    (stagingId: string) => {
+      const entry = pollsRef.current.get(stagingId);
+      if (entry) {
+        clearInterval(entry.timer);
+        entry.controller.abort();
+        pollsRef.current.delete(stagingId);
+      }
+      readingRef.current.delete(stagingId);
+      clearReadingNotice();
+    },
+    [clearReadingNotice],
+  );
+
   const poll = useCallback(
     (stagingId: string) => {
       const startedAt = Date.now();
+      const controller = new AbortController();
+      const { signal } = controller;
       readingRef.current.add(stagingId);
-      /** This receipt stopped reading. The reading notice goes only once none is left. */
+      /** This receipt stopped reading on its own: nothing left to abort. */
       const settle = () => {
+        const entry = pollsRef.current.get(stagingId);
+        if (entry) clearInterval(entry.timer);
+        pollsRef.current.delete(stagingId);
         readingRef.current.delete(stagingId);
-        if (readingRef.current.size === 0) setNotice((current) => (current === READING_MESSAGE ? null : current));
+        clearReadingNotice();
       };
       /*
         MUST-10.2 step 4: show the error and carry on. On the tile it belongs to rather than the
@@ -410,29 +450,31 @@ export function ReceiptUploader({
         // IMPORTANT 2: a rejected fetch/json (offline, transient network blip) must not
         // become an unhandled promise rejection, and must not kill this interval either --
         // just skip this tick and retry at the next one. POLL_GIVE_UP_MS above still bounds
-        // how long that can go on.
+        // how long that can go on. An aborted poll (tile removed, page left) writes nothing.
         try {
+          if (signal.aborted) return;
           if (Date.now() - startedAt > POLL_GIVE_UP_MS) {
-            clearInterval(timer);
-            readingRef.current.delete(stagingId);
+            originalsRef.current.delete(stagingId);
+            settle();
             setNotice(POLL_GIVE_UP_MESSAGE);
             return;
           }
-          const response = await fetch(`/api/warranties/receipts/stage/${stagingId}`);
+          const response = await fetch(`/api/warranties/receipts/stage/${stagingId}`, { signal });
+          if (signal.aborted) return;
           if (!response.ok) {
             // IMPORTANT 3: a non-ok response (e.g. a 401 on session expiry) must not leave
             // this tile reading "Reading…" forever -- mark it failed and stop polling it.
-            clearInterval(timer);
             fail(READ_FAILED_MESSAGE);
             return;
           }
           const body = (await response.json()) as PollResponse;
-          if (body.status === 'pending') return;
-          clearInterval(timer);
+          if (signal.aborted || body.status === 'pending') return;
           if (body.status === 'failed') {
             fail(body.error ?? READ_FAILED_MESSAGE);
             return;
           }
+          // The read is over, and only a failure offers Try again: the file is not needed now.
+          originalsRef.current.delete(stagingId);
           const filled = (onSuggestions && body.suggestions ? onSuggestions(body.suggestions) : undefined) ?? [];
           setFiles((prev) =>
             prev.map((file) =>
@@ -454,19 +496,23 @@ export function ReceiptUploader({
           // Transient failure this tick only -- leave the timer running.
         }
       }, POLL_INTERVAL_MS);
-      timers.current.push(timer);
+      pollsRef.current.set(stagingId, { timer, controller });
     },
-    [onSuggestions],
+    [onSuggestions, clearReadingNotice],
   );
 
   async function upload(chosen: File[]): Promise<void> {
     setError(null);
     setBusy(true);
+    const controller = new AbortController();
+    uploadControllersRef.current.add(controller);
     try {
       const form = new FormData();
       for (const file of chosen) form.append('file', file);
-      const response = await fetch('/api/warranties/receipts/stage', { method: 'POST', body: form });
+      const response = await fetch('/api/warranties/receipts/stage', { method: 'POST', body: form, signal: controller.signal });
       const body = (await response.json()) as StageResponse;
+      // Left the page meanwhile: no preview URL to create and nothing to poll.
+      if (controller.signal.aborted || !mountedRef.current) return;
       if (!response.ok || !body.staged) {
         setError(body.error ?? 'That upload did not work.');
         return;
@@ -486,8 +532,12 @@ export function ReceiptUploader({
       setFiles((prev) => [...prev, ...staged]);
       setNotice(READING_MESSAGE);
       for (const entry of staged) poll(entry.stagingId);
+    } catch (caught) {
+      // An upload aborted by leaving the page is not a failure to report.
+      if (!controller.signal.aborted) throw caught;
     } finally {
-      setBusy(false);
+      uploadControllersRef.current.delete(controller);
+      if (mountedRef.current) setBusy(false);
     }
   }
 
@@ -547,6 +597,7 @@ export function ReceiptUploader({
     // tab crashes.
     for (const original of chosen) {
       const file = await decide(original);
+      if (!mountedRef.current) return;
       await upload([file]);
     }
   }
@@ -566,6 +617,7 @@ export function ReceiptUploader({
 
   function remove(stagingId: string): void {
     originalsRef.current.delete(stagingId);
+    stopPolling(stagingId);
     setFiles((prev) => {
       const target = prev.find((file) => file.stagingId === stagingId);
       if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
@@ -624,14 +676,13 @@ export function ReceiptUploader({
       </div>
 
       {error ? <Notice tone="error">{error}</Notice> : null}
-      {notice ? <p className="text-sm text-muted">{notice}</p> : null}
-      {scanNote ? <p className="text-sm text-muted">{scanNote}</p> : null}
-
-      {scanning ? (
-        <p className="text-sm text-muted" role="status">
-          {SCANNER_PREPARING_MESSAGE}
-        </p>
-      ) : null}
+      {/* One polite region, mounted from the first render: a live region mounted with its text is
+          often not announced. `empty:absolute` takes it out of the column's gap while it holds nothing. */}
+      <div role="status" aria-live="polite" className="flex flex-col gap-3 empty:absolute">
+        {notice ? <p className="text-sm text-muted">{notice}</p> : null}
+        {scanNote ? <p className="text-sm text-muted">{scanNote}</p> : null}
+        {scanning ? <p className="text-sm text-muted">{SCANNER_PREPARING_MESSAGE}</p> : null}
+      </div>
       {pending !== null ? (
         <ReceiptScanPreview
           originalUrl={pending.originalUrl}
@@ -695,6 +746,7 @@ export function ReceiptUploader({
                       type="button"
                       onClick={() => retry(file.stagingId)}
                       disabled={busy}
+                      aria-label={`Try again with ${file.originalFilename}`}
                       className={buttonClass('ghost', 'sm', 'w-fit px-1.5 text-xs')}
                     >
                       Try again
