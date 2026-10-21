@@ -35,6 +35,10 @@ All notable changes to Budget Tracker are recorded here.
   household line at the top adds how much is not categorized yet. Category limits and figures are
   unchanged.
 
+### Fixed
+
+- **Receipt amounts written with a space between the thousands** (such as 1 234,56 $) are read whole instead of losing the first digits.
+
 ## [1.55.4] - 2026-10-20
 
 ### Fixed

@@ -371,3 +371,27 @@ describe('candidates on one very long line', () => {
     expect(dates).toHaveLength(MAX_CANDIDATES);
   });
 });
+
+/** A space, U+00A0 or U+202F groups thousands: the first group 1-3 digits, later groups exactly 3. */
+describe('a space as a thousands separator', () => {
+  it('reads a space-grouped French total', () => {
+    expect(suggestPriceCents('Montant dû 1 234,56 $')).toBe(123456);
+  });
+  it('reads a no-break space and a narrow no-break space', () => {
+    expect(suggestPriceCents('Montant dû 1\u00A0234,56 $')).toBe(123456);
+    expect(suggestPriceCents('Montant dû 1\u202F234,56 $')).toBe(123456);
+  });
+  it('reads a dot-decimal grouped figure with and without the dollar sign', () => {
+    expect(suggestPriceCents('TOTAL $1 234.56')).toBe(123456);
+    expect(suggestPriceCents('TOTAL 1 234.56')).toBe(123456);
+  });
+  it('never merges a short group or an item number into the figure', () => {
+    expect(suggestPriceCents('TOTAL 12 34,50')).toBe(3450);
+    expect(suggestPriceCents('TOTAL ITEM 104 4,22')).toBe(422);
+    expect(suggestPriceCents('TOTAL 1234 567,89')).toBe(56789);
+  });
+  it('candidates carry the corrected value', () => {
+    const [top] = amountCandidates('RIVERSIDE WATER\nMontant dû 1 234,56 $');
+    expect(top!.valueCents).toBe(123456);
+  });
+});

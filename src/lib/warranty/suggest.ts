@@ -124,7 +124,10 @@ export function suggestVendor(text: string): string | undefined {
 // L start positions, i.e. O(L^2) on the ~100k-char OCR cap. No valid amount is lost — a
 // 10+-digit whole-dollar amount already exceeds the $100,000 ceiling and is rejected by
 // centsOf() regardless (amended after Task 4 review; spec §8.3 step 3 mirrors this).
-const CURRENCY_RE = /(?:\$\s*)?(\d{1,3}(?:,\d{3})*|\d{1,9})[.,](\d{2})(?!\d)/g;
+// Thousands may also be grouped by a space, U+00A0 or U+202F (first group 1-3 digits, later groups
+// exactly 3); `(?<!\d)` stops a match starting inside a longer digit run. A space-grouped figure is
+// read whole, so `QTY 2 129.99` reads 2,129.99 -- inherent to the rule.
+const CURRENCY_RE = /(?:\$\s*)?(?<!\d)(\d{1,3}(?:,\d{3})*(?:[ \u00A0\u202F]\d{3})*|\d{1,9})[.,](\d{2})(?!\d)/g;
 /** Fuzzy on purpose: PP-OCR reads T0TAL and IOTAL for TOTAL often enough to matter. French for bilingual bills. */
 const TOTAL_LINE_RE = /\b(t[o0]tal|[ti1]otal|amount\s+due|grand\s+total|balance\s+due|total\s+due|montant|solde)\b/i;
 const SUBTOTAL_RE = /\bsub[\s-]?total\b|\bsous[\s-]?total\b/i;
@@ -154,7 +157,7 @@ function isTotalLine(line: string): boolean {
 
 function centsOf(whole: string, fraction: string): number | null {
   // One money parser in the app (MUST-13.5): integer cents, no floats.
-  const cents = parseAmountToCents(`${whole}.${fraction}`);
+  const cents = parseAmountToCents(`${whole.replace(/[ \u00A0\u202F]/g, '')}.${fraction}`);
   if (cents === null) return null;
   const magnitude = Math.abs(cents);
   if (magnitude <= 0 || magnitude >= MAX_SUGGESTED_PRICE_CENTS) return null;
