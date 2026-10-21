@@ -9,6 +9,18 @@ import { projectMonthEnd } from '@/lib/predict/pace';
 import { unpaidInstallments } from '@/lib/warranty/installments';
 
 /**
+ * And nothing bounded the other end: with includeOverdue, an installment from years ago was
+ * exactly as eligible as one from last week. Most-overdue-first with a cutoff, not literally
+ * everything ever missed. Shared by the Coming up card and the Expected rows it sits beside.
+ */
+export const COMING_UP_OVERDUE_DAYS = 90;
+
+/** Whether the Coming up card shows this bill row: not overdue, or overdue by no more than the bound. */
+export function withinComingUpBound(bill: { overdue: boolean; dueDate: string }, today: string): boolean {
+  return !bill.overdue || daysBetweenIso(bill.dueDate, today) <= COMING_UP_OVERDUE_DAYS;
+}
+
+/**
  * Upcoming bills + safe-to-spend (spec 2026-08-22, v1.7.0, Task 9 / ruling 8). "Upcoming
  * bills v1" is deliberately narrow: only warranty_items whose TYPE kind is subscription or
  * contract, with both billing_cycle and billing_amount_cents set. No merchant-pattern bill

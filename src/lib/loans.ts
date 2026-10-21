@@ -2893,6 +2893,10 @@ export function payoffProjection(itemId: number, today: string): PayoffProjectio
     // Decision 18: periods run on the day the ledger itself posts, not the 1st.
     const day = postingDayFor(item.purchaseDate, item.postingDay);
     let owing = balanceCents;
+    // The period the ledger has open runs from the last posting date on or before today. When this
+    // month's posting day is still ahead, that is last month's posting date: starting at this
+    // month's would skip the period in progress. The labels below stay counted from thisMonth.
+    const anchorMonth = postingDateInMonth(thisMonth, day) > today ? addMonths(thisMonth, -1) : thisMonth;
     for (let elapsed = 1; elapsed <= 1200; elapsed += 1) {
       /*
         THE ENGINE'S OWN ARITHMETIC, month by month (review B1).
@@ -2904,8 +2908,8 @@ export function payoffProjection(itemId: number, today: string): PayoffProjectio
         the month's real days, so the payoff date and the ledger's cycle charge come from one place.
       */
       const charge = periodCharge({
-        start: postingDateInMonth(addMonths(thisMonth, elapsed - 1), day),
-        end: postingDateInMonth(addMonths(thisMonth, elapsed), day),
+        start: postingDateInMonth(addMonths(anchorMonth, elapsed - 1), day),
+        end: postingDateInMonth(addMonths(anchorMonth, elapsed), day),
         openingCents: owing,
         principalCents: item.principalCents,
         movements: [],

@@ -224,6 +224,23 @@ describe('payoffProjection: a daily rate costs a month, not a day', () => {
       expect(payoffProjection(derived, '2026-07-15')).toEqual(expected);
     });
 
+    /**
+     * Review round, M-2. With the posting day (20) later in the month than today (the 15th), the
+     * period the ledger has open is June 20 to July 20, and the projection must charge it first.
+     * Fixture: $200,000.00 anchor at 19.99% apr_daily, six payments of P, asked on 2026-07-15.
+     * Derived by running the simulation and bisecting P: with the open period charged first the
+     * month steps earlier at P = 700_245 cents; the old start (July 20) stepped at P = 700_385.
+     * P = 700_300 sits between the two, so only the corrected start lands on 2029-04.
+     */
+    it('charges the period in progress first when the posting day is later in the month than today', () => {
+      const { itemId, user, accountId } = loanWith({ interestRateBps: 1999 });
+      setLoanAnchor({ itemId, asOfDate: '2025-12-31', balanceCents: 20_000_000, source: 'reconcile', actorUserId: user });
+      setBasis(itemId, 'apr_daily');
+      sixMonthsOfPayments(accountId, user, itemId, -700_300);
+      setDay(itemId, 20);
+      expect(payoffProjection(itemId, '2026-07-15')!.projectedPayoffMonth).toBe('2029-04');
+    });
+
     it('a recorded day of 31 projects on 31-anchored periods', () => {
       const itemId = lineOfCredit(70_000);
       setDay(itemId, 31);

@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { daysBetweenIso } from '@/lib/dates';
 import { recurringHref } from '@/lib/insights-links';
 import { formatCents } from '@/lib/money';
-import type { UpcomingBill } from '@/lib/bills';
+import { COMING_UP_OVERDUE_DAYS, withinComingUpBound, type UpcomingBill } from '@/lib/bills';
 import type { ExpectedCharge } from '@/lib/recurring';
 // Every /transactions link in this app is built here (F-01).
 import { transactionsHref } from '@/lib/transaction-links';
@@ -20,12 +20,7 @@ import { buttonClass } from '@/components/ui/Button';
  */
 export const COMING_UP_ROW_LIMIT = 8;
 
-/**
- * And nothing bounded the other end: with includeOverdue, an installment from years ago was
- * exactly as eligible as one from last week. Most-overdue-first with a cutoff, not literally
- * everything ever missed.
- */
-export const COMING_UP_OVERDUE_DAYS = 90;
+export { COMING_UP_OVERDUE_DAYS };
 
 /** Spec 2026-10-06 §2.6, the line under the list whenever an expected row is shown. */
 export const COMING_UP_EXPECTED_NOTE = 'Expected charges are estimates from past charges and are not in the totals above.';
@@ -87,9 +82,7 @@ export function ComingUpCard({
   /** Item P: the reference date for COMING_UP_OVERDUE_DAYS. The dashboard already has it. */
   today: string;
 }) {
-  const withinBound = bills.filter(
-    (b) => !b.overdue || daysBetweenIso(b.dueDate, today) <= COMING_UP_OVERDUE_DAYS,
-  );
+  const withinBound = bills.filter((b) => withinComingUpBound(b, today));
   // Spec 2026-10-06 §2.6: the same overdue bound, applied to a late expected charge.
   const expectedWithinBound = expected.filter((charge) => daysBetweenIso(charge.expectedDate, today) <= COMING_UP_OVERDUE_DAYS);
   if (withinBound.length === 0 && expectedWithinBound.length === 0 && !hasBudgetedLimits) return null;

@@ -2,7 +2,7 @@ import { and, asc, eq, gte, inArray, lt, sql, type SQL } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { accounts, loanMatcherRules, transactions, warrantyItemTypes, warrantyItems } from '@/db/schema';
 import { ownerScope, type Viewer } from '@/lib/auth/viewer';
-import { upcomingBills, type UpcomingBill } from '@/lib/bills';
+import { upcomingBills, withinComingUpBound, type UpcomingBill } from '@/lib/bills';
 import { addDaysIso, daysBetweenIso } from '@/lib/dates';
 import { listRecurringMarkRules, recurringMarkFor } from '@/lib/categorize/rules';
 import {
@@ -528,18 +528,28 @@ export function expectedRecurringCharges(input: {
 }): ExpectedCharge[] {
   const windowEnd = addDaysIso(input.today, input.days);
   const out: ExpectedCharge[] = [];
-  const bills = input.bills ?? upcomingBills({ today: input.today, days: input.days, includeOverdue: true, viewer: input.viewer });
-  const billNeedleList = bills.map((bill) => itemNeedles([{ itemId: bill.itemId, itemName: bill.name, vendor: null }])[0]);
+  // Only the rows the card actually shows can stand for a charge (M-1): one overdue past its bound is dropped there.
+  const bills = (input.bills ?? upcomingBills({ today: input.today, days: input.days, includeOverdue: true, viewer: input.viewer })).filter(
+    (bill) => withinComingUpBound(bill, input.today),
+  );
+  const billItemIds = [...new Set(bills.map((bill) => bill.itemId))];
+  // Every item with a bill row covers by name OR vendor (I-1), not only the first needle that matched.
+  const billItems =
+    billItemIds.length === 0
+      ? []
+      : getDb()
+          .select({ itemId: warrantyItems.id, itemName: warrantyItems.name, vendor: warrantyItems.vendor })
+          .from(warrantyItems)
+          .where(inArray(warrantyItems.id, billItemIds))
+          .all();
+  const billNeedleList = itemNeedles(billItems);
   // The lean read: the same candidate pass, marked merchants only -- no Looks or Forming detectors, no price-rise field, no account options or sorts.
   const marked = buildCandidates({ today: input.today, scope: resolveScope(input.viewer, null), marksOnly: true });
   for (const { row } of marked) {
     if (row.knownBy !== 'mark') continue;
     const tracked = row.tracked;
-    const standsFor = bills.some(
-      (bill, index) =>
-        (tracked !== null && bill.itemId === tracked.itemId) ||
-        (billNeedleList[index] !== undefined && covers(billNeedleList[index], row.merchant)),
-    );
+    const standsFor =
+      (tracked !== null && billItemIds.includes(tracked.itemId)) || billNeedleList.some((needle) => covers(needle, row.merchant));
     if (standsFor) continue;
     if (row.nextExpected === null || row.typicalCents === null || row.nextExpected > windowEnd) continue;
     out.push({

@@ -5,7 +5,7 @@ import { createUser } from '@/lib/auth/users';
 import type { Viewer } from '@/lib/auth/viewer';
 import { nowIso } from '@/lib/clock';
 import { addDaysIso } from '@/lib/dates';
-import { upcomingBills } from '@/lib/bills';
+import { COMING_UP_OVERDUE_DAYS, upcomingBills } from '@/lib/bills';
 import { assignTransactionToLoan, saveLoanRule } from '@/lib/loans';
 import { listRules, setRecurringMarks, setRuleDisabledFlag } from '@/lib/categorize/rules';
 import { RECURRING_LATE_GRACE_DAYS } from '@/lib/predict/constants';
@@ -822,6 +822,26 @@ describe('expectedRecurringCharges', () => {
     addInstallment({ itemId: billId, dueDate: addDaysIso(TODAY, 5), amountCents: 13400 });
     expect(expected(ctx)).toEqual([]);
     expect(read(ctx).known.map((row) => [row.merchant, row.knownBy, row.tracked])).toEqual([['HARBOUR INSURANCE', 'mark', null]]);
+  });
+
+  /** Review round, I-1: a bill covers the merchant by its vendor too, and a row on the card stands for it. */
+  it('leaves out a marked merchant a bill covers by vendor when the bill has a row on the card', async () => {
+    const ctx = await setup();
+    ctx.cadence({ merchant: 'HARBOUR INSURANCE', count: 4, endsDaysAgo: 10, cents: 13400 });
+    ctx.mark('HARBOUR INSURANCE', 'recurring');
+    const billId = ctx.item({ name: 'Home insurance', vendor: 'Harbour Insurance', typeId: ctx.itemType('Bill', 'bill') });
+    addInstallment({ itemId: billId, dueDate: addDaysIso(TODAY, 5), amountCents: 13400 });
+    expect(expected(ctx)).toEqual([]);
+  });
+
+  /** Review round, M-1: the card drops a bill overdue past its bound, so that bill must not hide the Expected row. */
+  it('lists a marked merchant when the covering installment is overdue past the card bound', async () => {
+    const ctx = await setup();
+    ctx.cadence({ merchant: 'HARBOUR INSURANCE', count: 4, endsDaysAgo: 10, cents: 13400 });
+    ctx.mark('HARBOUR INSURANCE', 'recurring');
+    const billId = ctx.item({ name: 'Harbour Insurance', typeId: ctx.itemType('Bill', 'bill') });
+    addInstallment({ itemId: billId, dueDate: addDaysIso(TODAY, -(COMING_UP_OVERDUE_DAYS + 30)), amountCents: 13400 });
+    expect(expected(ctx).map((charge) => charge.merchant)).toEqual(['HARBOUR INSURANCE']);
   });
 
   /** Plan decision 20: the lean read shares the full model's core, so its rows cannot drift from it. */
