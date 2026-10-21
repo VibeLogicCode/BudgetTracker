@@ -2,15 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A new merchant rule kind, `always_ask`, stops every rule and the Bayes guesser from filing the rows it matches and stops those rows teaching anything; it is set from a Transactions row menu dialog (prefilled with the merchant minus its trailing masked code, a live match count, and an offer to send rule- or guess-filed rows back to review) and is listed on the Rules page. Budgets gains a first card, **Not categorized yet**, in the warning tone with an attention icon and a "Needs attention" label, and the household header line says how much is not categorized yet. The same release closes 21 open follow-ups (Tasks 8–28): receipt reading and the receipt uploader, the recurring read model and Coming up, loans, time zones, the update check, help wording, real-clock tests, and a sweep of verbatim quotes.
+**Goal:** A new merchant rule kind, `always_ask`, stops every rule and the Bayes guesser from filing the rows it matches and stops those rows teaching anything; it is set from a Transactions row menu dialog (prefilled with the merchant minus its trailing masked code, a live match count, and an offer to send rule- or guess-filed rows back to review) and is listed on the Rules page. Budgets gains a first card, **Not categorized yet**, in the warning tone with an attention icon and a "Needs attention" label, and the household header line says how much is not categorized yet. The same release closes 27 open follow-ups (Tasks 8–34): receipt reading and the receipt uploader, the recurring read model and Coming up, loans, time zones, the update check, help wording, real-clock tests, and a sweep of verbatim quotes.
 
 **Architecture:** No migration: `rule_kind` has no CHECK (v1.54.0 established it; `src/db/schema.ts` widens its TypeScript enum only). The engine's one choke point, `categorizeTransaction`, returns no category for an always-ask merchant after transfer detection and before the category rule and Bayes; `confirmCategory`, `createRulesFromRow` and `applyCategoryToMatching` skip their category rule and `train()` for one. The two recurring marks and `always_ask` become one family, `MERCHANT_MARK_KINDS` (`src/lib/categorize/mark-kinds.ts`): kinds that leave nothing on a row, so "Apply now" and "clear" have nothing to do and a pack never carries them. Budgets reads a new viewer-taking `uncategorizedSpend` (`src/lib/budgets.ts`) built from `SPEND_ROW_WHERE` and v1.55.4's `UNCATEGORIZED_WHERE`, and a new `transactionsHref` target opens the review queue's Uncategorized tab for the month. The follow-ups are independent, small, and each lands as its own commit.
 
 **Tech Stack:** Next.js 16 App Router, React 19 (`useActionState`, `startTransition`), Tailwind, Drizzle over better-sqlite3, zod, Vitest 4 + Testing Library (jsdom, **no jest-dom**).
 
-**Spec:** `docs/superpowers/specs/2026-10-21-always-ask-and-uncategorized-spend-design.md` for Tasks 1–7; every one of those tasks cites its section. Tasks 8–28 are the owner's follow-up list for this release, item numbers given in each heading. Builds on v1.55.4 (`133359b`: archived categories never auto-assigned; a fully split row is not uncategorized).
+**Spec:** `docs/superpowers/specs/2026-10-21-always-ask-and-uncategorized-spend-design.md` for Tasks 1–7; every one of those tasks cites its section. Tasks 8–34 are the owner's follow-up lists for this release, item numbers given in each heading. Builds on v1.55.4 (`133359b`: archived categories never auto-assigned; a fully split row is not uncategorized).
 
-**Process (owner order for this release):** Opus orchestrates; **one fresh Sonnet implementer per task**, given that task's text and the Global Constraints. While working a task, run **only the test files that task names** (no full suite, no `tsc`, no build before Task 29). **One commit per task**, in task order. **Exactly one Opus review**, after Task 28 and before the release (see "The review" after Task 28), focused on the changes that compute numbers or decide categories. One fix round for its Important findings; re-review only non-trivial fixes. Then Task 29, the release gate.
+**Process (owner order for this release):** Opus orchestrates; **one fresh Sonnet implementer per task**, given that task's text and the Global Constraints. While working a task, run **only the test files that task names** (no full suite, no `tsc`, no build before Task 35). **One commit per task**, in task order. **Exactly one Opus review**, after Task 34 and before the release (see "The review" after Task 28), focused on the changes that compute numbers or decide categories. One fix round for its Important findings; re-review only non-trivial fixes. Then Task 35, the release gate.
 
 ## Global Constraints
 
@@ -21,10 +21,10 @@
 - **Wording (spec §2.3):** plain and factual — "Not categorized yet", "Needs attention", "Always ask", "Matches N transactions", "Send N back to review". No blame, no exclamation marks. Every new sentence in this plan is the exact copy; do not reword it.
 - **CHANGELOG.** Task 7 writes `### Added` under `## Unreleased`. Every follow-up task whose fix a household can see adds ONE plain bullet under `## Unreleased` → `### Fixed` (create that heading after `### Added` the first time) in its own commit, with the wording the task gives. Tasks 26, 27 and 28 (tests and the quote sweep) add nothing.
 - **Owner bounds:** do NOT widen the engine's `ELIGIBLE` set to `rule` rows; no cloud or keyed OCR; no scanned-PDF rasterisation.
-- **Work on `main`, no branches or worktrees.** Nothing is pushed until Task 29.
+- **Work on `main`, no branches or worktrees.** Nothing is pushed until Task 35.
 - **TDD, one file at a time:** `npx vitest run <file>`. Known full-run flake: one arbitrary failure with `Timeout calling "onTaskUpdate"` is reporter starvation — rerun that file alone.
 - **Bash heredocs break on backticks and `\n` here.** Edit files with the Edit tool, or the Write tool for a new file.
-- **`tsc` covers `tests/`, but is not run until Task 29.** Get types right by reading. Task 1 widens `RuleKind`, which knowingly leaves `Record<RuleKind, …>` literals in `src/app/(app)/settings/merchant-rules/page.tsx`, `merchant-rules-client.tsx` (`KIND_LABEL`) and 17 `kindCounts` literals in `tests/app/merchant-rules-client.test.tsx` short of `always_ask` until Task 5 adds it (stated again in Task 1).
+- **`tsc` covers `tests/`, but is not run until Task 35.** Get types right by reading. Task 1 widens `RuleKind`, which knowingly leaves `Record<RuleKind, …>` literals in `src/app/(app)/settings/merchant-rules/page.tsx`, `merchant-rules-client.tsx` (`KIND_LABEL`) and 17 `kindCounts` literals in `tests/app/merchant-rules-client.test.tsx` short of `always_ask` until Task 5 adds it (stated again in Task 1).
 - **Real-clock tests are month-boundary time bombs.** A new test passes explicit dates (or pins `Date` with `vi.useFakeTimers({ now, toFake: ['Date'] })`); never derive a fixture date from today. Task 27 pins the existing ones.
 - **Client bundle line (`tests/ops/client-bundle.test.ts`):** a `'use client'` file, and every module it value-imports, never reaches `@/db/client`, `better-sqlite3`, `@/lib/env` or a `node:` builtin. `transactions-client.tsx` and `budgets-client.tsx` may value-import `@/lib/categorize/normalize`, `@/lib/categorize/mark-kinds`, `@/lib/transaction-links`, `@/lib/dates`, `@/components/**`; `@/lib/budgets`, `@/lib/categorize/rules`, `@/lib/categorize/engine`, `@/lib/recurring` are `import type` only. Pass a time zone to a client component as a prop; never read it there.
 - **`'use server'` files export only async functions** (types are erased and fine) — `tests/ops/use-server-exports.test.ts`. Every new server action's first statement is its file's origin check (`isSameOrigin(await headers())`, or `updateGuard()` in settings) — `tests/ops/server-action-origin.test.ts`.
@@ -67,6 +67,12 @@ Inputs most likely to bite a household that no single obvious test would catch; 
 22. **Item 20's bills fold** moves out of `src/app/(app)/warranties/page.tsx` into a pure exported `foldBillSchedules` in `src/lib/warranty/installments.ts`, so it can be tested; the page's behaviour is unchanged.
 23. **Item 21** pins the files where a module- or describe-level `today`/`month` computed from the real clock is compared with what a page computes again at render: `Date` only (`toFake: ['Date']`, so SQLite and promises still run), at `2026-03-18T16:00:00.000Z` (noon in the suite's America/Toronto, mid-month). No assertion is loosened.
 24. **Item 22** replaces each verbatim quote of the owner in comments and docs (src, tests, scripts, docs incl. plans, specs, PENDING-FIXES and the build ledger) with a plain description of the defect or need. Reviewer quotes in `docs/reviews/`, the app's own UI copy, spec wording and third-party quotes stay. No quote sits inside a test assertion string (checked), so none is left for that reason.
+25. **Item 23: a bill payment into an archived category is left for the household.** `recordInstallmentPayment` passes no category when the bill's budget category is archived (v1.55.4's rule: an archived category is never assigned automatically, and Record payment's category is an automatic one, not a pick), so no rule or training follows; the engine treats the row like any uncategorized one, and the action says so.
+26. **Item 24: attribution sees an archived category rule only for the rows it filed.** The attribution surfaces (Affects, its ids, Delete and clear) simulate with archived category rules visible and credit such a rule only with rows whose stored category is that rule's category; every other row, and Apply now, keep the live simulation. A household with no archived category rule runs exactly the queries it runs today. ELIGIBLE is unchanged.
+27. **Item 25: the edit form offers the rule's own archived category, labelled.** Only that one archived category appears (as `<name> (archived)`), so posting an archived id means the target was left unchanged — the one case `saveRuleAction` still refuses, now with a sentence that says what to do.
+28. **Item 26: the picker's list goes to `z-20`.** The app's layers are `z-20` page-level sticky, `z-30` the app header, `z-40` sidebar and mobile nav, `z-50` dialogs and menus; a field's list belongs to the page, so it sits under the header (the toolbar's field can scroll beneath it) and still draws over a dialog's content because it lives inside the dialog's stacking context.
+29. **Item 27: the import's needs-review count is `REVIEW_WHERE` over the import's rows, counted after the loan matcher runs**, so it is the review queue's own definition at the moment the queue would show the rows.
+30. **Item 28: split charges are left out of per-category baselines, both as a candidate and in the sample.** Per-part evaluation would give two rows one transaction id (the unusual-charge key dedupes on it) and let two equal parts read as a duplicate pair; the merchant baseline, duplicate and price-rise checks keep reading the whole charge. Accepted loss: one very large part of a split no longer fires on its category; its merchant baseline still applies.
 
 ---
 
@@ -85,8 +91,9 @@ Inputs most likely to bite a household that no single obvious test would catch; 
 | Loans, time zone (16, 17) | `src/lib/loans.ts`, `src/lib/loans/ledger.ts`, `src/lib/dates.ts`, `src/lib/import/freshness.ts`, `src/lib/notify/evaluate/stale.ts`, `src/components/ImportHistoryCard.tsx`, `src/app/(app)/import/batch-client.tsx`, `src/app/(app)/import/page.tsx` |
 | Kind wording (21) | `src/lib/warranty/constants.ts` |
 | Updates (24, 25) | `src/lib/update/network-error.ts` (new), `src/lib/update/github.ts`, `src/lib/update/state.ts`, `src/app/(app)/settings/actions.ts`, `updates-card.tsx`, `updates-client.tsx` |
+| Archived categories, picker, import, splits (29–34) | `src/lib/warranty/installments.ts`, `src/app/(app)/bills/actions.ts`, `src/components/RecordPaymentForm.tsx`, `src/lib/categorize/engine.ts`, `src/app/(app)/settings/merchant-rules/merchant-rules-client.tsx`, `actions.ts`, `src/components/CategoryCombobox.tsx`, `src/lib/import/flow.ts`, `src/lib/spend-where.ts`, `src/lib/notify/evaluate/anomalies.ts`, `src/lib/insights.ts`, `src/lib/predict/anomalies.ts` |
 | Tests and sweep (26–28) | the test files each names; comments and docs across the repo |
-| Release (29) | `CHANGELOG.md`, `package.json`, `package-lock.json`, `tests/ops/docker.test.ts` |
+| Release (35) | `CHANGELOG.md`, `package.json`, `package-lock.json`, `tests/ops/docker.test.ts` |
 
 ---
 
@@ -1434,7 +1441,7 @@ git add "src/app/(app)/help/content.tsx" CHANGELOG.md tests/app/help.test.tsx
 git commit -m "docs: help and release notes for Always ask and Not categorized yet"
 ```
 
-## Follow-ups (owner items 1–22, in the owner's order)
+## Follow-ups (owner items 1–28, in the owner's order)
 
 Each task is one commit. Read the named code before changing it; the line numbers are as of `133359b`.
 
@@ -1823,7 +1830,83 @@ About 138 occurrences: roughly 58 in `src/` and `scripts/`, 55 in `tests/` (all 
 
 ---
 
-## The review (exactly one, after Task 28)
+
+### Task 29 (item 23): Record payment never files into an archived budget category
+
+**Files:** Modify `src/lib/warranty/installments.ts` (`recordInstallmentPayment`, `RecordPaymentResult`, new `BILL_ARCHIVED_CATEGORY_NOTE`), `src/app/(app)/bills/actions.ts` (`recordBillPaymentAction`), `src/components/RecordPaymentForm.tsx` (show the message); Test `tests/lib/warranty/installments.test.ts`, `tests/app/bills-actions.test.ts`, a new `tests/components/record-payment-form.test.tsx`.
+
+Today `recordInstallmentPayment` passes `categoryId: target.budgetCategoryId` to `createManualTransaction`, which confirms it as a `manual` pick, so a payment lands in an archived category as if a person chose it (decision 25). `RecordPaymentForm` (the Coming up card) renders only its error, never a message.
+
+**Interfaces:** `RecordPaymentResult`'s ok variant gains `categoryLeftForReview?: true` (set only when held back, at both of its `ok: true` returns, by conditional spread so existing `toEqual`s hold); `export const BILL_ARCHIVED_CATEGORY_NOTE = "The bill's budget category is archived, so the payment was not filed into it.";` (in installments.ts — a `'use server'` file cannot export a constant).
+
+- [ ] **Step 1: Tests.** `installments.test.ts` (its `setupBillForPayment()`, `HOUSEHOLD`; `archiveCategory` from `@/lib/categories`): `'does not file the payment into an archived budget category'` — archive the linked category, record → `ok`, `categoryLeftForReview: true`, the transaction's `categoryId` null and its source not `'manual'`, the installment still paid by it; pin `'a live linked category still files and carries no note'` (unchanged `toEqual` and the category set). `bills-actions.test.ts`: `'says so in the message when the linked category is archived'` — message is `` `Payment recorded and the installment marked paid. ${BILL_ARCHIVED_CATEGORY_NOTE}` ``; a live category's message is the plain sentence exactly. `record-payment-form.test.tsx` (jsdom; mock the bills actions module to resolve `{ message: 'Payment recorded and the installment marked paid.' }`): submitting shows that message.
+- [ ] **Step 2:** `const heldBack = target.budgetCategoryId !== null && isCategoryArchived(target.budgetCategoryId)`; pass `categoryId: heldBack ? null : target.budgetCategoryId` (null skips `confirmCategory`, so nothing is learned; the engine treats the row like any other uncategorized one); the action appends the note when `categoryLeftForReview`; `RecordPaymentForm` renders `state.message` in a `<Notice tone="success">` beside its `FormError` (it may unmount after the dashboard revalidates; the item page's notice stays).
+- [ ] **Step 3:** `npx vitest run tests/lib/warranty/installments.test.ts tests/app/bills-actions.test.ts tests/app/bills-actions-refusals.test.ts tests/components/record-payment-form.test.tsx tests/ops/use-server-exports.test.ts tests/ops/client-bundle.test.ts` → PASS. CHANGELOG `### Fixed`: `**Record payment no longer files a bill payment into an archived category.** The payment is left for you to categorize, and the message says why.`
+- [ ] **Step 4: Commit** `fix(bills): Record payment skips an archived budget category`.
+
+### Task 30 (item 24): Delete and clear reaches the rows an archived category rule filed
+
+**Files:** Modify `src/lib/categorize/engine.ts` (`attributedRuleId`, `ruleAttributor`, `attributedToRule`, `ruleImpactCounts`' category branch, `ruleImpactIds`; new private `withArchivedRulesVisible`); Test `tests/lib/categorize/archived-categories.test.ts`, `tests/app/merchant-rules-actions.test.ts`, `tests/ops/rule-attribution-honesty.test.ts`.
+
+Today attribution re-simulates `categorizeTransaction`, whose `matchRule` skips an archived category rule, so that rule's Affects is 0 and Delete and clear clears nothing — and a shorter live rule on the same merchants is credited with (and would clear) the archived rule's rows. ELIGIBLE is not widened (owner bound); Apply now keeps the live simulation (decision 26).
+
+- [ ] **Step 1: Tests** in `archived-categories.test.ts` (its `setup()`; `archiveCategory`, `runEngine`, `ruleImpactCounts`, `ruleImpactIds`, `ruleClearIds`, `clearRuleFromTransactions`):
+  - `'Delete and clear reaches the rows an archived category rule filed'` — `r = rule('BEAN BARN', 'contains', coffee)`, `a = add('BEAN BARN ROASTERS 0042')`, `runEngine([a])`, archive Coffee → `ruleImpactCounts().get(r)` 1, `ruleImpactIds(r)` `[a]`, `ruleClearIds(r)` `[a]`; `clearRuleFromTransactions({ ruleId: r }).rowsCleared` 1 and `read(a)` `{ category_id: null, categorization_source: 'none' }`.
+  - `'a shorter live rule is not credited with the archived rule rows'` — longer `BEAN BARN ROASTERS` → Coffee, shorter `BEAN BARN` → Restaurants, `a = add('BEAN BARN ROASTERS 0042')`, `b = add('BEAN BARN DOWNTOWN')`, run, archive Coffee → `ruleImpactIds(longer)` `[a]`, `ruleImpactIds(shorter)` `[b]`, counts 1 and 1; clearing `shorter` leaves `a` in Coffee.
+  - Pin `'does not credit an archived rule with a row it did not file'` — an unrun row → `ruleImpactIds(archived)` `[]`, the shorter live rule `[u]`.
+  - `merchant-rules-actions.test.ts`: after archiving, `deleteRuleAndClearAction` clears the one row and deletes the rule (assert the row's category is null and the action's existing "cleared" sentence for 1 transaction).
+  - `rule-attribution-honesty.test.ts`: a describe `'an archived category rule is attributed the rows it filed'` with the file's `fixture()` asserting the four surfaces as above and no residue after a clear.
+- [ ] **Step 2:** `withArchivedRulesVisible(ctx)` returns a context whose records have `categoryArchived: false` (ctx itself when none is archived). `attributedRuleId`'s category branch takes an optional `storedCategoryId`: when given and the context holds an archived category rule, simulate with archived rules visible and credit the winner only if it is an archived category rule whose `categoryId` equals `storedCategoryId`; otherwise return the live winner, as today. `ruleAttributor`/`attributedToRule` carry the stored category into the memo key only when an archived category rule exists (the `amountMatters` pattern); `ruleImpactCounts` selects and groups by `category_id` only then; `ruleImpactIds` passes each row's `categoryId`; `eligibleForRuleReapply` passes nothing. Never compare `normalized_merchant` to `rule.pattern` (the honesty guard's detector).
+- [ ] **Step 3:** `npx vitest run tests/lib/categorize/archived-categories.test.ts tests/lib/categorize/engine.test.ts tests/lib/categorize/always-ask.test.ts tests/app/merchant-rules-actions.test.ts tests/ops/rule-attribution-honesty.test.ts tests/ops/rule-authoring-intent.test.ts` → PASS. CHANGELOG `### Fixed`: `**Delete rule and clear works on a rule whose category is archived.** It clears the transactions that rule filed, and another rule on the same merchant is no longer credited with them.`
+- [ ] **Step 4: Commit** `fix(rules): attribute and clear the rows an archived category rule filed`.
+
+### Task 31 (item 25): editing a rule whose category is archived
+
+**Files:** Modify `src/app/(app)/settings/merchant-rules/merchant-rules-client.tsx` (`ruleDialog`'s category `<select>`), `src/app/(app)/settings/merchant-rules/actions.ts` (`saveRuleAction`'s archived refusal sentence); Test `tests/app/merchant-rules-client.test.tsx`, `tests/app/merchant-rules-actions.test.ts`.
+
+Today the edit form's plain `<select name="categoryId">` is built from `categoryOptionGroups(categories)`, which drops archived categories, so a rule on one opens with nothing selected and posts `''` (refused as a category rule with no category). A live pick already saves in place.
+
+- [ ] **Step 1: Tests.** Client: `'Edit shows the rule's archived category labelled (archived) and keeps it selected'` — categories Coffee (id 1, archived) and Groceries (id 2), rule on 1 → the select's `value` is `'1'` and an option reads `Coffee (archived)`; pin `'offers no archived category the rule is not on'`. Action: the existing archived refusal test also matches `/Pick a live category/`; pin `'saves a live category over an archived one on edit'` (`fromRuleId`, message `Rule saved.`, one rule, now Groceries).
+- [ ] **Step 2:** in `ruleDialog()`, when `editing.categoryId` names an archived category in `categories`, render `<option value={id}>{`${categoryLabelFor(id, categories)} (archived)`}</option>` right after the "(none …)" option — the rule's own archived category only. Server: keep refusing a posted archived id (that is the unchanged archived target) with `` `"${category.name}" is archived, so this rule would not file anything. Pick a live category, or restore "${category.name}" first.` ``
+- [ ] **Step 3:** `npx vitest run tests/app/merchant-rules-client.test.tsx tests/app/merchant-rules-actions.test.ts tests/ops/client-bundle.test.ts` → PASS. CHANGELOG `### Fixed`: `**A rule on an archived category can be edited.** The form shows its category marked archived, and saves once you pick a live one.`
+- [ ] **Step 4: Commit** `fix(rules): edit a rule whose category is archived`.
+
+### Task 32 (item 26): the category picker's Escape, mouse button and layer
+
+**Files:** Modify `src/components/CategoryCombobox.tsx`; Test `tests/components/category-combobox.test.tsx`.
+
+Today the input's Escape handler calls `preventDefault()` and `close()` but not `stopPropagation()`, so `RowDialog`'s own `onKeyDown` closes the dialog too; an option's `onMouseDown` picks on any button; the `position: fixed` list carries `z-50`, the dialog layer, so it paints over the `z-30` sticky app header when its field scrolls under it. The app's scale: `z-20` page-level sticky, `z-30` app header, `z-40` sidebar and mobile nav, `z-50` dialogs and menus (decision 28).
+
+- [ ] **Step 1: Tests** (jsdom; render the combobox inside `<RowDialog dialogId="d" title="T" onClose={onClose}>`): `'Escape inside a dialog closes only the open list'` (list gone, `onClose` not called); `'a second Escape, with the list closed, reaches the dialog'` (`onClose` called once); `'a right or middle click does not pick an option'` (`fireEvent.mouseDown(option, { button: 2 })` and `{ button: 1 }` → `onChange` not called, list open; `{ button: 0 }` picks); `'its list sits below the sticky app header'` (the listbox's class matches `/\bz-20\b/`, and the `z-` number in `src/components/app-shell/AppShell.tsx`'s sticky header is greater, read from source).
+- [ ] **Step 2:** Escape: `if (!open) return;` then `preventDefault(); stopPropagation(); close();`. Option `onMouseDown`: `if (event.button !== 0) return;` first (the list's own handler still keeps focus). List class `z-50` → `z-20`; inside a dialog it is a descendant of the dialog's own stacking context, so it still draws over the dialog's content.
+- [ ] **Step 3:** `npx vitest run tests/components/category-combobox.test.tsx tests/app/transactions-client.test.tsx tests/app/budgets-client.test.tsx` → PASS. CHANGELOG `### Fixed`: `**The category picker behaves inside dialogs and under the page header.** Escape closes only its list, a right or middle click no longer picks a category, and its list no longer covers the page header.`
+- [ ] **Step 4: Commit** `fix(combobox): Escape, primary button only, and a layer under the header`.
+
+### Task 33 (item 27): the import summary counts what the review queue shows
+
+**Files:** Modify `src/lib/import/flow.ts` (`commitStagedImport`'s `needsReview`), `tests/ops/spend-where.test.ts` (drop flow.ts from `ALLOWED_BARE_TRANSFER_FILTERS`); Test a new `tests/integration/import-needs-review.test.ts`.
+
+Today `needsReview` is counted with its own predicate (not a transfer; no category or a guess) BEFORE `applyPaymentMatchers` links loan payments, so a row the matcher then links — which `REVIEW_WHERE` leaves out of the queue — is still counted (decision 29).
+
+- [ ] **Step 1: Test** (mirror `tests/integration/import-flow.test.ts`: temp `DATA_DIR`, `writeStagedFile`, `commitStagedImport`, the TD Chequing preset; `setupLoanTest()` and `saveLoanRule` for a loan rule on `HONDA FIN`; an invented two-row CSV, one row the rule matches): `'excludes a row the loan matcher linked from needsReview'` → `loanLinksCreated` 1, `needsReview` 1, equal to `reviewQueueCount()`; pin `'agrees with the review queue when no loan rule exists'`.
+- [ ] **Step 2:** move the count after `applyPaymentMatchers(...)` and make it `and(inArray(transactions.id, committed.insertedTransactionIds), REVIEW_WHERE)`; drop the now-unused imports; remove `'src/lib/import/flow.ts'` from the spend-where allowlist (its one bare transfer clause is gone).
+- [ ] **Step 3:** `npx vitest run tests/integration/import-needs-review.test.ts tests/integration/import-flow.test.ts tests/lib/import tests/api/import.route.test.ts tests/ops/spend-where.test.ts tests/ops/import-batch-reuse.test.ts` → PASS. CHANGELOG `### Fixed`: `**The import summary's "needs review" count matches the review queue**, no longer counting a payment the import linked to a loan.`
+- [ ] **Step 4: Commit** `fix(import): needs-review count uses the review queue's definition`.
+
+### Task 34 (item 28): a split charge is not judged against a category baseline
+
+**Files:** Modify `src/lib/spend-where.ts` (new `NOT_SPLIT_PARENT`), `src/lib/notify/evaluate/anomalies.ts`, `src/lib/insights.ts`, `src/lib/predict/anomalies.ts` (optional `isSplit` on `SpendRow`); Test `tests/lib/notify/evaluate/anomalies.test.ts`, `tests/lib/insights.test.ts`.
+
+Today both readers take `transactions.category_id`, which a split never changes, so a split charge is compared, whole, against its stale parent category (or none), and its whole amount pads that category's baseline for everyone else. Decision 30: leave split charges out of per-category baselines in both directions; the merchant baseline, duplicates and price rises still see the whole charge.
+
+- [ ] **Step 1: Tests** (evaluator: its `charge`, `seedHistory`, `seedMerchantBaseline`, `emailUser`, `keys`, `NOW`/`TZ`; `setTransactionSplits` from `@/lib/splits`): `'a split charge is not compared with its stale parent category baseline'` (a $412.88 one-off split between two categories → no alert, where the unsplit control still alerts); `'a split parent does not pad its category baseline'` (six large split charges outside the window no longer lift the median, so the candidate fires); pin `'a split charge is still checked against its merchant baseline'`. Insights: the same first two cases through `householdInsights`.
+- [ ] **Step 2:** `NOT_SPLIT_PARENT` = the correlated `not exists (select 1 from transaction_splits where txn_id = transactions.id)` (WHERE clauses only; never added to `SPEND_ROW_WHERE`). The evaluator adds it to `categoryBaselineRows` and marks candidates that have splits (`splitsForTransactions` over the slice's ids) so `baselineSamples` gives them an empty category sample; `insights.ts` does the same for its in-memory category sample. `predict/anomalies.ts` only gains the optional field (no `@/db`, `new Date`, `Math.round`).
+- [ ] **Step 3:** `npx vitest run tests/lib/notify/evaluate/anomalies.test.ts tests/lib/insights.test.ts tests/lib/predict tests/ops/predict-invariants.test.ts tests/ops/spend-where.test.ts tests/ops/visibility-invariants.test.ts tests/ops/enqueue-family-channel.test.ts tests/ops/family-channel-pass.test.ts` → PASS. CHANGELOG `### Fixed`: `**A split charge is no longer flagged as unusual against a category it was split out of**, and it no longer skews the usual amount for that category.`
+- [ ] **Step 4: Commit** `fix(insights): leave split charges out of category baselines`.
+
+---
+
+## The review (exactly one, after Task 34)
 
 One Opus reviewer, given these diffs and the spec sections, asked to check the correctness of the figures and the scoping — person scope, `SPEND_ROW_WHERE`, split rows, time zone — not wording:
 
@@ -1832,12 +1915,15 @@ One Opus reviewer, given these diffs and the spec sections, asked to check the c
 - Tasks 11, 12, 14: which marked merchants appear as Expected and with what amount; the whole-word cover rule.
 - Task 16: the payoff projection's periods (decision 18).
 - Task 17: every import date in the household zone (Review Focus 5).
+- Task 29: a bill payment never lands in an archived category (decision 25).
+- Task 30: archived-rule attribution and Delete and clear, and that no live rule gains or loses rows it did not file (decision 26).
+- Task 34: split charges and category baselines in the anomaly evaluator and Insights (decision 30).
 
 Not reviewed: wording, help, docs, test-only tasks, the quote sweep. One fix round for Important findings, committed as `fix: review round` with bullets; re-review only a non-trivial fix.
 
 ---
 
-### Task 29: Release v1.56.0
+### Task 35: Release v1.56.0
 
 **Files:** Modify `tests/ops/docker.test.ts` (`'MUST-7.1: the 1.55.4 release'` and every remaining `toBe('1.55.4')`), `CHANGELOG.md`, `package.json`, `package-lock.json`.
 
