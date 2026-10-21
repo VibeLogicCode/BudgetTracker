@@ -27,6 +27,7 @@ import { raiseLoanPaidOff } from '@/lib/notify/raise';
 import {
   buildLedger,
   periodCharge,
+  postingDateInMonth,
   postingDayFor,
   type Ledger,
   type LedgerInput,
@@ -2805,6 +2806,8 @@ export function payoffProjection(itemId: number, today: string): PayoffProjectio
       rateBps: warrantyItems.interestRateBps,
       basis: warrantyItems.interestRateBasis,
       principalCents: warrantyItems.principalCents,
+      purchaseDate: warrantyItems.purchaseDate,
+      postingDay: warrantyItems.postingDay,
     })
     .from(warrantyItems)
     .where(eq(warrantyItems.id, itemId))
@@ -2887,6 +2890,8 @@ export function payoffProjection(itemId: number, today: string): PayoffProjectio
     // A7 again: no rate means nothing honest to project, rather than a projection at zero interest.
     if (item.rateBps === null) return null;
     const rate: RateInForce = { effectiveFrom: today, rateBps: item.rateBps, basis: item.basis };
+    // Decision 18: periods run on the day the ledger itself posts, not the 1st.
+    const day = postingDayFor(item.purchaseDate, item.postingDay);
     let owing = balanceCents;
     for (let elapsed = 1; elapsed <= 1200; elapsed += 1) {
       /*
@@ -2899,8 +2904,8 @@ export function payoffProjection(itemId: number, today: string): PayoffProjectio
         the month's real days, so the payoff date and the ledger's cycle charge come from one place.
       */
       const charge = periodCharge({
-        start: addMonths(thisMonth, elapsed - 1) + '-01',
-        end: addMonths(thisMonth, elapsed) + '-01',
+        start: postingDateInMonth(addMonths(thisMonth, elapsed - 1), day),
+        end: postingDateInMonth(addMonths(thisMonth, elapsed), day),
         openingCents: owing,
         principalCents: item.principalCents,
         movements: [],

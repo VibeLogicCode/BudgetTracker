@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { postingDayFor, nextPostingDate, periodBoundaries, dailyBalances } from '@/lib/loans/ledger';
+import { postingDayFor, postingDateInMonth, nextPostingDate, periodBoundaries, dailyBalances } from '@/lib/loans/ledger';
+
+describe('postingDateInMonth', () => {
+  it('lands on the day, clamped to the month end', () => {
+    expect(postingDateInMonth('2026-02', 31)).toBe('2026-02-28');
+    expect(postingDateInMonth('2026-03', 31)).toBe('2026-03-31');
+    expect(postingDateInMonth('2026-07', 20)).toBe('2026-07-20');
+  });
+});
 
 /**
  * The posting cycle (ledger spec C1–C3) and the daily balance walk (A1).

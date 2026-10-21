@@ -56,6 +56,11 @@ function clampedDate(year: number, month1: number, day: number): string {
   return `${year}-${String(month1).padStart(2, '0')}-${String(clamped).padStart(2, '0')}`;
 }
 
+/** The posting date in a 'YYYY-MM' month, clamped to the month's end. Pure: no clock, no database. */
+export function postingDateInMonth(month: string, day: number): string {
+  return clampedDate(Number(month.slice(0, 4)), Number(month.slice(5, 7)), day);
+}
+
 /**
  * The first posting date STRICTLY after `afterIso`.
  *

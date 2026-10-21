@@ -198,4 +198,41 @@ describe('payoffProjection: a daily rate costs a month, not a day', () => {
   it('lands where a month of daily charges puts it', () => {
     expect(payoffProjection(lineOfCredit(70_000), '2026-07-15')!.projectedPayoffMonth).toBe('2029-05');
   });
+
+  /** Decision 18: periods run on the loan's own posting day, not the 1st. */
+  describe('on the loan posting day', () => {
+    const setDay = (itemId: number, postingDay: number | null, purchaseDate?: string): void => {
+      current!.sqlite.prepare('update warranty_items set posting_day = ? where id = ?').run(postingDay, itemId);
+      if (purchaseDate) {
+        current!.sqlite.prepare('update warranty_items set purchase_date = ? where id = ?').run(purchaseDate, itemId);
+      }
+    };
+
+    it('an explicit posting day of 1 keeps the existing pin', () => {
+      const itemId = lineOfCredit(70_000);
+      setDay(itemId, 1);
+      expect(payoffProjection(itemId, '2026-07-15')!.projectedPayoffMonth).toBe('2029-05');
+    });
+
+    it('a loan with no posting day uses the day it was borrowed', () => {
+      // Each loan gets its own database (loanWith replaces `current`), so project before the next.
+      const recorded = lineOfCredit(70_000);
+      setDay(recorded, 20);
+      const expected = payoffProjection(recorded, '2026-07-15');
+      const derived = lineOfCredit(70_000);
+      setDay(derived, null, '2025-01-20');
+      expect(payoffProjection(derived, '2026-07-15')).toEqual(expected);
+    });
+
+    it('a recorded day of 31 projects on 31-anchored periods', () => {
+      const itemId = lineOfCredit(70_000);
+      setDay(itemId, 31);
+      const projection = payoffProjection(itemId, '2026-07-15')!;
+      expect(projection.monthlyAppliedCents).toBe(70_000);
+      // Derived by running the simulation once with posting_day 31. The month does not move against
+      // the 1st on this fixture (the month count is coarser than the few days of interest that shift),
+      // so this pins that a 31 day runs, clamps through short months, and lands on the same month.
+      expect(projection.projectedPayoffMonth).toBe('2029-05');
+    });
+  });
 });

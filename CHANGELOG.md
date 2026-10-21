@@ -37,6 +37,7 @@ All notable changes to Budget Tracker are recorded here.
 
 ### Fixed
 
+- **A loan's payoff estimate uses the day its interest posts**, instead of assuming the 1st of each month.
 - **Receipt amounts written with a space between the thousands** (such as 1 234,56 $) are read whole instead of losing the first digits.
 - **Not recurring is offered for a merchant an item covers.** On the recurring charges page, a merchant listed only because a bill or a loan rule covers it can now be taken off the lists; the item and its bills are unchanged.
 - **Removing a receipt while it is being read stops reading it**, so it can no longer fill in the form afterwards. Try again names the file it retries, and screen readers hear the reading and scanner messages.
