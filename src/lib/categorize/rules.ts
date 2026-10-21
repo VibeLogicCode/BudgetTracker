@@ -1026,9 +1026,13 @@ export function setRecurringMarks(input: {
   at?: Date;
 }): RecurringMarkResult {
   const merchants = [...new Set(input.merchants.map((merchant) => merchant.trim().toUpperCase()).filter((merchant) => merchant.length > 0))];
+  // Decision 21: a merchant whose enabled mark already resolves to the requested one is skipped, so
+  // another member's rule is never rewritten and never refused. A disabled rule does not resolve.
+  const rules = listRecurringMarkRules();
+  const pending = input.mark === null ? merchants : merchants.filter((merchant) => recurringMarkFor(merchant, rules) !== input.mark);
   const removed: readonly RecurringMark[] = input.mark === null ? RECURRING_MARK_KINDS : [oppositeMark(input.mark)];
   if (input.actorRole !== 'admin') {
-    for (const merchant of merchants) {
+    for (const merchant of pending) {
       for (const kind of removed) {
         const owner = exactRuleOwner(merchant, kind);
         if (owner !== null && owner.createdBy !== null && owner.createdBy !== input.userId) {
@@ -1039,7 +1043,7 @@ export function setRecurringMarks(input: {
   }
   try {
     getDb().transaction(() => {
-      for (const merchant of merchants) {
+      for (const merchant of pending) {
         if (input.mark !== null) {
           const written = upsertRuleFromCorrection({
             pattern: merchant,
@@ -1061,7 +1065,7 @@ export function setRecurringMarks(input: {
     if (error instanceof MarkRefusal) return { ok: false, reason: 'owned_by_another', ownerName: error.ownerName };
     throw error;
   }
-  return { ok: true, merchants: merchants.length };
+  return { ok: true, merchants: pending.length };
 }
 
 /** Spec 2026-10-21 §2.1. The two match types an Always ask rule takes (decision 1: no word, no amount window). */

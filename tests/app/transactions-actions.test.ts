@@ -2705,6 +2705,30 @@ describe('bulkRecurringMarkAction', () => {
     expect(listRules('recurring')).toEqual([]);
   });
 
+  it('skips a merchant another member already marked and marks the rest', async () => {
+    const { db, addTxn } = setup();
+    const bob = insertTestUser(db, { name: 'Bob', username: 'bob', role: 'member' });
+    upsertRuleFromCorrection({ pattern: 'CEDAR PHONE CO', matchType: 'exact', ruleKind: 'recurring', categoryId: null, createdBy: bob, actorRole: 'member' });
+    const a = addTxn('RIVERSIDE GYM', -4500);
+    const b = addTxn('CEDAR PHONE CO', -6200);
+    currentUser = { ...currentUser, role: 'member' };
+    expect(await bulkRecurringMarkAction({}, formData({ ids: `${a},${b}`, mark: 'recurring' }))).toEqual({
+      message: 'Marked 1 merchant as recurring.',
+    });
+    expect(listRules('recurring').map((rule) => rule.pattern).sort()).toEqual(['CEDAR PHONE CO', 'RIVERSIDE GYM']);
+  });
+
+  it('says everything is already marked rather than that there is no merchant', async () => {
+    const { db, addTxn } = setup();
+    const bob = insertTestUser(db, { name: 'Bob', username: 'bob', role: 'member' });
+    upsertRuleFromCorrection({ pattern: 'CEDAR PHONE CO', matchType: 'exact', ruleKind: 'recurring', categoryId: null, createdBy: bob, actorRole: 'member' });
+    const b = addTxn('CEDAR PHONE CO', -6200);
+    currentUser = { ...currentUser, role: 'member' };
+    expect(await bulkRecurringMarkAction({}, formData({ ids: String(b), mark: 'recurring' }))).toEqual({
+      message: 'Already marked as recurring.',
+    });
+  });
+
   /** Review Focus 2. */
   it('a refusal over one merchant writes nothing for the others', async () => {
     const { db, addTxn } = setup();

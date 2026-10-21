@@ -1091,14 +1091,43 @@ describe('recurring marks', () => {
     expect(listRules('not_recurring').map((rule) => rule.pattern)).toEqual(['CEDAR PHONE CO']);
   });
 
-  /** Review Focus 2, the other half: the mark's own rule belongs to somebody else. */
-  it('rolls back every merchant when the mark itself belongs to somebody else', () => {
+  /** Decision 21: a merchant that already resolves to the requested mark is skipped, not refused. */
+  it('skips a merchant already marked that way by somebody else, and counts only the changed', () => {
     const { admin, member } = setupMarks();
     setRecurringMarks({ merchants: ['CEDAR PHONE CO'], mark: 'recurring', userId: admin, actorRole: 'admin' });
     expect(
       setRecurringMarks({ merchants: ['RIVERSIDE GYM', 'CEDAR PHONE CO'], mark: 'recurring', userId: member, actorRole: 'member' }),
+    ).toEqual({ ok: true, merchants: 1 });
+    expect(listRules('recurring').map((rule) => rule.pattern).sort()).toEqual(['CEDAR PHONE CO', 'RIVERSIDE GYM']);
+    expect(listRules('recurring').find((rule) => rule.pattern === 'CEDAR PHONE CO')?.createdBy).toBe(admin);
+  });
+
+  it('still rolls back when a disabled mark of somebody else would have to be rewritten', () => {
+    const { admin, member } = setupMarks();
+    setRecurringMarks({ merchants: ['CEDAR PHONE CO'], mark: 'recurring', userId: admin, actorRole: 'admin' });
+    setRuleDisabledFlag(listRules('recurring')[0]!.id, true);
+    expect(
+      setRecurringMarks({ merchants: ['RIVERSIDE GYM', 'CEDAR PHONE CO'], mark: 'recurring', userId: member, actorRole: 'member' }),
     ).toEqual({ ok: false, reason: 'owned_by_another', ownerName: 'Alice' });
     expect(listRules('recurring').map((rule) => rule.pattern)).toEqual(['CEDAR PHONE CO']);
+  });
+
+  it('counts zero when every merchant already matches', () => {
+    const { admin, member } = setupMarks();
+    setRecurringMarks({ merchants: ['CEDAR PHONE CO', 'RIVERSIDE GYM'], mark: 'recurring', userId: admin, actorRole: 'admin' });
+    expect(
+      setRecurringMarks({ merchants: ['RIVERSIDE GYM', 'CEDAR PHONE CO'], mark: 'recurring', userId: member, actorRole: 'member' }),
+    ).toEqual({ ok: true, merchants: 0 });
+    expect(listRules('recurring')).toHaveLength(2);
+  });
+
+  it('a contains rule that resolves to the same mark counts as already marked', () => {
+    const { admin, member } = setupMarks();
+    upsertRuleFromCorrection({ pattern: 'HARBOUR', matchType: 'contains', ruleKind: 'recurring', categoryId: null, createdBy: admin, actorRole: 'admin' });
+    expect(
+      setRecurringMarks({ merchants: ['HARBOUR INSURANCE'], mark: 'recurring', userId: member, actorRole: 'member' }),
+    ).toEqual({ ok: true, merchants: 0 });
+    expect(listRules('recurring').map((rule) => rule.pattern)).toEqual(['HARBOUR']);
   });
 
   it('lets an admin write over anyone', () => {

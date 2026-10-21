@@ -535,10 +535,14 @@ export async function setRecurringMarkAction(_prev: ActionState, formData: FormD
     .safeParse({ transactionId: formData.get('transactionId'), mark: formData.get('mark') });
   if (!parsed.success) return { error: 'Invalid request.' };
   if (!allTransactionsVisible([parsed.data.transactionId], user)) return { error: NOT_YOURS_ERROR };
-  const merchants = merchantsOfTransactions([parsed.data.transactionId]);
+  const merchants = merchantsOfTransactions([parsed.data.transactionId]).filter((merchant) => merchant.trim().length > 0);
+  if (merchants.length === 0) return { error: 'There is no merchant on this row to mark.' };
   const result = setRecurringMarks({ merchants, mark: markOf(parsed.data.mark), userId: user.id, actorRole: user.role });
   if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
-  if (result.merchants === 0) return { error: 'There is no merchant on this row to mark.' };
+  if (result.merchants === 0) {
+    if (parsed.data.mark === 'recurring') return { message: 'Already marked as recurring.' };
+    if (parsed.data.mark === 'not_recurring') return { message: 'Already marked as not recurring.' };
+  }
   revalidatePath('/transactions');
   revalidatePath('/insights');
   revalidatePath('/insights/recurring');
@@ -559,10 +563,14 @@ export async function bulkRecurringMarkAction(_prev: ActionState, formData: Form
   if (ids.length === 0 || !mark.success) return { error: 'Invalid request.' };
   // Ruling R2 fix round 2: every id must resolve through the viewer, or nothing is written.
   if (!allTransactionsVisible(ids, user)) return { error: NOT_YOURS_ERROR };
-  const merchants = merchantsOfTransactions(ids);
+  const merchants = merchantsOfTransactions(ids).filter((merchant) => merchant.trim().length > 0);
+  if (merchants.length === 0) return { error: 'There is no merchant on these rows to mark. Transfer rows are skipped.' };
   const result = setRecurringMarks({ merchants, mark: markOf(mark.data), userId: user.id, actorRole: user.role });
   if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
-  if (result.merchants === 0) return { error: 'There is no merchant on these rows to mark. Transfer rows are skipped.' };
+  if (result.merchants === 0) {
+    if (mark.data === 'recurring') return { message: 'Already marked as recurring.' };
+    if (mark.data === 'not_recurring') return { message: 'Already marked as not recurring.' };
+  }
   revalidatePath('/transactions');
   revalidatePath('/insights');
   revalidatePath('/insights/recurring');
