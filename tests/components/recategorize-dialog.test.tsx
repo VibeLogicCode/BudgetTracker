@@ -44,6 +44,18 @@ describe('the rule choice (spec §2.4)', () => {
     expect(screen.getByText('Changes the rule PHONEMART 884 → Groceries to the category you pick.')).toBeTruthy();
   });
 
+  /** v1.57.1: no rule can be named, and the row was not a guess. */
+  it('a rule-filed row whose rule has changed since says so, not the guess hint, and keeps the three choices', () => {
+    render(<RecategorizeDialog {...base} row={{ ...ROW, filedBy: null }} canAuthorRules isAdmin />);
+    expect(screen.getByRole('group', { name: 'Future PHONEMART 884 rows' })).toBeTruthy();
+    expect(screen.getByLabelText(/Change this transaction only/)).toBeTruthy();
+    expect(screen.getByLabelText(/Always ask about PHONEMART 884 from now on/)).toBeTruthy();
+    const teach = screen.getByLabelText(/Also file PHONEMART 884 this way from now on/).closest('label') as HTMLElement;
+    expect(teach.textContent).toBe('Also file PHONEMART 884 this way from now onSet by a rule (it has changed since). Saves an exact rule for PHONEMART 884 with the category you pick.');
+    expect(screen.queryByText(/guesser/)).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Edit the rule under Settings' })).toBeNull();
+  });
+
   it('offers no Also file option when the filing rule is amount-bounded, and keeps the other two and the admin link', () => {
     render(<RecategorizeDialog {...base} row={{ ...ROW, filedBy: { ruleId: 9, pattern: 'PHONEMART', matchType: 'contains', bounded: true } }} canAuthorRules isAdmin />);
     expect(screen.queryByLabelText(/Also file/)).toBeNull();

@@ -143,6 +143,8 @@ self-scoped), it adds a radio group **Future <MERCHANT> rows** with three choice
      over PHONEMART (contains). Other PHONEMART rows keep their rule.** This is true by
      `outranks` (`rules.ts:453-469`): the longer pattern wins, then exact over word over contains.
    - a guess: **Adds a rule for PHONEMART 884; the guesser learns from it too.**
+   - a rule filed the row but no current rule accounts for it (v1.57.1): **Set by a rule (it has
+     changed since). Saves an exact rule for PHONEMART 884 with the category you pick.**
    The action's own refusals and notes come through unchanged: another member's rule
    (`ruleOwnedError`), an archived category (`ARCHIVED_CATEGORY_NO_RULE`), an Always ask merchant
    (`ALWAYS_ASK_NO_RULE`).

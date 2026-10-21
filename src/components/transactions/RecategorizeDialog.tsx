@@ -76,7 +76,11 @@ export function RecategorizeDialog({
       ? `Changes the rule ${row.normalizedMerchant} → ${currentLabel} to the category you pick.`
       : filedBy !== null
         ? `Adds a rule for ${row.normalizedMerchant} that wins over ${filedBy.pattern} (${filedBy.matchType}). Other ${filedBy.pattern} rows keep their rule.`
-        : `Adds a rule for ${row.normalizedMerchant}; the guesser learns from it too.`;
+        : row.source === 'rule'
+          ? // v1.57.1: a rule filed the row but no current rule accounts for it, so none can be named,
+            // and the teach may update an exact rule that already exists rather than add one.
+            `Set by a rule (it has changed since). Saves an exact rule for ${row.normalizedMerchant} with the category you pick.`
+          : `Adds a rule for ${row.normalizedMerchant}; the guesser learns from it too.`;
 
   return (
     <RowDialog
