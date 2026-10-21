@@ -2,6 +2,7 @@ import { and, asc, eq, gte, inArray, lt, sql, type SQL } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { accounts, loanMatcherRules, transactions, warrantyItemTypes, warrantyItems } from '@/db/schema';
 import { ownerScope, type Viewer } from '@/lib/auth/viewer';
+import { upcomingBills, type UpcomingBill } from '@/lib/bills';
 import { addDaysIso, daysBetweenIso } from '@/lib/dates';
 import { listRecurringMarkRules, recurringMarkFor } from '@/lib/categorize/rules';
 import {
@@ -296,24 +297,6 @@ function needles(today: string, scope: number | null): Needle[] {
 }
 
 /**
- * Spec 2026-10-06 §2.6, checkpoint 2 ruling. Live bill-kind items, as needles. A bill never makes a
- * merchant tracked (RECURRING_ITEM_KINDS leaves bills out: its schedule replaces a cadence), but its
- * unpaid installments are Coming up rows already, so a marked merchant one of them covers by name or
- * vendor must not be listed there again as an Expected row. Same owner scope as needles().
- */
-function billNeedles(today: string, scope: number | null): Needle[] {
-  const ownerClause = scope === null ? [] : [eq(warrantyItems.ownerUserId, scope)];
-  const items = getDb()
-    .select({ itemId: warrantyItems.id, itemName: warrantyItems.name, vendor: warrantyItems.vendor })
-    .from(warrantyItems)
-    .innerJoin(warrantyItemTypes, eq(warrantyItemTypes.id, warrantyItems.typeId))
-    .where(and(eq(warrantyItemTypes.kind, 'bill'), notEnded(today), ...ownerClause))
-    .orderBy(asc(warrantyItems.id))
-    .all();
-  return itemNeedles(items);
-}
-
-/**
  * Ruling R2, resolved in the S-01 order: `ownerScope(viewer)` is read FIRST and a non-null
  * result WINS, so the caller-supplied `ownerUserId` (a dashboard `?person=`) can only ever
  * narrow a viewer who was already entitled to any member's figures. `ownerUserId` is required
@@ -484,19 +467,34 @@ export interface ExpectedCharge {
 }
 
 /**
- * Spec 2026-10-06 §2.6. Known merchants BY MARK only, with a rhythm, whose next charge falls on or
- * before today + `days`: a tracked merchant already shows through its item's own rows, so a marked
- * merchant something covers -- or a bill item covers by name or vendor -- is left out too. The overdue bound is the card's (COMING_UP_OVERDUE_DAYS),
- * applied there as it is to bills. Scoped like upcomingBills -- the viewer only, no person pill.
+ * Spec 2026-10-06 §2.6, plan decision 19. Known merchants BY MARK only, with a rhythm, whose next
+ * charge falls on or before today + `days`. A row is left out only when a BILL ROW on the card
+ * stands for it: a row for the item that tracks the merchant, or a row whose name covers the
+ * merchant. A covering item with no row (no billing amount, nothing unpaid in the window, a loan
+ * payment rule) leaves the merchant listed. `bills` is the card's own upcomingBills list (overdue
+ * included); omitted, it is fetched the same way. The overdue bound is the card's
+ * (COMING_UP_OVERDUE_DAYS), applied there as it is to bills. Scoped like upcomingBills -- the
+ * viewer only, no person pill.
  */
-export function expectedRecurringCharges(input: { today: string; days: number; viewer: Viewer }): ExpectedCharge[] {
+export function expectedRecurringCharges(input: {
+  today: string;
+  days: number;
+  viewer: Viewer;
+  bills?: readonly UpcomingBill[];
+}): ExpectedCharge[] {
   const windowEnd = addDaysIso(input.today, input.days);
   const out: ExpectedCharge[] = [];
-  // Checkpoint 2 ruling: a bill item's installments already stand for this charge on the card.
-  const bills = billNeedles(input.today, ownerScope(input.viewer));
+  const bills = input.bills ?? upcomingBills({ today: input.today, days: input.days, includeOverdue: true, viewer: input.viewer });
+  const billNeedleList = bills.map((bill) => itemNeedles([{ itemId: bill.itemId, itemName: bill.name, vendor: null }])[0]);
   for (const row of recurringCharges({ today: input.today, ownerUserId: null, viewer: input.viewer, accountId: null }).known) {
-    if (row.knownBy !== 'mark' || row.tracked !== null) continue;
-    if (bills.some((needle) => covers(needle, row.merchant))) continue;
+    if (row.knownBy !== 'mark') continue;
+    const tracked = row.tracked;
+    const standsFor = bills.some(
+      (bill, index) =>
+        (tracked !== null && bill.itemId === tracked.itemId) ||
+        (billNeedleList[index] !== undefined && covers(billNeedleList[index], row.merchant)),
+    );
+    if (standsFor) continue;
     if (row.nextExpected === null || row.typicalCents === null || row.nextExpected > windowEnd) continue;
     out.push({
       merchant: row.merchant,

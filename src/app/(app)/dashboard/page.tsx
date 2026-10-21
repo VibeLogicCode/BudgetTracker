@@ -238,7 +238,7 @@ export default async function DashboardPage({
   // Spec 2026-10-06 §2.6. Marked merchants' next charges, for the Coming up card only: never added to
   // `bills` or to spendPlan, and only read when the card renders (the current month). Viewer-scoped,
   // like upcomingBills -- the person pill narrows neither.
-  const expected = isCurrentMonth ? expectedRecurringCharges({ today, days: 30, viewer }) : [];
+  const expected = isCurrentMonth ? expectedRecurringCharges({ today, days: 30, viewer, bills }) : [];
   const spendPlan = safeToSpend({ month, today, viewer });
   const householdTotals = selfScoped ? totals : scopeUserId === null ? totals : budgetTotals(budgetProgress(month));
 

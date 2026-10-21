@@ -11,6 +11,7 @@ import { listRules, setRecurringMarks, setRuleDisabledFlag } from '@/lib/categor
 import { RECURRING_LATE_GRACE_DAYS } from '@/lib/predict/constants';
 import { expectedRecurringCharges, recurringCharges, recurringLoad, type RecurringCharges } from '@/lib/recurring';
 import { createManualTransaction } from '@/lib/transactions';
+import { addInstallment } from '@/lib/warranty/installments';
 import { createTestDb, type TestDb } from '../helpers/db';
 import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
@@ -695,8 +696,37 @@ describe('expectedRecurringCharges', () => {
     const ctx = await setup();
     ctx.cadence({ merchant: 'MAPLE STREAMING', count: 4, endsDaysAgo: 10, cents: 1349 });
     ctx.mark('MAPLE STREAMING', 'recurring');
-    ctx.item({ name: 'Maple Streaming', typeId: ctx.itemType('Subscription', 'subscription') });
+    ctx.item({ name: 'Maple Streaming', typeId: ctx.itemType('Subscription', 'subscription'), billingCycle: 'monthly', billingAmountCents: 1349 });
     expect(expected(ctx)).toEqual([]);
+  });
+
+  /** Plan decision 19: only a bill row on the card stands for a charge. */
+  it('lists a marked merchant whose covering item has no billing amount', async () => {
+    const ctx = await setup();
+    ctx.cadence({ merchant: 'MAPLE STREAMING', count: 4, endsDaysAgo: 10, cents: 1349 });
+    ctx.mark('MAPLE STREAMING', 'recurring');
+    ctx.item({ name: 'Maple Streaming', typeId: ctx.itemType('Subscription', 'subscription') });
+    expect(expected(ctx)).toEqual([
+      { merchant: 'MAPLE STREAMING', expectedDate: addDaysIso(TODAY, 20), typicalCents: 1349, late: false, accountName: 'Chequing' },
+    ]);
+  });
+
+  it('lists a marked merchant whose bill item has nothing unpaid in the window', async () => {
+    const ctx = await setup();
+    ctx.cadence({ merchant: 'HARBOUR INSURANCE', count: 4, endsDaysAgo: 10, cents: 13400 });
+    ctx.mark('HARBOUR INSURANCE', 'recurring');
+    ctx.item({ name: 'Harbour Insurance', typeId: ctx.itemType('Bill', 'bill') });
+    expect(expected(ctx).map((charge) => charge.merchant)).toEqual(['HARBOUR INSURANCE']);
+  });
+
+  it('lists a marked merchant a loan payment rule covers, which never has a bill row', async () => {
+    const ctx = await setup();
+    const typeId = ctx.itemType('Loan', 'loan');
+    const loanId = ctx.item({ name: 'Car loan', typeId, balanceCents: 5_000_000 });
+    ctx.cadence({ merchant: 'CAR LOAN CO', count: 4, endsDaysAgo: 10, cents: 40000 });
+    saveLoanRule({ itemId: loanId, merchantContains: 'CAR LOAN', accountId: null, enabled: true });
+    ctx.mark('CAR LOAN CO', 'recurring');
+    expect(expected(ctx).map((charge) => charge.merchant)).toEqual(['CAR LOAN CO']);
   });
 
   /** Review Focus 5. */
@@ -722,7 +752,8 @@ describe('expectedRecurringCharges', () => {
     const ctx = await setup();
     ctx.cadence({ merchant: 'HARBOUR INSURANCE', count: 4, endsDaysAgo: 10, cents: 13400 });
     ctx.mark('HARBOUR INSURANCE', 'recurring');
-    ctx.item({ name: 'Harbour Insurance', typeId: ctx.itemType('Bill', 'bill') });
+    const billId = ctx.item({ name: 'Harbour Insurance', typeId: ctx.itemType('Bill', 'bill') });
+    addInstallment({ itemId: billId, dueDate: addDaysIso(TODAY, 5), amountCents: 13400 });
     expect(expected(ctx)).toEqual([]);
     expect(read(ctx).known.map((row) => [row.merchant, row.knownBy, row.tracked])).toEqual([['HARBOUR INSURANCE', 'mark', null]]);
   });

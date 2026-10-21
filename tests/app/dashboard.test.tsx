@@ -1945,4 +1945,47 @@ describe('DashboardPage — Coming up lists expected recurring charges', () => {
     expect(card.querySelector('[aria-label^="Total due"]')).toBeNull();
     expect(card.textContent).toMatch(/nothing more due before/);
   });
+
+  it('still lists a marked merchant whose covering item has no billing amount', async () => {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    const accountId = createAccount({ name: 'Everyday Chequing', type: 'chequing', ownerUserId: adult.id });
+    const today = todayIso();
+    for (const daysAgo of [60, 30]) {
+      createManualTransaction({
+        accountId,
+        date: addDaysIso(today, -daysAgo),
+        description: 'MAPLE STREAMING',
+        amountCents: -1349,
+        categoryId: null,
+        attributedUserId: adult.id,
+        userId: adult.id,
+        actorRole: 'admin',
+      });
+    }
+    setRecurringMarks({ merchants: ['MAPLE STREAMING'], mark: 'recurring', userId: adult.id, actorRole: 'admin' });
+    const type = createItemType('Subscription type', 'subscription');
+    createWarrantyItem({
+      name: 'Maple Streaming',
+      vendor: null,
+      model: null,
+      serial: null,
+      purchaseDate: '2026-01-01',
+      warrantyMonths: null,
+      isLifetime: true,
+      priceCents: null,
+      ownerUserId: adult.id,
+      transactionId: null,
+      typeId: type.id,
+      notes: null,
+    });
+    currentUser.value = { id: adult.id, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+    const card = screen.getByRole('heading', { name: 'Coming up' }).closest('section') as HTMLElement;
+    const inCard = within(card);
+    expect(inCard.getByText('MAPLE STREAMING')).toBeTruthy();
+    expect(inCard.getByText('Expected')).toBeTruthy();
+  });
 });
