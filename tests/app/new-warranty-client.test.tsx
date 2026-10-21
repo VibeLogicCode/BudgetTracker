@@ -128,6 +128,14 @@ describe('NewWarrantyClient', () => {
 
   // --- v1.3.0: billing cycle and amount (task A) ---
 
+  it('names the loan its own start date and payment amount in the header', () => {
+    const { container } = renderForm();
+    fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '3' } }); // Car loan
+    const text = container.textContent ?? '';
+    expect(text).toContain('start date, vendor and payment amount fill themselves in.');
+    expect(text).not.toContain('vendor and price');
+  });
+
   it('hides the Billing fields until a subscription/contract type is selected', () => {
     const { container } = renderForm();
     expect(container.querySelector('select[name="billingCycle"]')).toBeNull();

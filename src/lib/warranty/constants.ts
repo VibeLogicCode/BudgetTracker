@@ -172,9 +172,11 @@ export function formSaveLabel(kind: ItemKind): string {
  * and the due date, so its header says that instead of promising a price the bill form never shows.
  */
 export function formDescription(kind: ItemKind): string {
-  return installmentsAllowedForKind(kind)
-    ? 'Attach the bill first and the amount due and due date fill themselves in.'
-    : 'Attach the receipt first and the date, vendor and price fill themselves in.';
+  if (installmentsAllowedForKind(kind)) {
+    return 'Attach the bill first and the amount due and due date fill themselves in.';
+  }
+  const amount = billingAllowedForKind(kind) ? billingAmountLabelForKind(kind) : 'Price';
+  return `Attach the receipt first and the ${formStartLabel(kind).toLowerCase()}, vendor and ${amount.toLowerCase()} fill themselves in.`;
 }
 
 /**

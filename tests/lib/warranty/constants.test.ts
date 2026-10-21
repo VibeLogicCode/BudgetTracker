@@ -499,10 +499,11 @@ describe('loanAssignedMessage (Addendum A, ruling A8)', () => {
 
 /** Spec 2026-09-30 §2.5: the Add page's header stops promising a price to a bill. */
 describe('formDescription', () => {
-  it('promises the amount due and due date for a bill, and the date, vendor and price otherwise', () => {
+  it('names each kind its own date and amount field', () => {
+    expect(formDescription('warranty')).toBe('Attach the receipt first and the purchase date, vendor and price fill themselves in.');
+    expect(formDescription('subscription')).toBe('Attach the receipt first and the start date, vendor and amount fill themselves in.');
+    expect(formDescription('contract')).toBe('Attach the receipt first and the start date, vendor and amount fill themselves in.');
+    expect(formDescription('loan')).toBe('Attach the receipt first and the start date, vendor and payment amount fill themselves in.');
     expect(formDescription('bill')).toBe('Attach the bill first and the amount due and due date fill themselves in.');
-    for (const kind of ITEM_KINDS.filter((k) => k !== 'bill')) {
-      expect(formDescription(kind)).toBe('Attach the receipt first and the date, vendor and price fill themselves in.');
-    }
   });
 });
