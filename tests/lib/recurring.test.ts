@@ -333,6 +333,43 @@ describe('recurringCharges: the tracked badge names what covers the merchant', (
     expect(rows[0].tracked).toEqual({ kind: 'item', itemId, itemName: 'Netflix Premium' });
   });
 
+  it('a short item name does not cover a longer word that merely contains it', async () => {
+    const ctx = await setup();
+    ctx.item({ name: 'Phone', typeId: ctx.itemType('Subscription', 'subscription') });
+    ctx.cadence({ merchant: 'PHONEMART' });
+
+    const rows = rowsOf(recurringCharges({ today: TODAY, ownerUserId: null, viewer: household(ctx.adultId), accountId: null }));
+    expect(rows[0].tracked).toBeNull();
+  });
+
+  it('a whole-word prefix still covers: Riverside Water against RIVERSIDE WATER UTIL', async () => {
+    const ctx = await setup();
+    const itemId = ctx.item({ name: 'Riverside Water', typeId: ctx.itemType('Subscription', 'subscription') });
+    ctx.cadence({ merchant: 'RIVERSIDE WATER UTIL' });
+
+    const rows = rowsOf(recurringCharges({ today: TODAY, ownerUserId: null, viewer: household(ctx.adultId), accountId: null }));
+    expect(rows[0].tracked).toEqual({ kind: 'item', itemId, itemName: 'Riverside Water' });
+  });
+
+  it('matches through punctuation: vendor Netflix covers NETFLIX.COM', async () => {
+    const ctx = await setup();
+    const itemId = ctx.item({ name: 'Streaming plan', vendor: 'Netflix', typeId: ctx.itemType('Subscription', 'subscription') });
+    ctx.cadence({ merchant: 'NETFLIX.COM' });
+
+    const rows = rowsOf(recurringCharges({ today: TODAY, ownerUserId: null, viewer: household(ctx.adultId), accountId: null }));
+    expect(rows[0].tracked).toEqual({ kind: 'item', itemId, itemName: 'Streaming plan' });
+  });
+
+  it('a loan payment rule still matches by plain substring', async () => {
+    const ctx = await setup();
+    const loanId = ctx.item({ name: 'Civic', typeId: ctx.itemType('Loan', 'loan'), balanceCents: 5_000_000 });
+    ctx.cadence({ merchant: 'PHONEMART', cents: 40000 });
+    saveLoanRule({ itemId: loanId, merchantContains: 'PHONE', accountId: null, enabled: true });
+
+    const rows = rowsOf(recurringCharges({ today: TODAY, ownerUserId: null, viewer: household(ctx.adultId), accountId: null }));
+    expect(rows[0].tracked).toEqual({ kind: 'rule', itemId: loanId, itemName: 'Civic' });
+  });
+
   it('an item that has already ENDED does not: the charge outliving the contract is the finding', async () => {
     const ctx = await setup();
     const typeId = ctx.itemType('Contract', 'contract');

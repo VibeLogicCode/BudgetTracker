@@ -230,12 +230,31 @@ interface Needle extends RecurringCover {
  *     (the merchant) are the same commitment written two ways and neither contains the other
  *     whole. That is a heuristic and can be wrong, so the row NAMES the item it matched: a
  *     reader who does not recognise the pairing can see it and correct the record. The failure
- *     mode being guarded against is a badge that silently withholds the Track link.
+ *     mode being guarded against is a badge that silently withholds the Track link. The
+ *     comparison is by whole words, so an item called "Phone" does not claim PHONEMART.
  */
 function covers(needle: Needle, merchant: string): boolean {
   if (needle.needle.length < MIN_NEEDLE_CHARS) return false;
-  if (merchant.includes(needle.needle)) return true;
-  return needle.bidirectional && merchant.length >= MIN_NEEDLE_CHARS && needle.needle.includes(merchant);
+  if (!needle.bidirectional) return merchant.includes(needle.needle);
+  if (merchant.length < MIN_NEEDLE_CHARS) return false;
+  return containsWords(merchant, needle.needle) || containsWords(needle.needle, merchant);
+}
+
+/** Uppercase words of a text, split on anything that is not a letter or digit. */
+function wordsOf(text: string): string[] {
+  const cleaned = text.toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
+  return cleaned === '' ? [] : cleaned.split(' ');
+}
+
+/** Do the needle's words appear in the haystack as one contiguous run? */
+function containsWords(haystack: string, needle: string): boolean {
+  const hay = wordsOf(haystack);
+  const run = wordsOf(needle);
+  if (run.length === 0) return false;
+  for (let start = 0; start + run.length <= hay.length; start += 1) {
+    if (run.every((word, offset) => hay[start + offset] === word)) return true;
+  }
+  return false;
 }
 
 /** An item's name and vendor as bidirectional needles; shorter than MIN_NEEDLE_CHARS matches everything. */
