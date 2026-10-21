@@ -32,14 +32,49 @@ function listPosition(rect: DOMRect, height: number): { top: number; left: numbe
 
 const CLIPPING_OVERFLOW = new Set(['auto', 'scroll', 'hidden', 'clip']);
 
-/** The field's ancestors that clip what they hold (a scrolling dialog panel, an overflow-hidden card). */
+/**
+ * v1.57.1. An element that a `position: fixed` descendant is placed against instead of the window,
+ * so its overflow clips that descendant again: a transform, filter, perspective, paint or layout
+ * containment (or a container query box, which implies layout containment), or will-change naming
+ * one of those. Read through getPropertyValue, so an engine that does not know a property gives ''.
+ */
+function holdsFixedElements(style: CSSStyleDeclaration): boolean {
+  const set = (name: string) => {
+    const value = style.getPropertyValue(name).trim();
+    return value !== '' && value !== 'none';
+  };
+  return (
+    set('transform') ||
+    set('filter') ||
+    set('backdrop-filter') ||
+    set('perspective') ||
+    /\b(paint|layout|strict|content)\b/.test(style.getPropertyValue('contain')) ||
+    /\b(size|inline-size)\b/.test(style.getPropertyValue('container-type')) ||
+    /\b(transform|filter|perspective|contain)\b/.test(style.getPropertyValue('will-change'))
+  );
+}
+
+/**
+ * The field's ancestors that clip what they hold (a scrolling dialog panel, an overflow-hidden card).
+ *
+ * v1.57.1: the walk skips everything above a `position: fixed` ancestor (RowDialog's backdrop), which
+ * is placed against the window and so cannot be clipped by the card or list it happens to sit in.
+ * Counting those made a field in a centred dialog read as out of view, and the first scroll after
+ * opening closed the list. The walk takes up again at an ancestor that holds fixed elements itself.
+ */
 function clippingAncestors(element: HTMLElement): HTMLElement[] {
   const found: HTMLElement[] = [];
+  let aboveFixed = false;
   for (let node = element.parentElement; node !== null && node !== document.body; node = node.parentElement) {
     const style = window.getComputedStyle(node);
+    if (aboveFixed) {
+      if (!holdsFixedElements(style)) continue;
+      aboveFixed = false;
+    }
     // Named values only: an engine that leaves a longhand blank means "not set", not "clips".
     const clips = [style.overflow, style.overflowX, style.overflowY].some((value) => CLIPPING_OVERFLOW.has(value));
     if (clips) found.push(node);
+    if (style.position === 'fixed') aboveFixed = true;
   }
   return found;
 }

@@ -305,6 +305,51 @@ describe('CategoryCombobox: the listbox escapes its container', () => {
     expect(screen.queryByRole('listbox')).toBeNull();
   });
 
+  /**
+   * v1.57.1. A dialog's fixed layer rendered inside a card that clips: the card's rect is on the
+   * page, not around the centred dialog, and it must not decide whether the field can be seen.
+   */
+  function fixedPanelInClippingCard(outerStyle: React.CSSProperties = { overflow: 'hidden' }) {
+    const { container } = render(
+      <div data-testid="card" style={outerStyle}>
+        <div data-testid="panel" style={{ position: 'fixed', overflowY: 'auto' }}>
+          <CategoryCombobox options={OPTIONS} value={null} onChange={() => {}} label="Category" />
+        </div>
+      </div>,
+    );
+    const card = container.querySelector('[data-testid="card"]') as HTMLElement;
+    const panel = container.querySelector('[data-testid="panel"]') as HTMLElement;
+    vi.spyOn(card, 'getBoundingClientRect').mockReturnValue(
+      { top: 900, bottom: 1000, left: 0, right: 800, width: 800, height: 100, x: 0, y: 900, toJSON: () => ({}) } as DOMRect,
+    );
+    vi.spyOn(panel, 'getBoundingClientRect').mockReturnValue(
+      { top: 100, bottom: 600, left: 0, right: 800, width: 800, height: 500, x: 0, y: 100, toJSON: () => ({}) } as DOMRect,
+    );
+    const input = screen.getByRole('combobox') as HTMLInputElement;
+    const spy = vi.spyOn(input, 'getBoundingClientRect').mockReturnValue(rect(300));
+    fireEvent.focus(input);
+    return { panel, spy };
+  }
+
+  it('inside a fixed panel, an ancestor above the panel does not clip it, so a scroll keeps the list open', () => {
+    const { panel } = fixedPanelInClippingCard();
+    fireEvent.scroll(panel);
+    expect(screen.queryByRole('listbox')).toBeTruthy();
+  });
+
+  it('inside a fixed panel, still closes once the field scrolls out of the panel itself', () => {
+    const { panel, spy } = fixedPanelInClippingCard();
+    spy.mockReturnValue(rect(40));
+    fireEvent.scroll(panel);
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
+  it('an ancestor that holds fixed elements itself (a transform) still clips a fixed panel inside it', () => {
+    const { panel } = fixedPanelInClippingCard({ overflow: 'hidden', transform: 'translateX(0px)' });
+    fireEvent.scroll(panel);
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
   it('is not a Tab stop, so Tab leaves the field instead of landing on the list', () => {
     render(<CategoryCombobox options={OPTIONS} value={null} onChange={() => {}} label="Category" />);
     open();
