@@ -76,6 +76,8 @@ const REQUIRE_VIEWER: { file: string; fn: string }[] = [
   // listTransactions is: append eq(transactions.attributedUserId, ownerScope(viewer)) AFTER the
   // caller's own attributedUserId clause, never instead of it.
   { file: 'src/lib/budgets.ts', fn: 'categoryTransactions' },
+  // Spec 2026-10-21 §2.2: Budgets' Not categorized yet card, a spending read like categoryTransactions.
+  { file: 'src/lib/budgets.ts', fn: 'uncategorizedSpend' },
   // F-05 (2026-09-02 review, v1.31.0). Two read models over one household's charges and one
   // household's recorded items -- a recurring-charge list is a spending read like any other, and
   // v1.30.0 shipped four fixes for read paths that forgot. Both take the viewer and resolve
@@ -265,8 +267,9 @@ describe('ruling R2: every read-model helper takes a viewer', () => {
   //
   // Spec 2026-10-05: raised from 34 to 41, the actual count with merchantsOfTransactions added.
   // Spec 2026-10-06: raised from 41 to 42, the actual count with expectedRecurringCharges added.
-  it('the named lists cannot shrink below 42 entries', () => {
-    expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(42);
+  // Spec 2026-10-21: raised from 42 to 43, the actual count with uncategorizedSpend added.
+  it('the named lists cannot shrink below 43 entries', () => {
+    expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(43);
   });
 });
 

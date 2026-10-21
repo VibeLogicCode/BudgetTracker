@@ -93,6 +93,22 @@ describe('transactionsHref — the person scope the card was built with', () => 
 });
 
 describe('transactionsHref — the figure the link is under', () => {
+  /** Spec 2026-10-21 §2.2: Budgets' Categorize link. Review mode for a household viewer; the plain list for a self viewer. */
+  it('the uncategorized queue link opens the review queue’s Uncategorized tab for the month, or the plain list for a self viewer', () => {
+    const href = transactionsHref({ range: { from: '2026-02-01', to: '2026-02-28' }, person: 4 }, { kind: 'uncategorized-queue' });
+    const params: TransactionParams = Object.fromEntries(new URLSearchParams(href.slice(href.indexOf('?') + 1)));
+    const range = resolveRange({ preset: params.range as string, from: params.from as string, to: params.to as string, today: TODAY, fallback: null });
+    const household = readFilter(params, range, null, params.review === '1');
+    expect({
+      reviewOnly: household.reviewOnly, reviewQueue: household.reviewQueue, categoryId: household.categoryId,
+      transferView: household.transferView, from: household.from, to: household.to, person: household.attributedUserId,
+    }).toEqual({ reviewOnly: true, reviewQueue: 'uncategorized', categoryId: 'uncategorized', transferView: 'none', from: '2026-02-01', to: '2026-02-28', person: 4 });
+    const self = readFilter(params, range, 9, false);
+    expect({ reviewOnly: self.reviewOnly, categoryId: self.categoryId, transferView: self.transferView, person: self.attributedUserId }).toEqual({
+      reviewOnly: false, categoryId: 'uncategorized', transferView: 'none', person: 9,
+    });
+  });
+
   it('a rolled-up category row means the category AND its children', () => {
     const filter = filterFromHref(transactionsHref({ range: LAST_6, person: null }, { kind: 'category', categoryId: 7 }));
     expect({ categoryId: filter.categoryId, categoryExact: filter.categoryExact }).toEqual({ categoryId: 7, categoryExact: false });

@@ -1,8 +1,9 @@
-import { and, asc, desc, eq, gte, isNull, lte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, isNull, lt, lte, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { budgetRollover, budgets, transactions, transactionSplits } from '@/db/schema';
 import { ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { listCategories, type CategoryRecord } from '@/lib/categories';
+import { UNCATEGORIZED_WHERE } from '@/lib/categorize/engine';
 import { nowIso } from '@/lib/clock';
 import { addMonths, isMonthKey, monthEnd, monthRange, monthStart } from '@/lib/dates';
 import { netSpentCents, pctOf } from '@/lib/money';
@@ -284,6 +285,58 @@ export function categoryTransactions(
     .where(and(...clauses))
     .orderBy(desc(transactions.date), desc(transactions.id))
     .all();
+}
+
+export interface UncategorizedSpend {
+  /** Positive: money out. */
+  totalCents: number;
+  count: number;
+}
+
+/**
+ * Spec 2026-10-21 §2.2. What Budgets says is not categorized yet: the month's spending rows with
+ * no category and no split parts (UNCATEGORIZED_WHERE, the one definition the review queue's
+ * Uncategorized tab uses too).
+ *
+ * Money OUT only (decision 9): with no category, a refund cannot be told from income, so counting
+ * money in would net a deposit against real spending. Everything else that is not spending
+ * (transfers, loan principal) is left out by SPEND_ROW_WHERE, as in categorySpend.
+ *
+ * `opts` answers "whose card is this" and `viewer` answers "who is asking"; the viewer's owner
+ * scope is appended after the person clause for the reason categoryTransactions gives. One query
+ * over `transactions` alone: a row with no split parts needs no split join.
+ */
+export function uncategorizedSpend(
+  month: string,
+  opts: { scope: BudgetScope; attributedUserId: number | null },
+  viewer: Viewer,
+): UncategorizedSpend {
+  assertMonth(month);
+  if (opts.scope === 'personal' && opts.attributedUserId === null) {
+    throw new Error('Personal uncategorized spend requires a user');
+  }
+  const clauses = [
+    gte(transactions.date, monthStart(month)),
+    lte(transactions.date, monthEnd(month)),
+    ...SPEND_ROW_WHERE,
+    UNCATEGORIZED_WHERE,
+    lt(transactions.amountCents, 0),
+  ];
+  if (opts.scope !== 'household' && opts.attributedUserId !== null) {
+    clauses.push(eq(transactions.attributedUserId, opts.attributedUserId));
+  }
+  const viewerScope = ownerScope(viewer);
+  if (viewerScope !== null) clauses.push(eq(transactions.attributedUserId, viewerScope));
+
+  const row = getDb()
+    .select({
+      totalCents: sql<number>`coalesce(sum(-${transactions.amountCents}), 0)`,
+      count: sql<number>`count(*)`,
+    })
+    .from(transactions)
+    .where(and(...clauses))
+    .get();
+  return { totalCents: Number(row?.totalCents ?? 0), count: Number(row?.count ?? 0) };
 }
 
 /**

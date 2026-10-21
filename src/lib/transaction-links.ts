@@ -83,7 +83,13 @@ export type TransactionsLinkTarget =
    * History row never claimed. See TransactionFilter.importId (src/lib/transactions.ts) for the
    * reader's half.
    */
-  | { kind: 'import'; importId: number };
+  | { kind: 'import'; importId: number }
+  /**
+   * Spec 2026-10-21 §2.2: Budgets' Categorize link. The review queue's Uncategorized tab for a
+   * household viewer; and, because the transactions page ignores `review=1` for a self-scoped
+   * viewer, the plain list narrowed to uncategorized non-transfer rows for one.
+   */
+  | { kind: 'uncategorized-queue' };
 
 /** rangeParams() for a preset (one definition of "a range as query parameters", MUST-11.8), and
  *  the same `custom` shape it produces for a card carrying its own two dates. */
@@ -113,6 +119,11 @@ export function transactionsHref(scope: TransactionsLinkScope, target: Transacti
     if (target.exact) params.set('exact', '1');
   } else if (target.kind === 'merchant') {
     params.set('q', target.merchant);
+  } else if (target.kind === 'uncategorized-queue') {
+    params.set('review', '1');
+    params.set('queue', 'uncategorized');
+    params.set('category', 'uncategorized');
+    params.set('transfers', '0');
   } else {
     params.set('import', String(target.importId));
   }

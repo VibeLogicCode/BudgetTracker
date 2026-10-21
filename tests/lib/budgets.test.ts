@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
-import { budgetProgress, budgetTotals, categorySpend, categoryTransactions, clearBudget, copyBudgetsFromPreviousMonth, effectiveBudget, flattenBudgetRows, resolveBudget, setRollover, upsertBudget } from '@/lib/budgets';
+import { budgetProgress, budgetTotals, categorySpend, categoryTransactions, uncategorizedSpend, clearBudget, copyBudgetsFromPreviousMonth, effectiveBudget, flattenBudgetRows, resolveBudget, setRollover, upsertBudget } from '@/lib/budgets';
 import { archiveCategory } from '@/lib/categories';
 import { nowIso } from '@/lib/clock';
 import { assignTransactionToLoan } from '@/lib/loans';
@@ -262,6 +262,62 @@ describe('categoryTransactions — the Lane 1 breakdown drill-down', () => {
     });
     expect(categoryTransactions('2026-03', groceries, {}, HOUSEHOLD_VIEWER).map((r) => r.amountCents)).toEqual([-6000]);
     expect(categoryTransactions('2026-03', restaurants, {}, HOUSEHOLD_VIEWER).map((r) => r.amountCents)).toEqual([-4000]);
+  });
+});
+
+/** Spec 2026-10-21 §2.2. What Budgets says is not categorized yet: money out with no category. */
+describe('uncategorizedSpend', () => {
+  const addSplitParts = (txnId: number, categoryId: number, amounts: number[]) => {
+    for (const amount of amounts) {
+      current!.sqlite
+        .prepare('insert into transaction_splits (txn_id, category_id, amount_cents, created_at) values (?, ?, ?, ?)')
+        .run(txnId, categoryId, amount, nowIso());
+    }
+  };
+
+  it('sums money out with no category in the month, leaving out transfers, money in, split rows and other months', () => {
+    const { db, spend } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    spend({ categoryId: null, amountCents: -4500 });
+    spend({ categoryId: null, amountCents: -1250 });
+    spend({ categoryId: null, amountCents: -9900, isTransfer: true });
+    spend({ categoryId: null, amountCents: 250000 });
+    spend({ categoryId: groceries, amountCents: -3000 });
+    spend({ categoryId: null, amountCents: -7000, date: '2026-02-27' });
+    addSplitParts(spend({ categoryId: null, amountCents: -6000 }), groceries, [-4000, -2000]);
+    expect(uncategorizedSpend('2026-03', { scope: 'household', attributedUserId: null }, HOUSEHOLD_VIEWER)).toEqual({ totalCents: 5750, count: 2 });
+  });
+
+  it('leaves out money lent on a loan, which is not spending (SPEND_ROW_WHERE)', () => {
+    const { spend, alice } = setup();
+    const lent = seedLoanItem(alice, 'lent');
+    const payout = spend({ categoryId: null, amountCents: -50000 });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: payout, itemId: lent });
+    spend({ categoryId: null, amountCents: -800 });
+    expect(uncategorizedSpend('2026-03', { scope: 'household', attributedUserId: null }, HOUSEHOLD_VIEWER)).toEqual({ totalCents: 800, count: 1 });
+  });
+
+  it('a personal scope counts that person only; the household counts everyone', () => {
+    const { spend, alice, bob } = setup();
+    spend({ categoryId: null, amountCents: -1000, attributedUserId: alice });
+    spend({ categoryId: null, amountCents: -2000, attributedUserId: bob });
+    spend({ categoryId: null, amountCents: -3000 });
+    expect(uncategorizedSpend('2026-03', { scope: 'personal', attributedUserId: alice }, HOUSEHOLD_VIEWER)).toEqual({ totalCents: 1000, count: 1 });
+    expect(uncategorizedSpend('2026-03', { scope: 'household', attributedUserId: null }, HOUSEHOLD_VIEWER)).toEqual({ totalCents: 6000, count: 3 });
+  });
+
+  it('a self viewer reads only their own rows, whatever scope is asked for', () => {
+    const { spend, alice, bob } = setup();
+    spend({ categoryId: null, amountCents: -1000, attributedUserId: alice });
+    spend({ categoryId: null, amountCents: -2000, attributedUserId: bob });
+    const self: Viewer = { id: alice, role: 'member', visibility: 'self' };
+    expect(uncategorizedSpend('2026-03', { scope: 'household', attributedUserId: null }, self)).toEqual({ totalCents: 1000, count: 1 });
+    expect(uncategorizedSpend('2026-03', { scope: 'personal', attributedUserId: bob }, self)).toEqual({ totalCents: 0, count: 0 });
+  });
+
+  it('a personal scope needs a person', () => {
+    setup();
+    expect(() => uncategorizedSpend('2026-03', { scope: 'personal', attributedUserId: null }, HOUSEHOLD_VIEWER)).toThrow();
   });
 });
 
