@@ -23,7 +23,7 @@ import type {
   CanadianPackUpdateDiff,
 } from '@/lib/canadian-pack';
 import type { CategoryRecord } from '@/lib/categories';
-import { isRecurringMarkKind } from '@/lib/categorize/mark-kinds';
+import { isMerchantMarkKind, isRecurringMarkKind } from '@/lib/categorize/mark-kinds';
 import type { MatchType, MerchantRuleRecord, RuleKind } from '@/lib/categorize/rules';
 import type { RulesExportRow } from '@/lib/packs';
 import { CanadianPackPanel } from './canadian-pack-panel';
@@ -81,6 +81,8 @@ const KIND_LABEL: Record<RuleKind, string> = {
   // Spec 2026-10-05 §2.2: set from Transactions and Insights, not from the form below.
   recurring: 'Recurring',
   not_recurring: 'Not recurring',
+  // Spec 2026-10-21 §2.1: set from a Transactions row, not from the form below.
+  always_ask: 'Always ask',
 };
 
 /** Reused across the search box, the four kind chips and the redundant chip -- every filter
@@ -637,6 +639,7 @@ export function MerchantRulesClient({
     if (!deletingRule) return null;
     const isOverride = deletingRule.ruleKind === 'not_transfer';
     const isMark = isRecurringMarkKind(deletingRule.ruleKind);
+    const isAlwaysAsk = deletingRule.ruleKind === 'always_ask';
     return (
       <RowDialog dialogId="delete-rule-dialog" title="Delete this rule?" onClose={() => setDeletingRule(null)}>
         <p className="text-sm text-ink">
@@ -656,6 +659,9 @@ export function MerchantRulesClient({
           <p className="text-sm text-ink">
             A recurring mark changes no transaction. Deleting it only changes which list on Insights the merchant appears on.
           </p>
+        ) : null}
+        {isAlwaysAsk ? (
+          <p className="text-sm text-ink">Rules and guesses can file these rows again from the next import or re-run.</p>
         ) : null}
         <div className="flex gap-2">
           <form action={removeRule} onSubmit={() => setDeletingRule(null)}>
@@ -893,7 +899,9 @@ export function MerchantRulesClient({
           merchant from being auto-flagged as a card payment. A{' '}
           <strong className="font-semibold text-ink">recurring</strong> or{' '}
           <strong className="font-semibold text-ink">not recurring</strong> rule is a mark set from Transactions or
-          Insights; it changes no transaction.
+          Insights; it changes no transaction. An <strong className="font-semibold text-ink">always ask</strong> rule,
+          set from a row on Transactions, keeps every rule and guess away from the rows it matches, so each one waits
+          in review.
         </p>
         <p>
           <strong className="font-semibold text-ink">Disable</strong> is a switch you can flip back; it stops a
@@ -939,6 +947,7 @@ export function MerchantRulesClient({
             {kindChip(KIND_LABEL.not_transfer, 'not_transfer', kindCounts.not_transfer)}
             {kindChip(KIND_LABEL.recurring, 'recurring', kindCounts.recurring)}
             {kindChip(KIND_LABEL.not_recurring, 'not_recurring', kindCounts.not_recurring)}
+            {kindChip(KIND_LABEL.always_ask, 'always_ask', kindCounts.always_ask)}
             {redundantCount > 0 ? (
               // v1.27.0, owner finding: a redundant rule changes NO categorization today --
               // longest-pattern-wins means the covering rule already produces the identical
@@ -1140,7 +1149,7 @@ export function MerchantRulesClient({
                     </td>
                     <td className="text-right cell-stack-actions" data-label="">
                       <RowMenu label={`Actions for ${rule.pattern}`}>
-                        {isRecurringMarkKind(rule.ruleKind) ? null : (
+                        {isMerchantMarkKind(rule.ruleKind) ? null : (
                         <RowMenuButton
                           onSelect={() =>
                             setEditing({
@@ -1161,7 +1170,7 @@ export function MerchantRulesClient({
                         </RowMenuButton>
                         )}
                         {rule.ruleKind !== 'rename' &&
-                        !isRecurringMarkKind(rule.ruleKind) &&
+                        !isMerchantMarkKind(rule.ruleKind) &&
                         !disabled &&
                         // Skipped by the engine while its category is archived, so there is nothing to apply.
                         !(rule.ruleKind === 'category' && rule.categoryArchived) ? (
