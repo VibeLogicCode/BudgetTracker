@@ -1411,4 +1411,70 @@ describe('BudgetsClient — fixing a row from the card', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save category' }));
     expect(await screen.findByText(/clear its split first/)).toBeTruthy();
   });
+
+  /** Spec §2.3: the row says where its category came from, in Transactions' own words. */
+  it('a rule-filed row names the rule, a guessed row says guess, a hand-set row says nothing', async () => {
+    await renderWithRows([
+      panelRow(),
+      panelRow({ id: 78, merchant: 'Maple Grocer', normalizedMerchant: 'MAPLE GROCER', source: 'bayes', filedBy: null }),
+      panelRow({ id: 79, merchant: 'Gifts R Us', normalizedMerchant: 'GIFTS R US 12', source: 'manual', filedBy: null }),
+      panelRow({ id: 80, merchant: 'Cedar Phone Co', normalizedMerchant: 'CEDAR PHONE CO', source: 'rule', filedBy: null }),
+    ]);
+    expect(await screen.findByText('Set by rule: PHONEMART (contains)')).toBeTruthy();
+    expect(screen.getByText('Set by guess')).toBeTruthy();
+    expect(screen.getByText('Set by a rule')).toBeTruthy();
+    expect(screen.getAllByText(/^Set by/)).toHaveLength(3);
+  });
+
+  it('Always ask saves this transaction only, then opens the Always ask dialog for the merchant', async () => {
+    const { setCategoryAction } = await import('@/app/(app)/transactions/actions');
+    await renderWithRows([panelRow()]);
+    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
+    fireEvent.click(screen.getByLabelText(/Always ask about PHONEMART 884/));
+    fireEvent.click(screen.getByRole('button', { name: 'Save category' }));
+    await waitFor(() => expect(setCategoryAction).toHaveBeenCalled());
+    expect((vi.mocked(setCategoryAction).mock.calls.at(-1)![1] as FormData).get('teach')).toBeNull();
+    expect(await screen.findByRole('dialog', { name: /^Always ask for rows like this/ })).toBeTruthy();
+    expect((screen.getByLabelText('Text to match') as HTMLInputElement).value).toBe('PHONEMART 884');
+  });
+
+  it('the Always ask send-back message shows in the panel and the list is fetched again', async () => {
+    const { categoryTransactionsAction } = await import('@/app/(app)/budgets/category-transactions-action');
+    const { setAlwaysAskAction, sendBackToReviewAction } = await import('@/app/(app)/transactions/actions');
+    vi.mocked(setAlwaysAskAction).mockResolvedValueOnce({ message: 'Rows matching "PHONEMART 884" will always be asked about.', ruleId: 41, sendBackCount: 2 });
+    vi.mocked(sendBackToReviewAction).mockResolvedValueOnce({ message: 'Sent 2 transactions back to review.' });
+    await renderWithRows([panelRow()]);
+    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
+    fireEvent.click(screen.getByLabelText(/Always ask about PHONEMART 884/));
+    fireEvent.click(screen.getByRole('button', { name: 'Save category' }));
+    const dialog = await screen.findByRole('dialog', { name: /^Always ask for rows like this/ });
+    const callsBefore = vi.mocked(categoryTransactionsAction).mock.calls.length;
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Always ask' }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Send 2 back to review/ }));
+    expect(await screen.findByText('Sent 2 transactions back to review.')).toBeTruthy();
+    await waitFor(() => expect(vi.mocked(categoryTransactionsAction).mock.calls.length).toBeGreaterThan(callsBefore));
+  });
+
+  it('a refusal from the action is shown in the panel and nothing moves', async () => {
+    const { categoryTransactionsAction } = await import('@/app/(app)/budgets/category-transactions-action');
+    const { setCategoryAction } = await import('@/app/(app)/transactions/actions');
+    vi.mocked(setCategoryAction).mockResolvedValueOnce({ error: 'Alex set up this rule. Ask an admin to change it under Settings → Categories & rules.' });
+    await renderWithRows([panelRow()]);
+    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
+    fireEvent.click(screen.getByLabelText(/Also file PHONEMART 884/));
+    fireEvent.click(screen.getByRole('button', { name: 'Save category' }));
+    expect(await screen.findByText(/Alex set up this rule\./)).toBeTruthy();
+    expect(screen.getByText('Phonemart')).toBeTruthy();
+    expect(vi.mocked(categoryTransactionsAction).mock.calls).toHaveLength(1);
+  });
+
+  it('a self viewer sees Change category but no rule choice', async () => {
+    await renderWithRows([panelRow()], {}, { household: null, householdTotals: null, selectedPersonId: null, personal: [{ userId: 1, name: 'Alex', rows: [makeRow()] }] });
+    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
+    expect(screen.queryByRole('group', { name: /Future/ })).toBeNull();
+  });
 });

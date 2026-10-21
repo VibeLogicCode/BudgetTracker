@@ -25,3 +25,46 @@ describe('RecategorizeDialog', () => {
     expect(onClose).toHaveBeenCalled();
   });
 });
+
+describe('the rule choice (spec §2.4)', () => {
+  const base = { options: OPTIONS, action: vi.fn(), onClose: vi.fn(), onAlwaysAsk: vi.fn() };
+
+  it('offers the three choices on a rule-filed row, says a wider rule is outranked, and posts teach=1 for Also file', () => {
+    render(<RecategorizeDialog {...base} row={ROW} canAuthorRules isAdmin={false} />);
+    expect(screen.getByRole('group', { name: 'Future PHONEMART 884 rows' })).toBeTruthy();
+    expect((screen.getByLabelText(/Change this transaction only/) as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByText('Adds a rule for PHONEMART 884 that wins over PHONEMART (contains). Other PHONEMART rows keep their rule.')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText(/Also file PHONEMART 884 this way from now on/));
+    const form = screen.getByRole('button', { name: 'Save category' }).closest('form') as HTMLFormElement;
+    expect(new FormData(form).get('teach')).toBe('1');
+  });
+
+  it('says the rule itself changes when it is exact on this merchant', () => {
+    render(<RecategorizeDialog {...base} row={{ ...ROW, filedBy: { ruleId: 9, pattern: 'PHONEMART 884', matchType: 'exact' } }} canAuthorRules isAdmin={false} />);
+    expect(screen.getByText('Changes the rule PHONEMART 884 → Groceries to the category you pick.')).toBeTruthy();
+  });
+
+  it('Always ask posts no teach and tells the caller to open the Always ask dialog; it is absent once the merchant is already asked about', () => {
+    const onAlwaysAsk = vi.fn();
+    const { unmount } = render(<RecategorizeDialog {...base} onAlwaysAsk={onAlwaysAsk} row={ROW} canAuthorRules isAdmin={false} />);
+    fireEvent.click(screen.getByLabelText(/Always ask about PHONEMART 884 from now on/));
+    const form = screen.getByRole('button', { name: 'Save category' }).closest('form') as HTMLFormElement;
+    expect(new FormData(form).get('teach')).toBeNull();
+    fireEvent.submit(form);
+    expect(onAlwaysAsk).toHaveBeenCalled();
+    unmount();
+    render(<RecategorizeDialog {...base} row={{ ...ROW, alwaysAsked: true }} canAuthorRules isAdmin={false} />);
+    expect(screen.queryByLabelText(/Always ask about/)).toBeNull();
+  });
+
+  it('a self viewer gets no rule choice, a hand-set row gets none, and an admin gets the Rules page link', () => {
+    const { unmount } = render(<RecategorizeDialog {...base} row={ROW} canAuthorRules={false} isAdmin={false} />);
+    expect(screen.queryByRole('group')).toBeNull();
+    unmount();
+    const second = render(<RecategorizeDialog {...base} row={{ ...ROW, source: 'manual', filedBy: null }} canAuthorRules isAdmin />);
+    expect(screen.queryByRole('group')).toBeNull();
+    second.unmount();
+    render(<RecategorizeDialog {...base} row={ROW} canAuthorRules isAdmin />);
+    expect(screen.getByRole('link', { name: 'Edit the rule under Settings' }).getAttribute('href')).toBe('/settings/merchant-rules?kind=category&q=PHONEMART');
+  });
+});

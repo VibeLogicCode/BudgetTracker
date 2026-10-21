@@ -51,6 +51,7 @@ import { categoryHistoryAction, type CategoryHistoryMonth } from './category-his
 import { buttonClass } from '@/components/ui/Button';
 import { RowMenu, RowMenuButton } from '@/components/ui/RowMenu';
 import { RecategorizeDialog } from '@/components/transactions/RecategorizeDialog';
+import { AlwaysAskDialog } from '@/components/transactions/AlwaysAskDialog';
 import { SplitDialog, type SplitTarget } from '@/components/transactions/SplitDialog';
 import { categoryOptions } from '@/lib/category-order';
 // Relative, not '@/...', for the same reason ./actions is: tests/ops/client-bundle.test.ts only
@@ -456,6 +457,8 @@ function CategoryTransactionsPanel({
   const [version, setVersion] = useState(0);
   const [recat, setRecat] = useState<CategoryPanelRow | null>(null);
   const [splitting, setSplitting] = useState<SplitTarget | null>(null);
+  /** The merchant the Always ask dialog is open for, once Always ask was chosen and the category saved. */
+  const [asking, setAsking] = useState<string | null>(null);
   const [fixState, fixAction] = useActionState(setCategoryAction, initialFix);
   const [splitState, splitAction] = useActionState(saveSplitsAction, initialFix);
   /** The newest outcome of either dialog, so an old error never outlives a later success. */
@@ -526,6 +529,15 @@ function CategoryTransactionsPanel({
               direction={row.amountCents >= 0 ? 'in' : 'out'}
               title={row.merchant}
               meta={row.date}
+              detail={
+                row.source === 'rule'
+                  ? row.filedBy
+                    ? `Set by rule: ${row.filedBy.pattern} (${row.filedBy.matchType})`
+                    : 'Set by a rule'
+                  : row.source === 'bayes'
+                    ? 'Set by guess'
+                    : undefined
+              }
               amount={<Money cents={row.amountCents} />}
               trailing={
                 <RowMenu label={`Actions for ${row.merchant} on ${row.date}, ${formatCents(row.amountCents)}`}>
@@ -562,7 +574,18 @@ function CategoryTransactionsPanel({
           canAuthorRules={canAuthorRules}
           isAdmin={isAdmin}
           onClose={() => setRecat(null)}
-          onAlwaysAsk={() => {}}
+          onAlwaysAsk={() => setAsking(recat.normalizedMerchant)}
+        />
+      ) : null}
+      {asking !== null ? (
+        <AlwaysAskDialog
+          key={asking}
+          merchant={asking}
+          onClose={() => setAsking(null)}
+          onSent={(message) => {
+            setNotice({ message });
+            setVersion((v) => v + 1);
+          }}
         />
       ) : null}
       {splitting ? (

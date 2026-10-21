@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useState } from 'react';
 import { CategoryCombobox } from '@/components/CategoryCombobox';
 import { SubmitButton } from '@/components/SubmitButton';
@@ -29,14 +30,23 @@ export type RuleChoice = 'keep' | 'teach' | 'ask';
 /**
  * Spec 2026-10-21 (fix from Budgets) §2.1. Change one transaction's category from the Budgets
  * card. The caller owns the dispatcher (useActionState over setCategoryAction) and reads its
- * result; mount it with `key={row.id}` so a different row gets a fresh picker. The rule choice
- * (keep, file this merchant this way, always ask) is added on top of this form later.
+ * result; mount it with `key={row.id}` so a different row gets a fresh picker.
+ *
+ * Spec §2.4: for a row a rule or the guesser filed (and a viewer who may author rules) the form also
+ * asks what happens to future rows of the merchant: `keep` changes this transaction only; `teach`
+ * posts teach=1 so setCategoryAction authors the rule itself (the rule-authoring path stays in that
+ * action); `ask` posts no teach, closes, and hands over to the caller's Always ask dialog. The "wins
+ * over" hint relies on an exact rule outranking a wider one (`outranks` in the rules engine); this
+ * dialog never retargets the wider rule, so other rows it files keep their category.
  */
 export function RecategorizeDialog({
   row,
   options,
   action,
+  canAuthorRules,
+  isAdmin,
   onClose,
+  onAlwaysAsk,
 }: {
   row: RecategorizeRow;
   options: CategoryOption[];
@@ -51,6 +61,17 @@ export function RecategorizeDialog({
   onAlwaysAsk: () => void;
 }) {
   const [picked, setPicked] = useState<number | null>(row.categoryId);
+  const [choice, setChoice] = useState<RuleChoice>('keep');
+  // Spec §2.4: only a row a rule or the guesser filed, and only for a viewer who may author rules.
+  const offerChoice = canAuthorRules && (row.source === 'rule' || row.source === 'bayes');
+  const filedBy = row.filedBy;
+  const currentLabel = options.find((o) => o.id === row.categoryId)?.label ?? 'its category';
+  const teachHint =
+    filedBy !== null && filedBy.matchType === 'exact' && filedBy.pattern === row.normalizedMerchant
+      ? `Changes the rule ${row.normalizedMerchant} → ${currentLabel} to the category you pick.`
+      : filedBy !== null
+        ? `Adds a rule for ${row.normalizedMerchant} that wins over ${filedBy.pattern} (${filedBy.matchType}). Other ${filedBy.pattern} rows keep their rule.`
+        : `Adds a rule for ${row.normalizedMerchant}; the guesser learns from it too.`;
 
   return (
     <RowDialog
@@ -59,9 +80,50 @@ export function RecategorizeDialog({
       description={`${row.date} · ${formatCents(row.amountCents)}`}
       onClose={onClose}
     >
-      <form action={action} onSubmit={onClose} className="flex flex-col gap-4">
+      <form
+        action={action}
+        onSubmit={() => {
+          onClose();
+          if (offerChoice && choice === 'ask') onAlwaysAsk();
+        }}
+        className="flex flex-col gap-4"
+      >
         <input type="hidden" name="transactionId" value={row.id} />
+        {offerChoice && choice === 'teach' ? <input type="hidden" name="teach" value="1" /> : null}
         <CategoryCombobox name="categoryId" label="Category" options={options} value={picked} onChange={setPicked} />
+        {offerChoice ? (
+          <fieldset className="flex flex-col gap-2">
+            <legend className="mb-1 text-sm font-medium text-ink">{`Future ${row.normalizedMerchant} rows`}</legend>
+            <label className="flex items-start gap-2 text-sm">
+              <input type="radio" name="ruleChoice" value="keep" checked={choice === 'keep'} onChange={() => setChoice('keep')} className="mt-1" />
+              <span>Change this transaction only</span>
+            </label>
+            <label className="flex items-start gap-2 text-sm">
+              <input type="radio" name="ruleChoice" value="teach" checked={choice === 'teach'} onChange={() => setChoice('teach')} className="mt-1" />
+              <span>
+                {`Also file ${row.normalizedMerchant} this way from now on`}
+                <span className="block text-xs text-muted">{teachHint}</span>
+              </span>
+            </label>
+            {row.alwaysAsked ? null : (
+              <label className="flex items-start gap-2 text-sm">
+                <input type="radio" name="ruleChoice" value="ask" checked={choice === 'ask'} onChange={() => setChoice('ask')} className="mt-1" />
+                <span>
+                  {`Always ask about ${row.normalizedMerchant} from now on`}
+                  <span className="block text-xs text-muted">This transaction is filed as you pick; then you set the Always ask rule.</span>
+                </span>
+              </label>
+            )}
+            {isAdmin && filedBy !== null ? (
+              <Link
+                href={`/settings/merchant-rules?kind=category&q=${encodeURIComponent(filedBy.pattern)}`}
+                className="text-xs font-medium text-accent hover:underline"
+              >
+                Edit the rule under Settings
+              </Link>
+            ) : null}
+          </fieldset>
+        ) : null}
         <div className="flex gap-2">
           <SubmitButton>Save category</SubmitButton>
           <button type="button" onClick={onClose} className={buttonClass('ghost')}>
