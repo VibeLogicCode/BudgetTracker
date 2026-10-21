@@ -21,6 +21,20 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+### Added
+
+- **Always ask for rows like this.** A row's menu on Transactions can now tell the app never to file a
+  description on its own, for payments like e-transfers where the same text goes to different people for
+  different reasons. Matching rows wait in review, choosing a category for one writes no rule, and the
+  guesser does not learn from it. The dialog starts from the row's description without the code at the
+  end, says how many transactions match, and offers to send rows a rule or a guess already filed back to
+  review. These rules are listed under Settings → Merchant rules as Always ask, where an admin can
+  turn one off or delete it.
+- **Budgets shows spending that has no category yet.** A first card, Not categorized yet, gives the amount
+  and the number of transactions, with a Categorize link that opens them in review for the month, and the
+  household line at the top adds how much is not categorized yet. Category limits and figures are
+  unchanged.
+
 ## [1.55.4] - 2026-10-20
 
 ### Fixed

@@ -10,8 +10,9 @@ import { formatCents } from '@/lib/money';
  * Spec 2026-10-21 §2.2, decision 12. Budgets' first card: money spent that no category holds yet.
  * It reads as needing attention in both themes through a warning border and a warning icon tile
  * (tokens defined for light and dark), the attention icon and the "Needs attention" label, never
- * colour alone. A full warning fill was rejected: it would make this card louder than an
- * over-budget category, which is the more serious signal. Renders nothing at zero.
+ * colour alone. The card keeps the surface background because dark --subtle text on
+ * --warning-soft is 4.12:1, under the 4.5 floor, so the border, the icon tile, the icon and the
+ * label carry the signal. Renders nothing at zero.
  */
 export function UncategorizedSpendCard({
   spend,

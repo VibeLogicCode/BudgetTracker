@@ -137,6 +137,21 @@ describe('the help page covers the features no screen advertises', () => {
   }
 });
 
+/** Spec 2026-10-21. Both features are explained where a household looks for them. */
+describe('the help page covers Always ask and uncategorized spending', () => {
+  it('the Review section explains Always ask and Send back', () => {
+    const text = textOf(section('review').body);
+    expect(text).toMatch(/Always ask for rows like this/);
+    expect(text).toMatch(/back to review/);
+  });
+
+  it('the Budgets section explains Not categorized yet', () => {
+    const text = textOf(section('budgets').body);
+    expect(text).toMatch(/Not categorized yet/);
+    expect(text).toMatch(/Categorize/);
+  });
+});
+
 describe('the help page covers the v1.13.0 household features', () => {
   const all = () => textOf(<>{[HELP_ROUTINE, ...HELP_SECTIONS].map((s) => <div key={s.id}>{s.body}</div>)}</>);
 

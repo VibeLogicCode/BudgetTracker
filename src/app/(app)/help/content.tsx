@@ -228,6 +228,16 @@ export const HELP_SECTIONS: HelpSection[] = [
           not spending at all, such as a credit-card payment from a chequing account.
         </P>
         <P>
+          Some descriptions go to different places each time: an e-transfer to one person is rent and to
+          another is a birthday present. <B>Always ask for rows like this…</B> on a row&rsquo;s menu tells the
+          app never to file them on its own. No rule and no guess will categorize a matching row, choosing a
+          category for one teaches nothing, and each one waits here for you. The text to match starts as the
+          row&rsquo;s description without the code at the end, and the dialog says how many transactions it
+          matches before you save. Rows a rule or a guess already filed can be sent back to review in the same
+          step; rows you categorized yourself are never touched. An admin can turn the rule off or delete it
+          under <B>Settings → Merchant rules</B>, where it is listed as Always ask.
+        </P>
+        <P>
           One merchant can need two answers. Two insurance policies with the same company differ
           only by what they cost, so a rule about the merchant alone files both of them wherever
           you corrected last. <B>Create a rule…</B> on a row&rsquo;s menu is the way out: it writes a
@@ -326,6 +336,13 @@ export const HELP_SECTIONS: HelpSection[] = [
           Limits exist at two levels: the household, and one person on top of that. <B>Copy
           previous month</B> fills in only the categories that have no limit yet, so it never
           overwrites something you typed.
+        </P>
+        <P>
+          Spending with no category is in no category&rsquo;s figure, so a month with rows still to sort can
+          look further under budget than it is. When there is some, the first card, <B>Not categorized
+          yet</B>, says how much was spent and on how many transactions, and <B>Categorize</B> opens them in
+          review for that month. The household line at the top says the same amount. Money coming in with no
+          category is not counted there.
         </P>
         <P>
           Once there are three full calendar months of history, each category can also show a
