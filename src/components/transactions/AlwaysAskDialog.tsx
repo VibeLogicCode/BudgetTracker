@@ -36,8 +36,8 @@ export function AlwaysAskDialog({
   /** normalizedMerchant; the pattern starts at alwaysAskPattern(merchant), Contains. */
   merchant: string;
   onClose: () => void;
-  /** Rows went back to review: the caller refreshes what it lists. Called before onClose. */
-  onSent?: () => void;
+  /** Rows went back to review: the caller refreshes what it lists and shows the action's message. Called before onClose. */
+  onSent?: (message: string) => void;
 }) {
   const [pattern, setPattern] = useState(() => alwaysAskPattern(merchant));
   const [matchType, setMatchType] = useState<'contains' | 'exact'>('contains');
@@ -65,7 +65,7 @@ export function AlwaysAskDialog({
 
   useEffect(() => {
     if (sendBackState.message && !sendBackState.error) {
-      onSent?.();
+      onSent?.(sendBackState.message);
       onClose();
     }
     // onSent/onClose are the caller's inline closures; only a new send result should re-run this.
@@ -91,6 +91,7 @@ export function AlwaysAskDialog({
               </form>
             </>
           ) : null}
+          <FormError message={sendBackState.error} />
           <div className="flex gap-2">
             <button type="button" className={buttonClass('secondary', 'sm')} onClick={onClose}>
               Done

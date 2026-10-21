@@ -616,6 +616,8 @@ export function TransactionsClient({
    * the rule editor. AlwaysAskDialog owns its own pattern, count and save/send-back states.
    */
   const [askRow, setAskRow] = useState<{ id: number; merchant: string } | null>(null);
+  // The send-back result, shown in the page banner after the dialog closes.
+  const [askSentMessage, setAskSentMessage] = useState<string | undefined>(undefined);
   /**
    * v1.25.0 Lane R item R3. The two new bulk actions' own dialog state -- one nullable slot
    * each, the same "one editor, replacing whichever was open" shape `newLoan`/`noting` already
@@ -1014,7 +1016,8 @@ export function TransactionsClient({
     // banner at all, so each one landed its write in silence. They sit with
     // assignState/unassignState: one-off actions whose result is only ever seen here.
     billState.message ?? deleteState.message ?? ruleCreateState.message ??
-    acceptState.message ?? acceptAllState.message ?? rowTransferState.message ?? rowRecurringState.message;
+    acceptState.message ?? acceptAllState.message ?? rowTransferState.message ?? rowRecurringState.message ??
+    askSentMessage;
   const error =
     newLoanState.error ?? applyAllState.error ??
     attrState.error ?? bulkCatState.error ?? bulkTfrState.error ?? bulkRecurringState.error ??
@@ -3101,7 +3104,7 @@ export function TransactionsClient({
       {noteDialog()}
       {assignBillDialog()}
       {ruleDialog()}
-      {askRow ? <AlwaysAskDialog key={askRow.id} merchant={askRow.merchant} onClose={() => setAskRow(null)} /> : null}
+      {askRow ? <AlwaysAskDialog key={askRow.id} merchant={askRow.merchant} onSent={setAskSentMessage} onClose={() => setAskRow(null)} /> : null}
       {newLoanDialog()}
       {applyAllDialog()}
       {/* v1.26.0 Lane 1: same "rendered once here, looked up by row id" reasoning as the four row

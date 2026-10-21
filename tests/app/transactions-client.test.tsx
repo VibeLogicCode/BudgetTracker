@@ -4820,6 +4820,17 @@ describe('TransactionsClient — Always ask for rows like this', () => {
     expect((vi.mocked(sendBackToReviewAction).mock.calls[0]?.[1] as FormData).get('ruleId')).toBe('41');
   });
 
+  it('shows the send-back message in the page banner once the dialog closes', async () => {
+    vi.mocked(setAlwaysAskAction).mockResolvedValue({ message: 'Rows matching "E-TRANSFER" will always be asked about.', ruleId: 41, sendBackCount: 2 });
+    vi.mocked(sendBackToReviewAction).mockResolvedValueOnce({ message: 'Sent 2 transactions back to review.' });
+    render(<TransactionsClient page={etransfer()} {...base} />);
+    openAsk();
+    fireEvent.click(screen.getByRole('button', { name: 'Always ask' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Send 2 back to review' }));
+    expect(await screen.findByText('Sent 2 transactions back to review.')).toBeTruthy();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
   it('after saving with nothing to send back, offers only Done', async () => {
     vi.mocked(setAlwaysAskAction).mockResolvedValue({ message: 'Rows matching "E-TRANSFER" will always be asked about.', ruleId: 41, sendBackCount: 0 });
     render(<TransactionsClient page={etransfer()} {...base} />);
