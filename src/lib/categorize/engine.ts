@@ -5,7 +5,7 @@ import { nowIso } from '@/lib/clock';
 import { transactionHasSplits } from '@/lib/splits';
 // Ruling R24 (R-03): the ONE definition of which display_description writer outranks which.
 import { displaySourceMayWrite, displaySourcesAbove, type DisplaySource } from '@/lib/display-source';
-import { applyPaymentMatchers, restoreLoanDescription } from '@/lib/loans';
+import { applyPaymentMatchers, loanLinksForTransactions, restoreLoanDescription } from '@/lib/loans';
 import { amountWithinBounds, isBounded } from '@/lib/categorize/amount-bounds';
 import { isCategoryArchived } from '@/lib/categories';
 import { classify, train, untrain } from './bayes';
@@ -1954,7 +1954,7 @@ export function alwaysAskMatchCount(input: { pattern: string; matchType: AlwaysA
 export function alwaysAskSendBackIds(ruleId: number): number[] {
   const rule = listRules('always_ask').find((candidate) => candidate.id === ruleId);
   if (!rule || rule.disabledAt !== null) return [];
-  return getDb()
+  const candidates = getDb()
     .select({ id: transactions.id, merchant: transactions.normalizedMerchant })
     .from(transactions)
     .where(
@@ -1963,13 +1963,15 @@ export function alwaysAskSendBackIds(ruleId: number): number[] {
         isNotNull(transactions.categoryId),
         eq(transactions.isTransfer, false),
         sql`not exists (select 1 from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id})`,
-        sql`not exists (select 1 from ${loanPayments} where ${loanPayments.txnId} = ${transactions.id})`,
       ),
     )
     .orderBy(asc(transactions.id))
     .all()
     .filter((row) => patternMatches(rule.pattern, rule.matchType, row.merchant))
     .map((row) => row.id);
+  // The link table is consulted through loans.ts here, not named in this file (MUST-13.2 guard).
+  const linked = loanLinksForTransactions(candidates);
+  return candidates.filter((id) => !linked.has(id));
 }
 
 export function sendAlwaysAskRowsToReview(input: { ruleId: number; at?: Date }): { sent: number } {
