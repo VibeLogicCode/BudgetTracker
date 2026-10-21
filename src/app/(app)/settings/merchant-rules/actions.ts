@@ -57,6 +57,11 @@ const CROSS_ORIGIN_ERROR = 'Cross-origin request rejected';
  * deleteRuleAction used to run (src/app/(app)/settings/managers/actions.ts, removed there),
  * unchanged in substance; everything past them (bulk actions, disable, Apply now, Re-run) is new.
  */
+/** Why a rule cannot be saved onto an archived category. Not exported: a 'use server' module exports actions only. */
+function archivedRuleCategoryError(name: string): string {
+  return `"${name}" is archived, so this rule would not file anything. Pick a live category, or restore "${name}" first.`;
+}
+
 export async function saveRuleAction(_prev: RuleActionState, formData: FormData): Promise<RuleActionState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
 
@@ -205,6 +210,14 @@ export async function saveRuleAction(_prev: RuleActionState, formData: FormData)
       ? null
       : parsed.data.categoryId;
   if (parsed.data.ruleKind === 'category' && categoryId === null) {
+    // v1.57.2: an ABSENT field (the form always posts one, '' for none) means the editor's selected
+    // option was disabled -- the rule's own archived category, shown but not offered. Say that, in
+    // the same words posting the archived id gets below, rather than "needs a category".
+    if (!formData.has('categoryId') && parsed.data.fromRuleId !== null) {
+      const heldId = findRuleOr(parsed.data.fromRuleId)?.categoryId ?? null;
+      const held = heldId === null ? undefined : listCategories({ includeArchived: true }).find((row) => row.id === heldId);
+      if (held?.isArchived) return { error: archivedRuleCategoryError(held.name) };
+    }
     return { error: CATEGORY_RULE_NEEDS_CATEGORY_ERROR };
   }
 
@@ -227,9 +240,7 @@ export async function saveRuleAction(_prev: RuleActionState, formData: FormData)
   if (categoryId !== null) {
     const category = listCategories({ includeArchived: true }).find((row) => row.id === categoryId);
     if (!category) return { error: 'That category no longer exists. Pick another one.' };
-    if (category.isArchived) {
-      return { error: `"${category.name}" is archived, so this rule would not file anything. Pick a live category, or restore "${category.name}" first.` };
-    }
+    if (category.isArchived) return { error: archivedRuleCategoryError(category.name) };
   }
 
   const upserted = upsertRuleFromCorrection({

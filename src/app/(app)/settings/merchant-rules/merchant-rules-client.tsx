@@ -832,16 +832,19 @@ export function MerchantRulesClient({
           <Field label="Category (category rules only)">
             <select name="categoryId" defaultValue={editing.categoryId ?? ''} className={selectClass}>
               <option value="">(none -- transfer, not_transfer and rename rules)</option>
-              {editing.categoryId !== null && categories.some((c) => c.id === editing.categoryId && c.isArchived) ? (
-                <option value={editing.categoryId}>{`${categoryLabelFor(editing.categoryId, categories)} (archived)`}</option>
-              ) : null}
-              {categoryOptionGroups(categories).map((group) =>
+              {/* v1.57.2: live categories, plus the rule's own category when that one is archived
+                  -- labelled (archived), disabled, after the live ones -- so the editor shows what
+                  the rule holds. Disabled means an unchanged save posts no category and is refused
+                  (a category rule needs one); saving needs a live pick, as before. */}
+              {categoryOptionGroups(categories, { kind: 'assign', current: editing.categoryId }).map((group) =>
                 group.label === null ? (
-                  <option key={group.options[0].id} value={group.options[0].id}>{group.options[0].label}</option>
+                  <option key={group.options[0].id} value={group.options[0].id} disabled={group.options[0].disabled}>
+                    {group.options[0].label}
+                  </option>
                 ) : (
                   <optgroup key={group.label} label={group.label}>
                     {group.options.map((option) => (
-                      <option key={option.id} value={option.id}>{option.label}</option>
+                      <option key={option.id} value={option.id} disabled={option.disabled}>{option.label}</option>
                     ))}
                   </optgroup>
                 ),

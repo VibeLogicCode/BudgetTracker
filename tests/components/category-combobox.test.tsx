@@ -122,6 +122,35 @@ describe('CategoryCombobox: choosing with the keyboard', () => {
   });
 });
 
+/**
+ * v1.57.2: an assignment picker on a since-archived category carries that ONE category as a
+ * disabled option (categoryOptions in src/lib/category-order.ts). It reads as the current value,
+ * is listed so the household can see it, and cannot be chosen.
+ */
+describe('CategoryCombobox: the current archived category', () => {
+  const WITH_ARCHIVED: CategoryOption[] = [...OPTIONS, { id: 9, label: 'Lanterns (archived)', depth: 0, disabled: true }];
+
+  it('shows it as the current value and lists it as a disabled option', () => {
+    render(<CategoryCombobox options={WITH_ARCHIVED} value={9} onChange={vi.fn()} label="Category" />);
+    const input = open();
+    expect(input.value).toBe('Lanterns (archived)');
+    const option = screen.getByRole('option', { name: 'Lanterns (archived)' });
+    expect(option.getAttribute('aria-disabled')).toBe('true');
+    expect(option.getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('will not choose it by click or by Enter', () => {
+    const onChange = vi.fn();
+    render(<CategoryCombobox options={WITH_ARCHIVED} value={2} onChange={onChange} label="Category" />);
+    const input = open();
+    fireEvent.mouseDown(screen.getByRole('option', { name: 'Lanterns (archived)' }));
+    type('lant');
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
 describe('CategoryCombobox: the wiring a screen reader needs', () => {
   it('marks itself as a combobox over a listbox, and says whether it is open', () => {
     render(<CategoryCombobox options={OPTIONS} value={null} onChange={vi.fn()} label="Category" />);

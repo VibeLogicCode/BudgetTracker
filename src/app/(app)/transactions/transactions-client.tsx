@@ -37,7 +37,7 @@ import { RowMenu, RowMenuButton, RowMenuForm, RowMenuLink } from '@/components/u
 import { categoryIcon, ConfirmIcon, FilterIcon, MoneyInIcon, MoneyOutIcon, SuggestIcon, UnconfirmedIcon } from '@/components/ui/icons';
 import { NoteGlyph } from './note-glyph';
 import { RowDialog } from '@/components/ui/RowDialog';
-import { categoryOptionGroups, categoryOptions, type CategoryLike, type CategoryOptionGroup } from '@/lib/category-order';
+import { categoryOptionGroups, categoryOptions, categorySelectOptions, type CategoryLike, type CategoryOptionGroup } from '@/lib/category-order';
 import { type ResolvedRange } from '@/lib/date-range';
 import type { LoanLink } from '@/lib/loans';
 import { absCents, formatCents } from '@/lib/money';
@@ -794,39 +794,33 @@ export function TransactionsClient({
     row.source === 'bayes' && row.categoryId !== null && !archivedCategoryIdSet.has(row.categoryId);
   const acceptAllIds = page.rows.filter(hasLiveGuess).map((row) => row.id);
 
-  const label = (id: number | null) => {
-    if (id === null) return 'Uncategorized';
-    const category = categories.find((c) => c.id === id);
-    if (!category) return 'Uncategorized';
-    const parent = category.parentId ? categories.find((c) => c.id === category.parentId) : undefined;
-    return parent ? `${parent.name} › ${category.name}` : category.name;
-  };
-
-  // Filters, bulk actions and new entries must only ever assign a live category, and
-  // categoryOptions() excludes archived categories itself -- so all five category selects in
-  // this file now share one ordering helper (Task 6, v1.8.0) rather than each mapping the flat
-  // creation-order list on its own. That sharing IS the fix: the original report was that one
-  // screen showed `Kids, Fees, Fees > Bank Fees, Kids > Education`, and a per-call-site loop is
-  // exactly how a future new category reintroduces that on one select only.
+  // Every category picker in this file shares one ordering helper (Task 6, v1.8.0) rather than
+  // each mapping the flat creation-order list on its own. That sharing IS the fix: the original
+  // report was that one screen showed `Kids, Fees, Fees > Bank Fees, Kids > Education`, and a
+  // per-call-site loop is exactly how a future new category reintroduces that on one select only.
   //
-  // The per-row select below additionally appends the ARCHIVED categories, flat and disabled,
-  // after the grouped live ones. That coverage is deliberate: a row already carrying a category
-  // that was archived after the fact must still have a real <option> for it, or the browser's
-  // initial selection cannot match, the select falls back to "Uncategorized", and an untouched
-  // "save" click clears (and untrains) a legitimate historical categorization.
+  // v1.57.2: the same helper also decides archived categories, by picker kind (CategoryPicker in
+  // src/lib/category-order.ts). groupedCategories below is the assignment list for a picker that
+  // holds nothing yet (bulk, a new rule, a group move): live only. The per-row selects pass the
+  // row's own category, so a row on a since-archived category gets that ONE option, disabled and
+  // selected, instead of every archived category; without it the browser's initial selection
+  // cannot match and an untouched auto-save would clear (and untrain) a real categorization. The
+  // filter select passes kind 'filter' and keeps every archived category.
   const groupedCategories = categoryOptions(categories);
 
   // Backlog BZ: the same rows as groupedCategories, arranged for an <optgroup> instead of NBSP
   // indentation -- a parent WITH children becomes a group named after it (itself included as
   // the group's first option), a childless top-level category stays a plain option.
   const categoryGroups: CategoryOptionGroup[] = categoryOptionGroups(categories);
-  // AutoSaveSelect's own option shape (src/components/ui/AutoSave.tsx): a group is
-  // { label, options }, a childless category is passed through directly.
-  const categorySelectOptions = categoryGroups.map((group) =>
-    group.label === null
-      ? { value: String(group.options[0].id), label: group.options[0].label }
-      : { label: group.label, options: group.options.map((opt) => ({ value: String(opt.id), label: opt.label })) },
-  );
+  /**
+   * A row's category select options (AutoSaveSelect's shape): live, plus the row's own archived
+   * one. Built once for the page; rebuilt per row only for a row that holds an archived category.
+   */
+  const liveCategorySelectOptions = categorySelectOptions(categories);
+  const rowCategoryOptions = (row: TransactionRow) =>
+    row.categoryId !== null && archivedCategoryIdSet.has(row.categoryId)
+      ? categorySelectOptions(categories, { kind: 'assign', current: row.categoryId })
+      : liveCategorySelectOptions;
   // The same groups, rendered as real <option>/<optgroup> elements for the two plain selects
   // in this file that still need one (the apply-to-all editor, the splits editor).
   function categoryOptGroups(groups: CategoryOptionGroup[]) {
@@ -1969,7 +1963,10 @@ export function TransactionsClient({
           <input type="hidden" name="normalizedMerchant" value={row.normalizedMerchant} />
           <select
             name="categoryId"
-            defaultValue={row.categoryId ?? ''}
+            // v1.57.2: this files OTHER rows and writes a rule, so it holds nothing of its own and
+            // lists live categories only. A row on an archived category starts at Choose rather
+            // than relying on the browser's fallback for a value with no option.
+            defaultValue={row.categoryId !== null && !archivedCategoryIdSet.has(row.categoryId) ? row.categoryId : ''}
             aria-label={
               hasMatchingCount
                 ? `Category for all ${matchingCount} matching ${row.normalizedMerchant} — every transaction`
@@ -2151,14 +2148,8 @@ export function TransactionsClient({
     const GuessCategoryIcon = row.categoryName ? categoryIcon(row.categoryName) : null;
     const rowSplits = splits[row.id] ?? [];
     const categoryFieldOptions = reviewMode
-      ? [{ value: '', label: 'Choose for this one…', disabled: true }, ...categorySelectOptions]
-      : [
-          { value: '', label: 'Uncategorized' },
-          ...categorySelectOptions,
-          ...categories
-            .filter((c) => c.isArchived)
-            .map((c) => ({ value: String(c.id), label: `${label(c.id)} (archived)`, disabled: true })),
-        ];
+      ? [{ value: '', label: 'Choose for this one…', disabled: true }, ...rowCategoryOptions(row)]
+      : [{ value: '', label: 'Uncategorized' }, ...rowCategoryOptions(row)];
     return (
       <li className="card flex flex-col gap-2 p-3 sm:gap-3 sm:p-4">
         {/* Line 1 (identity): checkbox, money-direction glyph, merchant + badges, amount, kebab. */}
@@ -3157,7 +3148,7 @@ export function TransactionsClient({
           key={splitting.id}
           target={splitting}
           existing={splits[splitting.id] ?? []}
-          options={groupedCategories}
+          categories={categories}
           action={splitAction}
           onClose={() => setSplitting(null)}
         />
@@ -3584,7 +3575,8 @@ export function TransactionsClient({
                 <select name="category" value={categoryChoice} onChange={(e) => setCategoryChoice(e.target.value)} className={selectClass}>
                   <option value="">All</option>
                   <option value="uncategorized">Uncategorized</option>
-                  {groupedCategories.map((opt) => (
+                  {/* A filter keeps archived categories (v1.57.2): finding old rows in one is a fair search. */}
+                  {categoryOptions(categories, { kind: 'filter' }).map((opt) => (
                     <option key={opt.id} value={opt.id}>{'\u00A0\u00A0'.repeat(opt.depth) + opt.label}</option>
                   ))}
                 </select>
@@ -3973,19 +3965,12 @@ export function TransactionsClient({
                     <AutoSaveSelect
                       name="categoryId"
                       defaultValue={row.categoryId === null ? '' : String(row.categoryId)}
-                      /* Live categories grouped under their parent (backlog BZ), then the
-                         ARCHIVED ones flat and disabled. That coverage is deliberate: a row whose
-                         category was archived after the fact must still have a real <option>, or
-                         the browser silently selects "Uncategorized" -- and with auto-save a
-                         stray change would then clear (and untrain) a legitimate historical
-                         categorization. */
-                      options={[
-                        { value: '', label: 'Uncategorized' },
-                        ...categorySelectOptions,
-                        ...categories
-                          .filter((c) => c.isArchived)
-                          .map((c) => ({ value: String(c.id), label: `${label(c.id)} (archived)`, disabled: true })),
-                      ]}
+                      /* Live categories grouped under their parent (backlog BZ), then -- only
+                         when this row holds one -- its own archived category, disabled (v1.57.2).
+                         That one option is deliberate: without it the browser silently selects
+                         "Uncategorized", and with auto-save a stray change would then clear (and
+                         untrain) a legitimate historical categorization. */
+                      options={[{ value: '', label: 'Uncategorized' }, ...rowCategoryOptions(row)]}
                       fields={{ transactionId: String(row.id) }}
                       action={saveCategory}
                       ariaLabel={`Category for transaction ${row.id}`}

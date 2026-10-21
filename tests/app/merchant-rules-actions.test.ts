@@ -620,6 +620,24 @@ describe('v1.31.0 R-13: saveRuleAction validates the category it is handed', () 
     expect(listRules()).toEqual([]);
   });
 
+  /** v1.57.2: the editor shows a held archived category as a DISABLED option, which posts nothing. */
+  it('an unchanged edit of a rule on an archived category is refused with the archived sentence, and writes nothing', async () => {
+    const { db, userId } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const upserted = upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: userId, actorRole: 'admin' });
+    if (!upserted.ok) throw new Error('unexpected refusal');
+    archiveCategory(coffee, true);
+
+    const result = await saveRuleAction(
+      {},
+      formData({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', renameTo: '', fromRuleId: String(upserted.ruleId) }),
+    );
+    expect(result.error).toMatch(/"Coffee" is archived/);
+    expect(result.error).toMatch(/Pick a live category/);
+    expect(listRules()).toHaveLength(1);
+    expect(listRules()[0].categoryId).toBe(coffee);
+  });
+
   it('saves a live category over an archived one on edit', async () => {
     const { db, userId } = setup();
     const coffee = categoryIdByName(db, 'Coffee');

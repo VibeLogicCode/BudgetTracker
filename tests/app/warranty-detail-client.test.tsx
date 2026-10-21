@@ -788,6 +788,38 @@ describe('product fields follow the kind, without dropping a stored value', () =
 // Task 11 fix round 1 (controller ruling): the Installments card's row kebab gained a
 // "Record payment" item above "Mark paid" (ruling R8), gated the same way "Mark paid" already
 // was -- unpaid rows on a bill-kind item. Paid rows offer "Unmark" instead, never this.
+/**
+ * v1.57.2: the bill's budget-category select is an auto-saving assignment picker. It lists live
+ * categories, plus the bill's own category when that one is archived (disabled, selected), so the
+ * select cannot fall back to "Not linked" and save that on a stray change.
+ */
+describe('the budget-category select on a bill (v1.57.2)', () => {
+  const categories = [
+    { id: 11, name: 'Utilities', parentId: null, sortOrder: 0, isArchived: false },
+    { id: 12, name: 'Lanterns', parentId: null, sortOrder: 1, isArchived: true },
+    { id: 13, name: 'Ferries', parentId: null, sortOrder: 2, isArchived: true },
+  ];
+  const select = () => screen.getByLabelText('Accumulating in budget category') as HTMLSelectElement;
+  const archivedOptions = (node: HTMLSelectElement) =>
+    Array.from(node.options).filter((option) => (option.textContent ?? '').includes('(archived)'));
+
+  it('a bill on a live category lists no archived option', () => {
+    renderDetail({ item: item({ kind: 'bill', budgetCategoryId: 11 }), categories });
+    expect(select().value).toBe('11');
+    expect(archivedOptions(select())).toEqual([]);
+    expect(Array.from(select().options).map((option) => option.value)).toEqual(['', '11']);
+  });
+
+  it('a bill on an archived category lists exactly that one, disabled and selected', () => {
+    renderDetail({ item: item({ kind: 'bill', budgetCategoryId: 12 }), categories });
+    expect(select().value).toBe('12');
+    expect(archivedOptions(select()).map((option) => [option.value, option.textContent, option.disabled])).toEqual([
+      ['12', 'Lanterns (archived)', true],
+    ]);
+    expect(Array.from(select().options).map((option) => option.value)).toEqual(['', '11', '12']);
+  });
+});
+
 describe('the Installments card offers Record payment', () => {
   const billItem = item({ kind: 'bill', typeId: 4, typeName: 'Property tax' });
 

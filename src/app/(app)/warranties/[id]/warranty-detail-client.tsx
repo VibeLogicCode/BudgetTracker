@@ -20,6 +20,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { BellIcon } from '@/components/icons';
 import { Field, inputClass, labelClass, selectClass, textareaClass } from '@/components/ui/form';
 import { AutoSaveSelect } from '@/components/ui/AutoSave';
+import { categorySelectOptions, type CategoryLike } from '@/lib/category-order';
 import { BASIS_HINTS, BASIS_LABELS, BASIS_ORDER } from '@/lib/loans/basis-labels';
 import type { InterestBasis } from '@/lib/loans/interest';
 import { centsToInput, formatCents, formatRateBps, parseAmountToCents } from '@/lib/money';
@@ -252,9 +253,10 @@ export function WarrantyDetailClient({
   /** v1.12.0: a bill's due-date schedule. Always supplied; the card decides whether to render
    *  (ruling B7 -- a gate never hides a stored value). */
   installments: InstallmentRow[];
-  /** v1.13.0 ruling R11 / micro-ruling M9: the budget-category picker's options. Supplied by
-   *  Task 12's page.tsx (its Interfaces block declares this prop). */
-  categories: { id: number; name: string }[];
+  /** v1.13.0 ruling R11 / micro-ruling M9: the budget-category picker's categories. Supplied by
+   *  Task 12's page.tsx (its Interfaces block declares this prop). v1.57.2: archived ones
+   *  included, so the picker can show the bill's own archived category (categorySelectOptions). */
+  categories: CategoryLike[];
   /** Item 6 (v1.16.0 plan): the Linked transactions card's rows and total, for every kind. */
   ledger: ItemLedger;
 }) {
@@ -1013,9 +1015,12 @@ export function WarrantyDetailClient({
                 <AutoSaveSelect
                   name="categoryId"
                   defaultValue={item.budgetCategoryId === null ? '' : String(item.budgetCategoryId)}
+                  // v1.57.2: live categories under their parents, plus the bill's own category when
+                  // that one is archived, disabled -- without it the select would fall back to
+                  // "Not linked" and save that on a stray change.
                   options={[
                     { value: '', label: 'Not linked' },
-                    ...categories.map((category) => ({ value: String(category.id), label: category.name })),
+                    ...categorySelectOptions(categories, { kind: 'assign', current: item.budgetCategoryId }),
                   ]}
                   fields={{ itemId: String(item.id) }}
                   action={saveBillCategory}

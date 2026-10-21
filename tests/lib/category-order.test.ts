@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { categoryOptions, orderedCategoryRows } from '@/lib/category-order';
+import { categoryOptionGroups, categoryOptions, categorySelectOptions, orderedCategoryRows } from '@/lib/category-order';
 import type { CategoryRecord } from '@/lib/categories';
 
 /**
@@ -86,5 +86,103 @@ describe('orderedCategoryRows (backlog 2a: the admin table keeps archived rows, 
 
   it('promotes a child whose parent is missing from the list to the top level', () => {
     expect(orderedCategoryRows([row(5, 'Education', 99, 0)])).toEqual([{ row: row(5, 'Education', 99, 0), depth: 0 }]);
+  });
+});
+
+/**
+ * v1.57.2: one rule for every picker. An ASSIGNMENT picker (a pick writes a category to
+ * something) lists live categories, plus the thing's own archived category when it holds one,
+ * disabled. A FILTER picker (a pick narrows a list) keeps every archived category, selectable,
+ * after the live ones.
+ */
+describe('categoryOptions picker kinds (v1.57.2)', () => {
+  const row = (id: number, name: string, parentId: number | null, sortOrder: number, isArchived = false) => ({ id, name, parentId, sortOrder, isArchived });
+  const all = [
+    row(1, 'Hobbies', null, 0),
+    row(2, 'Kites', 1, 0),
+    row(3, 'Lanterns', 1, 1, true),
+    row(4, 'Ferries', null, 1, true),
+    row(5, 'Pantry', null, 2),
+  ];
+
+  it('an assignment picker with nothing current lists live categories only', () => {
+    expect(categoryOptions(all)).toEqual([
+      { id: 1, label: 'Hobbies', depth: 0 },
+      { id: 2, label: 'Kites', depth: 1 },
+      { id: 5, label: 'Pantry', depth: 0 },
+    ]);
+    expect(categoryOptions(all, { kind: 'assign', current: null })).toEqual(categoryOptions(all));
+  });
+
+  it('an assignment picker on a live category lists live categories only', () => {
+    expect(categoryOptions(all, { kind: 'assign', current: 2 })).toEqual(categoryOptions(all));
+  });
+
+  it('an assignment picker on an archived category adds exactly that one, disabled, after the live ones', () => {
+    expect(categoryOptions(all, { kind: 'assign', current: 3 })).toEqual([
+      { id: 1, label: 'Hobbies', depth: 0 },
+      { id: 2, label: 'Kites', depth: 1 },
+      { id: 5, label: 'Pantry', depth: 0 },
+      { id: 3, label: 'Hobbies › Lanterns (archived)', depth: 0, disabled: true },
+    ]);
+  });
+
+  it('never offers an archived category that is not the current one', () => {
+    const ids = categoryOptions(all, { kind: 'assign', current: 4 }).map((o) => o.id);
+    expect(ids).toContain(4);
+    expect(ids).not.toContain(3);
+  });
+
+  it('a filter picker keeps every archived category, selectable, after the live ones', () => {
+    expect(categoryOptions(all, { kind: 'filter' })).toEqual([
+      { id: 1, label: 'Hobbies', depth: 0 },
+      { id: 2, label: 'Kites', depth: 1 },
+      { id: 5, label: 'Pantry', depth: 0 },
+      { id: 3, label: 'Hobbies › Lanterns (archived)', depth: 0 },
+      { id: 4, label: 'Ferries (archived)', depth: 0 },
+    ]);
+  });
+
+  it('names the parent of an archived child, whether that parent is live or archived', () => {
+    const tree = [
+      row(1, 'Hobbies', null, 0),
+      row(2, 'Kites', 1, 0, true),
+      row(3, 'Ferries', null, 1, true),
+      row(4, 'Dinghies', 3, 0, true),
+      row(5, 'Rowboats', 3, 1),
+    ];
+    expect(categoryOptions(tree, { kind: 'filter' }).map((o) => `${o.depth}:${o.label}`)).toEqual([
+      '0:Hobbies',
+      '0:Rowboats',
+      '0:Hobbies › Kites (archived)',
+      '0:Ferries (archived)',
+      '0:Ferries › Dinghies (archived)',
+    ]);
+  });
+
+  it('groups put the archived options after the live groups, ungrouped', () => {
+    expect(categoryOptionGroups(all, { kind: 'assign', current: 4 })).toEqual([
+      {
+        label: 'Hobbies',
+        options: [
+          { id: 1, label: 'Hobbies', depth: 0 },
+          { id: 2, label: 'Kites', depth: 1 },
+        ],
+      },
+      { label: null, options: [{ id: 5, label: 'Pantry', depth: 0 }] },
+      { label: null, options: [{ id: 4, label: 'Ferries (archived)', depth: 0, disabled: true }] },
+    ]);
+  });
+
+  it('select options carry the disabled flag for the current archived category only', () => {
+    expect(categorySelectOptions(all, { kind: 'assign', current: 4 })).toEqual([
+      { label: 'Hobbies', options: [{ value: '1', label: 'Hobbies' }, { value: '2', label: 'Kites' }] },
+      { value: '5', label: 'Pantry' },
+      { value: '4', label: 'Ferries (archived)', disabled: true },
+    ]);
+    expect(categorySelectOptions(all)).toEqual([
+      { label: 'Hobbies', options: [{ value: '1', label: 'Hobbies' }, { value: '2', label: 'Kites' }] },
+      { value: '5', label: 'Pantry' },
+    ]);
   });
 });

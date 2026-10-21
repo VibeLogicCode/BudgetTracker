@@ -240,8 +240,8 @@ export function CategoryCombobox({
       includeUncategorized &&
       ((query ?? '').trim().length === 0 || UNCATEGORIZED.toLowerCase().includes((query ?? '').trim().toLowerCase()));
     return [
-      ...(uncategorizedMatches ? [{ id: null as number | null, label: UNCATEGORIZED, depth: 0 as const }] : []),
-      ...filtered.map((option) => ({ id: option.id as number | null, label: option.label, depth: option.depth })),
+      ...(uncategorizedMatches ? [{ id: null as number | null, label: UNCATEGORIZED, depth: 0 as const, disabled: false }] : []),
+      ...filtered.map((option) => ({ id: option.id as number | null, label: option.label, depth: option.depth, disabled: option.disabled === true })),
     ];
   }, [options, query, includeUncategorized]);
 
@@ -313,7 +313,9 @@ export function CategoryCombobox({
 
   function choose(index: number | null): void {
     const option = index === null ? undefined : visible[index];
-    if (option === undefined) return;
+    // v1.57.2: a disabled option is the thing's own archived category, listed so it can be seen;
+    // nothing may pick it (CategoryPicker in src/lib/category-order.ts).
+    if (option === undefined || option.disabled) return;
     onChange(option.id);
     close();
   }
@@ -419,9 +421,10 @@ export function CategoryCombobox({
                 id={`${optionIdPrefix}-${index}`}
                 role="option"
                 aria-selected={option.id === value}
-                className={`cursor-pointer px-2 py-1 text-sm ${index === highlight ? 'bg-surface-2 text-ink' : 'text-ink'} ${
-                  option.depth === 1 ? 'pl-6' : ''
-                }`}
+                aria-disabled={option.disabled ? true : undefined}
+                className={`px-2 py-1 text-sm ${option.disabled ? 'cursor-default text-subtle' : 'cursor-pointer text-ink'} ${
+                  index === highlight ? 'bg-surface-2' : ''
+                } ${option.depth === 1 ? 'pl-6' : ''}`}
                 onMouseEnter={() => setHighlight(index)}
                 onMouseDown={(event) => {
                   // Primary button only: a right or middle press picks nothing (the list's own

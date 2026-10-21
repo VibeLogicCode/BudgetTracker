@@ -629,7 +629,6 @@ const RowFixContext = createContext<RowFixes>({ recategorize: () => {}, split: (
  */
 function RowFixHost({ children }: { children: ReactNode }) {
   const { categories, canAuthorRules, isAdmin } = useContext(BudgetsPageContext);
-  const options = useMemo(() => categoryOptions(categories), [categories]);
   const [recat, setRecat] = useState<{ row: RecategorizeRow; owner: RowFixOwner } | null>(null);
   const [splitting, setSplitting] = useState<{ target: SplitTarget; existing: SplitRow[]; owner: RowFixOwner } | null>(null);
   /** Opened once Always ask was chosen and the category posted. */
@@ -662,7 +661,9 @@ function RowFixHost({ children }: { children: ReactNode }) {
         <RecategorizeDialog
           key={recat.row.id}
           row={recat.row}
-          options={options}
+          // v1.57.2: live categories plus the row's own category when that one is archived (an
+          // archived category's card is exactly where these rows are), disabled.
+          options={categoryOptions(categories, { kind: 'assign', current: recat.row.categoryId })}
           action={(formData) => {
             fixOwner.current = recat.owner;
             fixAction(formData);
@@ -687,7 +688,7 @@ function RowFixHost({ children }: { children: ReactNode }) {
           key={splitting.target.id}
           target={splitting.target}
           existing={splitting.existing}
-          options={options}
+          categories={categories}
           action={(formData) => {
             splitOwner.current = splitting.owner;
             splitAction(formData);
@@ -1727,7 +1728,10 @@ export function BudgetsClient({
    *  viewer has no household scope to set a target for at all -- same pairing as
    *  householdTotals above). */
   savingsProgress?: SavingsProgress | null;
-  /** Spec 2026-10-21 (fix from Budgets) §2.3: live categories, for a row's category picker. */
+  /**
+   * Spec 2026-10-21 (fix from Budgets) §2.3: the categories for a row's category picker, archived
+   * ones included (v1.57.2) so a row on an archived category's card can show its own.
+   */
   categories?: CategoryLike[];
 }) {
   const [copyState, dispatchCopy] = useActionState(copyPreviousMonthAction, initial);

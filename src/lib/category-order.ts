@@ -23,6 +23,39 @@ export interface CategoryOption {
   id: number;
   label: string;
   depth: 0 | 1;
+  /**
+   * v1.57.2: set only on an archived category's option in an ASSIGNMENT picker, which is only
+   * ever the thing's own current category (see CategoryPicker). A native <select> renders it
+   * `disabled`; CategoryCombobox shows it as the current value and will not choose it. Absent,
+   * never false, on every other option.
+   */
+  disabled?: true;
+}
+
+/**
+ * v1.57.2: the one rule every category picker follows, by kind.
+ *
+ *  - `assign`: a pick WRITES a category to something (a transaction, a split part, a rule, a
+ *    bill's budget link, a new category's parent...). Live categories only, plus -- if and only if
+ *    `current` is an archived category -- that ONE category, labelled "(archived)" and disabled,
+ *    after the live ones. It is there so a pre-filled or auto-saving control still has a real
+ *    <option> for the value it holds: without one the browser falls back to the first option, and
+ *    an auto-saving select would then clear (and untrain) a real historical category on a stray
+ *    change. Disabled, so nothing can pick an archived category it was not already holding; once
+ *    the thing moves to a live category, the next render drops the line. `current: null` is a
+ *    picker that holds nothing yet (a new entry, a bulk action, a new rule).
+ *  - `filter`: a pick NARROWS what is shown. Every archived category stays selectable, after the
+ *    live ones and labelled "(archived)", because finding old rows in a since-archived category
+ *    is a legitimate search.
+ */
+export type CategoryPicker = { kind: 'assign'; current: number | null } | { kind: 'filter' };
+
+const ASSIGN_NOTHING: CategoryPicker = { kind: 'assign', current: null };
+
+/** "Parent › Child (archived)": an archived option sits after the live tree, so it names its parent. */
+function archivedLabel(category: CategoryLike, all: CategoryLike[]): string {
+  const parent = category.parentId === null ? undefined : all.find((row) => row.id === category.parentId);
+  return `${parent ? `${parent.name} › ` : ''}${category.name} (archived)`;
 }
 
 /**
@@ -60,13 +93,25 @@ export function orderedCategoryRows<T extends CategoryLike>(all: T[]): Array<{ r
   return rows;
 }
 
-export function categoryOptions(all: CategoryLike[]): CategoryOption[] {
+export function categoryOptions(all: CategoryLike[], picker: CategoryPicker = ASSIGN_NOTHING): CategoryOption[] {
   // Categories are limited to two levels (enforced at creation in createCategory). Archived
   // rows are dropped BEFORE the walk, so a child whose parent got archived has nowhere left to
   // nest and is promoted to depth 0 by orderedCategoryRows -- it stays selectable rather than
   // disappearing with no way to notice (some past transaction may still hold it).
   const active = all.filter((category) => !category.isArchived);
-  return orderedCategoryRows(active).map(({ row, depth }) => ({ id: row.id, label: row.name, depth }));
+  const live: CategoryOption[] = orderedCategoryRows(active).map(({ row, depth }) => ({ id: row.id, label: row.name, depth }));
+  // The archived tail, in the same (sortOrder, id) tree order, flat: see CategoryPicker.
+  const archived = orderedCategoryRows(all.filter((category) => category.isArchived))
+    .map(({ row }) => row)
+    .filter((row) => picker.kind === 'filter' || row.id === picker.current);
+  return [
+    ...live,
+    ...archived.map((row): CategoryOption =>
+      picker.kind === 'filter'
+        ? { id: row.id, label: archivedLabel(row, all), depth: 0 }
+        : { id: row.id, label: archivedLabel(row, all), depth: 0, disabled: true },
+    ),
+  ];
 }
 
 /**
@@ -87,8 +132,10 @@ export interface CategoryOptionGroup {
   options: CategoryOption[];
 }
 
-export function categoryOptionGroups(all: CategoryLike[]): CategoryOptionGroup[] {
-  const flat = categoryOptions(all);
+export function categoryOptionGroups(all: CategoryLike[], picker: CategoryPicker = ASSIGN_NOTHING): CategoryOptionGroup[] {
+  // Archived options (CategoryPicker) arrive at depth 0 after the live tree, so each one lands
+  // here as a trailing ungrouped option.
+  const flat = categoryOptions(all, picker);
   const groups: CategoryOptionGroup[] = [];
   for (let i = 0; i < flat.length; i += 1) {
     const option = flat[i];
@@ -102,4 +149,24 @@ export function categoryOptionGroups(all: CategoryLike[]): CategoryOptionGroup[]
     );
   }
   return groups;
+}
+
+/**
+ * v1.57.2: categoryOptionGroups in AutoSaveSelect's own option shape (src/components/ui/AutoSave.tsx,
+ * declared structurally here so this module imports nothing from a component): a group is
+ * { label, options }, a childless category is passed through directly, and the disabled flag rides
+ * along. The Transactions row selects and the bill's budget-category select share it.
+ */
+export type CategorySelectOption =
+  | { value: string; label: string; disabled?: boolean }
+  | { label: string; options: { value: string; label: string; disabled?: boolean }[] };
+
+function selectOption(option: CategoryOption): { value: string; label: string; disabled?: boolean } {
+  return option.disabled ? { value: String(option.id), label: option.label, disabled: true } : { value: String(option.id), label: option.label };
+}
+
+export function categorySelectOptions(all: CategoryLike[], picker: CategoryPicker = ASSIGN_NOTHING): CategorySelectOption[] {
+  return categoryOptionGroups(all, picker).map((group) =>
+    group.label === null ? selectOption(group.options[0]) : { label: group.label, options: group.options.map(selectOption) },
+  );
 }

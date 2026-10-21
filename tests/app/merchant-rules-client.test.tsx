@@ -368,6 +368,26 @@ describe('MerchantRulesClient — the rule dialog (RowDialog, item 10)', () => {
     expect(Array.from(select.options).some((o) => o.textContent === 'Coffee (archived)')).toBe(true);
   });
 
+  /** v1.57.2: the one picker rule -- the held archived category is shown, disabled, after the live ones. */
+  it("lists the rule's archived category after the live ones, disabled", () => {
+    render(
+      <MerchantRulesClient
+        {...baseProps({
+          categories: [category({ id: 1, name: 'Coffee', isArchived: true }), category({ id: 2, name: 'Groceries' })],
+          rows: [rule({ categoryId: 1, categoryArchived: true })],
+        })}
+      />,
+    );
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: /^edit$/i }));
+    const select = screen.getByRole('dialog').querySelector('select[name="categoryId"]') as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => [o.value, o.disabled])).toEqual([
+      ['', false],
+      ['2', false],
+      ['1', true],
+    ]);
+  });
+
   it('offers no archived category the rule is not on', () => {
     render(
       <MerchantRulesClient

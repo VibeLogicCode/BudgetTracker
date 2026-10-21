@@ -68,7 +68,9 @@ export function RecategorizeDialog({
   // An amount-bounded filing rule outranks a new exact rule, so the teach option would promise
   // something that does not happen; with Uncategorized picked there is no category to teach.
   const teachOffered = filedBy?.bounded !== true;
-  const teachDisabled = picked === null;
+  // v1.57.2: nor with the row's own archived category still picked (a disabled option): no rule
+  // is ever written for an archived category.
+  const teachDisabled = picked === null || options.find((o) => o.id === picked)?.disabled === true;
   const effective: RuleChoice = choice === 'teach' && (teachDisabled || !teachOffered) ? 'keep' : choice;
   const currentLabel = options.find((o) => o.id === row.categoryId)?.label ?? 'its category';
   const teachHint =

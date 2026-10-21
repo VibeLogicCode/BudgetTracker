@@ -369,3 +369,22 @@ describe('ManagersClient — "Add category" is a disclosure (2026-08-30 Settings
     expect(screen.getByPlaceholderText('Groceries')).toBeTruthy();
   });
 });
+
+/** v1.57.2: a new category's Parent picker is an assignment picker, so it offers live categories only. */
+describe('ManagersClient — the Parent picker', () => {
+  it('offers no archived top-level category as a parent', () => {
+    const { container } = render(
+      <ManagersClient
+        {...baseProps({
+          categories: [
+            category({ id: 1, name: 'Hobbies', sortOrder: 0 }),
+            category({ id: 2, name: 'Ferries', sortOrder: 1, isArchived: true }),
+            category({ id: 3, name: 'Kites', parentId: 1, sortOrder: 2 }),
+          ],
+        })}
+      />,
+    );
+    const select = container.querySelector('select[name="parentId"]') as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => o.textContent)).toEqual(['Top level', 'Hobbies']);
+  });
+});

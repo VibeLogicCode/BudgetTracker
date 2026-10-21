@@ -197,7 +197,9 @@ export default async function BudgetsPage({
       // is serialized to a plain object keyed by category id, per the comment above.
       householdSinkingFunds={householdSinkingFunds}
       savingsProgress={savings}
-      categories={listCategories()}
+      // v1.57.2: archived ones too -- the card dialogs show a row's own archived category
+      // (categoryOptions' assignment kind keeps every other archived one out of the list).
+      categories={listCategories({ includeArchived: true })}
     />
   );
 }

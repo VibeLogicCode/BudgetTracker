@@ -188,7 +188,9 @@ describe('TransactionsClient — archived-category silent-clear hazard', () => {
     expect(setCategoryAction).not.toHaveBeenCalled();
   });
 
-  it('excludes archived categories from the filter, bulk-categorize and manual-entry pickers', () => {
+  // v1.57.2: the filter half moved to 'the category filter keeps every archived category' below --
+  // a filter is the one kind of picker that keeps archived categories.
+  it('excludes archived categories from the manual-entry picker', () => {
     const { container } = render(
       <TransactionsClient
         page={pageWithRow()}
@@ -202,10 +204,6 @@ describe('TransactionsClient — archived-category silent-clear hazard', () => {
       />,
     );
 
-    const filterSelect = container.querySelector('form[method="get"] select[name="category"]') as HTMLSelectElement;
-    expect(filterSelect.querySelector('option[value="42"]')).toBeNull();
-    expect(filterSelect.querySelector('option[value="7"]')).not.toBeNull();
-
     // Ruling S6 changed this: Quick add now renders collapsed by default outside review mode, so
     // the manual-entry form is not in the DOM until its disclosure is opened.
     fireEvent.click(screen.getByRole('button', { name: 'Add a transaction' }));
@@ -213,6 +211,97 @@ describe('TransactionsClient — archived-category silent-clear hazard', () => {
     const manualCategorySelect = manualForm.querySelector('select[name="categoryId"]') as HTMLSelectElement;
     expect(manualCategorySelect.querySelector('option[value="42"]')).toBeNull();
     expect(manualCategorySelect.querySelector('option[value="7"]')).not.toBeNull();
+  });
+});
+
+/**
+ * v1.57.2: one rule for every category picker. An assignment picker lists live categories plus the
+ * row's OWN archived category (disabled, selected) and no other archived one; the filter keeps
+ * every archived category, selectable, after the live ones.
+ */
+describe('TransactionsClient — archived categories in the pickers (v1.57.2)', () => {
+  const categories = [
+    { id: 7, name: 'Kites', parentId: null, isArchived: false, sortOrder: 0 },
+    { id: 42, name: 'Lanterns', parentId: null, isArchived: true, sortOrder: 1 },
+    { id: 43, name: 'Ferries', parentId: null, isArchived: true, sortOrder: 2 },
+  ];
+  /** The desktop table row's select and the phone card's select, for the one row. */
+  function rowSelects(container: HTMLElement): HTMLSelectElement[] {
+    const desktop = container.querySelector('tbody select[name="categoryId"]') as HTMLSelectElement;
+    const mobile = container.querySelector('ul[data-transaction-cards] select[name="categoryId"]') as HTMLSelectElement;
+    expect(desktop).toBeTruthy();
+    expect(mobile).toBeTruthy();
+    return [desktop, mobile];
+  }
+  const archivedOptions = (select: HTMLSelectElement) =>
+    Array.from(select.options).filter((option) => (option.textContent ?? '').includes('(archived)'));
+
+  it('a row on a live category lists no archived option, on the table and on the card', () => {
+    const { container } = render(
+      <TransactionsClient page={pageWithRow({ categoryId: 7, categoryName: 'Kites' })} accounts={[]} categories={categories} people={[]} today="2026-03-02" />,
+    );
+    for (const select of rowSelects(container)) {
+      expect(select.value).toBe('7');
+      expect(archivedOptions(select)).toEqual([]);
+      expect(select.querySelector('option[value="42"]')).toBeNull();
+      expect(select.querySelector('option[value="43"]')).toBeNull();
+    }
+  });
+
+  it('a row on an archived category lists exactly that one, disabled and selected, on the table and on the card', () => {
+    const { container } = render(
+      <TransactionsClient page={pageWithRow({ categoryId: 42, categoryName: 'Lanterns' })} accounts={[]} categories={categories} people={[]} today="2026-03-02" />,
+    );
+    for (const select of rowSelects(container)) {
+      expect(select.value).toBe('42');
+      const archived = archivedOptions(select);
+      expect(archived.map((option) => option.value)).toEqual(['42']);
+      expect(archived[0].textContent).toBe('Lanterns (archived)');
+      expect(archived[0].disabled).toBe(true);
+      expect(archived[0].selected).toBe(true);
+      expect(select.querySelector('option[value="43"]')).toBeNull();
+    }
+  });
+
+  it('the review card on an archived guess shows that guess, disabled, and no other archived one', () => {
+    const { container } = render(
+      <TransactionsClient
+        page={pageWithRow({ categoryId: 42, categoryName: 'Lanterns', source: 'bayes', confidence: 0.4 })}
+        accounts={[]}
+        categories={categories}
+        people={[]}
+        today="2026-03-02"
+        reviewMode
+      />,
+    );
+    const select = container.querySelector('ul > li.card select[name="categoryId"]') as HTMLSelectElement;
+    expect(select.value).toBe('42');
+    expect(archivedOptions(select).map((option) => [option.value, option.disabled])).toEqual([['42', true]]);
+  });
+
+  it('Apply to all offers no archived category and starts at Choose for a row on an archived one', () => {
+    render(
+      <TransactionsClient page={pageWithRow({ categoryId: 42, categoryName: 'Lanterns' })} accounts={[]} categories={categories} people={[]} today="2026-03-02" />,
+    );
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Apply this category to every "TIM HORTONS"…' }));
+    const select = screen.getByLabelText('Category for every TIM HORTONS — every transaction') as HTMLSelectElement;
+    expect(select.value).toBe('');
+    expect(archivedOptions(select)).toEqual([]);
+    expect(Array.from(select.options).map((option) => option.value)).toEqual(['', '7']);
+  });
+
+  it('the category filter keeps every archived category, selectable, after the live ones', () => {
+    const { container } = render(
+      <TransactionsClient page={pageWithRow({ categoryId: 7, categoryName: 'Kites' })} accounts={[]} categories={categories} people={[]} today="2026-03-02" currentQuery="category=43" />,
+    );
+    const filterSelect = container.querySelector('form[method="get"] select[name="category"]') as HTMLSelectElement;
+    expect(Array.from(filterSelect.options).map((option) => option.value)).toEqual(['', 'uncategorized', '7', '42', '43']);
+    expect(archivedOptions(filterSelect).map((option) => [option.textContent, option.disabled])).toEqual([
+      ['Lanterns (archived)', false],
+      ['Ferries (archived)', false],
+    ]);
+    expect(filterSelect.value).toBe('43');
   });
 });
 

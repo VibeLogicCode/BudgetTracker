@@ -26,6 +26,26 @@ describe('RecategorizeDialog', () => {
   });
 });
 
+/** v1.57.2: a row on an archived category (a Budgets archived card) holds it as a disabled option. */
+describe('RecategorizeDialog: a row on an archived category', () => {
+  const options = [...OPTIONS, { id: 9, label: 'Lanterns (archived)', depth: 0 as const, disabled: true as const }];
+  const archivedRow = { ...ROW, categoryId: 9 };
+
+  it('starts at that category, keeps posting it untouched, and offers no teach until a live one is picked', () => {
+    render(<RecategorizeDialog row={archivedRow} options={options} action={vi.fn()} canAuthorRules isAdmin={false} onClose={vi.fn()} onAlwaysAsk={vi.fn()} />);
+    const input = screen.getByRole('combobox') as HTMLInputElement;
+    expect(input.value).toBe('Lanterns (archived)');
+    const form = screen.getByRole('button', { name: 'Save category' }).closest('form') as HTMLFormElement;
+    expect(new FormData(form).get('categoryId')).toBe('9');
+    const teach = screen.getByLabelText(/Also file PHONEMART 884 this way from now on/) as HTMLInputElement;
+    expect(teach.disabled).toBe(true);
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'Pho' } });
+    fireEvent.mouseDown(screen.getByRole('option', { name: 'Phone' }));
+    expect(teach.disabled).toBe(false);
+  });
+});
+
 describe('the rule choice (spec §2.4)', () => {
   const base = { options: OPTIONS, action: vi.fn(), onClose: vi.fn(), onAlwaysAsk: vi.fn() };
 

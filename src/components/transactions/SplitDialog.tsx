@@ -6,7 +6,7 @@ import { SubmitButton } from '@/components/SubmitButton';
 import { RowDialog } from '@/components/ui/RowDialog';
 import { inputClass } from '@/components/ui/form';
 import { buttonClass } from '@/components/ui/Button';
-import type { CategoryOption } from '@/lib/category-order';
+import { categoryOptions, type CategoryLike } from '@/lib/category-order';
 import { formatCents, parseAmountToCents, sumCents } from '@/lib/money';
 import type { SplitRow } from '@/lib/splits';
 
@@ -46,15 +46,18 @@ const blankSplitPart = (): SplitPartDraft => ({ categoryId: '', amount: '', note
 export function SplitDialog({
   target,
   existing,
-  options,
+  categories,
   action,
   onClose,
 }: {
   target: SplitTarget;
   /** Existing parts; [] opens two blank parts. */
   existing: SplitRow[];
-  /** categoryOptions(categories): live categories only. */
-  options: CategoryOption[];
+  /**
+   * Every category, archived ones included (v1.57.2): each part lists live categories plus, when
+   * that part holds an archived one, that one disabled (categoryOptions' assignment kind).
+   */
+  categories: CategoryLike[];
   /** The caller's useActionState dispatcher for saveSplitsAction; the caller reads the result. */
   action: (formData: FormData) => void;
   onClose: () => void;
@@ -127,7 +130,7 @@ export function SplitDialog({
                   -- several parts, each needing a different branch. Same unchosen semantics as
                   the recategorize dialog. */}
               <CategoryCombobox
-                options={options}
+                options={categoryOptions(categories, { kind: 'assign', current: part.categoryId === '' ? null : Number(part.categoryId) })}
                 value={part.categoryId === '' ? null : Number(part.categoryId)}
                 onChange={(id) => updateSplitPart(index, { categoryId: id === null ? '' : String(id) })}
                 label={`Category for part ${index + 1}`}

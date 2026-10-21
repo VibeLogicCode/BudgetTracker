@@ -329,7 +329,9 @@ export function ManagersClient({
   const categoryGroupIds = categoryGroups.filter((group) => group.children.length > 0).map((group) => group.parent.id);
   const categoryGroupState = useCategoryGroupOpenState(categoryGroupIds);
 
-  const parents = categories.filter((c) => c.parentId === null);
+  // v1.57.2: a new category's parent is an assignment, so live top-level categories only (the
+  // admin table below still lists archived ones, to restore them).
+  const parents = categories.filter((c) => c.parentId === null && !c.isArchived);
 
   const notice =
     createState.message ??

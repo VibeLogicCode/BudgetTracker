@@ -21,6 +21,13 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.57.2] - 2026-10-21
+
+### Fixed
+
+- Category dropdowns list only the categories you can use, plus a row's own category if it has
+  since been archived; filters still offer archived categories.
+
 ## [1.57.1] - 2026-10-21
 
 ### Fixed

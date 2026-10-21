@@ -56,13 +56,21 @@ export default async function WarrantyDetailPage({ params }: { params: Promise<{
          that second decision without the rows. INSTALLMENT_DUE_SOON_DAYS is the page's own
          window; the notification evaluator passes the user's comingDueDays instead. */
       installments={listInstallments(item.id, today, INSTALLMENT_DUE_SOON_DAYS)}
-      /* v1.13.0 ruling R11: the budget-category select on a bill's Installments card. Archived
-         AND income categories are excluded -- a bill is an expense, and linking one to a category
-         nobody budgets in (archived) or that isn't an expense line at all (income) would render a
-         sinking-fund line against a row the budgets page does not show. */
-      categories={listCategories({ includeArchived: false })
+      /* v1.13.0 ruling R11: the budget-category select on a bill's Installments card. Income
+         categories are excluded -- a bill is an expense, and linking one to a line that isn't an
+         expense at all would render a sinking-fund line against a row the budgets page does not
+         show. v1.57.2: archived ones are SENT but not offered: categorySelectOptions lists only
+         live ones, plus the bill's own category when that one is archived (disabled), so the
+         auto-saving select never falls back to "Not linked" for a link it really holds. */
+      categories={listCategories({ includeArchived: true })
         .filter((category) => !category.isIncome)
-        .map((category) => ({ id: category.id, name: category.name }))}
+        .map((category) => ({
+          id: category.id,
+          name: category.name,
+          parentId: category.parentId,
+          sortOrder: category.sortOrder,
+          isArchived: category.isArchived,
+        }))}
       accounts={listAccounts({}, viewer).map((a) => ({ id: a.id, name: a.name }))}
       payoffFraction={loanSummary?.payoffFraction ?? null}
       /* v1.47.0: both null for a non-loan item, and for a loan until somebody says how its rate

@@ -1416,6 +1416,55 @@ describe('BudgetsClient — fixing a row from the card', () => {
     expect((vi.mocked(saveSplitsAction).mock.calls.at(-1)![1] as FormData).get('txnId')).toBe('77');
   });
 
+  /** v1.57.2: an archived category's card is where these fixes are needed most. */
+  it("on an archived category's card, Change category and Split show that category, disabled, and no other archived one", async () => {
+    const categories = [
+      ...CATEGORIES,
+      { id: 3, name: 'Lanterns', parentId: null, isArchived: true, sortOrder: 2 },
+      { id: 4, name: 'Ferries', parentId: null, isArchived: true, sortOrder: 3 },
+    ];
+    const archivedOptions = () =>
+      screen
+        .getAllByRole('option')
+        .filter((node) => (node.textContent ?? '').includes('(archived)'))
+        .map((node) => [node.textContent, node.getAttribute('aria-disabled')]);
+    await renderWithRows([panelRow()], {}, { household: [makeRow({ categoryId: 3, categoryName: 'Lanterns', isArchived: true })], categories });
+
+    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
+    const input = within(screen.getByRole('dialog')).getByRole('combobox') as HTMLInputElement;
+    expect(input.value).toBe('Lanterns (archived)');
+    fireEvent.focus(input);
+    expect(archivedOptions()).toEqual([['Lanterns (archived)', 'true']]);
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+
+  });
+
+  it("on an archived category's card, Edit split shows a part's own archived category, disabled", async () => {
+    const categories = [
+      ...CATEGORIES,
+      { id: 3, name: 'Lanterns', parentId: null, isArchived: true, sortOrder: 2 },
+      { id: 4, name: 'Ferries', parentId: null, isArchived: true, sortOrder: 3 },
+    ];
+    const parts = [{ id: 501, txnId: 77, categoryId: 3, amountCents: -2000, note: null }, { id: 502, txnId: 77, categoryId: 2, amountCents: -2217, note: null }];
+    await renderWithRows(
+      [panelRow({ amountCents: -2000, parentAmountCents: -4217, source: 'manual', splitId: 501, filedBy: null })],
+      { 77: parts },
+      { household: [makeRow({ categoryId: 3, categoryName: 'Lanterns', isArchived: true })], categories },
+    );
+    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit split…' }));
+    const part = within(screen.getByRole('dialog')).getAllByRole('combobox')[0] as HTMLInputElement;
+    expect(part.value).toBe('Lanterns (archived)');
+    fireEvent.focus(part);
+    expect(
+      screen
+        .getAllByRole('option')
+        .filter((node) => (node.textContent ?? '').includes('(archived)'))
+        .map((node) => [node.textContent, node.getAttribute('aria-disabled')]),
+    ).toEqual([['Lanterns (archived)', 'true']]);
+  });
+
   it('a refused change is reported in the panel', async () => {
     const { setCategoryAction } = await import('@/app/(app)/transactions/actions');
     vi.mocked(setCategoryAction).mockResolvedValueOnce({ error: 'This transaction is split — clear its split first, then change its category.' });
