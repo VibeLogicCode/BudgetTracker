@@ -2431,25 +2431,51 @@ describe('categoryRuleThatFiled (spec 2026-10-21, fix from Budgets §2.3)', () =
   });
 });
 
-/** v1.57.1: a teach over a disabled exact rule turns it back on, as re-marking a recurring mark does. */
+/** v1.57.1: a teach the person chose turns a disabled exact rule back on, as re-marking a recurring mark does. */
 describe('teaching over a disabled exact rule', () => {
+  function disabledRule(db: TestDb['db'], userId: number, categoryName: string) {
+    const rule = upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: categoryIdByName(db, categoryName), createdBy: userId, actorRole: 'admin' });
+    if (!rule.ok) throw new Error('unexpected refusal');
+    setRuleDisabled({ ruleId: rule.ruleId, disabled: true });
+    return rule.ruleId;
+  }
+
   it('updates the rule, enables it, reports it, and the next run files the merchant by it', () => {
     const { db, sqlite, add, userId } = setup();
-    const coffee = categoryIdByName(db, 'Coffee');
     const restaurants = categoryIdByName(db, 'Restaurants');
-    const old = upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: userId, actorRole: 'admin' });
-    if (!old.ok) throw new Error('unexpected refusal');
-    setRuleDisabled({ ruleId: old.ruleId, disabled: true });
+    const ruleId = disabledRule(db, userId, 'Coffee');
     const taught = add('POS PURCHASE TIM HORTONS #4821 TORONTO ON');
 
-    expect(confirmCategory({ transactionId: taught, categoryId: restaurants, userId, createRule: true, actorRole: 'admin' })).toEqual({ ok: true, ruleEnabledAgain: true });
+    expect(confirmCategory({ transactionId: taught, categoryId: restaurants, userId, createRule: true, enableDisabledRule: true, actorRole: 'admin' })).toEqual({ ok: true, ruleEnabledAgain: true });
     const rules = listRules('category');
     expect(rules).toHaveLength(1);
-    expect(rules[0]).toMatchObject({ id: old.ruleId, categoryId: restaurants, disabledAt: null });
+    expect(rules[0]).toMatchObject({ id: ruleId, categoryId: restaurants, disabledAt: null });
 
     const next = add('POS PURCHASE TIM HORTONS #4821 TORONTO ON', -650, '2026-03-09');
     runEngine([next]);
     expect(readTxn(sqlite, next)).toMatchObject({ category_id: restaurants, categorization_source: 'rule' });
+  });
+
+  // Quick add, Mark paid, Accept and the bulk bar teach with no word about the rule, so they leave it off.
+  it('a teach that did not ask for it leaves the rule disabled', () => {
+    const { db, add, userId } = setup();
+    const restaurants = categoryIdByName(db, 'Restaurants');
+    disabledRule(db, userId, 'Coffee');
+    const taught = add('POS PURCHASE TIM HORTONS #4821 TORONTO ON');
+    expect(confirmCategory({ transactionId: taught, categoryId: restaurants, userId, createRule: true, actorRole: 'admin' })).toEqual({ ok: true });
+    expect(listRules('category')[0]).toMatchObject({ categoryId: restaurants });
+    expect(listRules('category')[0].disabledAt).not.toBeNull();
+  });
+
+  it("a member's teach over another member's disabled rule is refused, and the rule stays as it was", () => {
+    const { db, add, userId } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    disabledRule(db, userId, 'Coffee');
+    const member = insertTestUser(db, { name: 'Sam', username: 'sam', role: 'member' });
+    const taught = add('POS PURCHASE TIM HORTONS #4821 TORONTO ON');
+    expect(confirmCategory({ transactionId: taught, categoryId: categoryIdByName(db, 'Restaurants'), userId: member, createRule: true, enableDisabledRule: true, actorRole: 'member' })).toMatchObject({ ok: false, reason: 'owned_by_another' });
+    expect(listRules('category')[0]).toMatchObject({ categoryId: coffee });
+    expect(listRules('category')[0].disabledAt).not.toBeNull();
   });
 
   it('reports nothing turned back on for an enabled rule, a new rule, or a pick that teaches nothing', () => {
@@ -2457,13 +2483,13 @@ describe('teaching over a disabled exact rule', () => {
     const coffee = categoryIdByName(db, 'Coffee');
     const restaurants = categoryIdByName(db, 'Restaurants');
     const first = add('POS PURCHASE TIM HORTONS #4821 TORONTO ON');
-    expect(confirmCategory({ transactionId: first, categoryId: coffee, userId, createRule: true, actorRole: 'admin' })).toEqual({ ok: true });
-    expect(confirmCategory({ transactionId: first, categoryId: restaurants, userId, createRule: true, actorRole: 'admin' })).toEqual({ ok: true });
+    expect(confirmCategory({ transactionId: first, categoryId: coffee, userId, createRule: true, enableDisabledRule: true, actorRole: 'admin' })).toEqual({ ok: true });
+    expect(confirmCategory({ transactionId: first, categoryId: restaurants, userId, createRule: true, enableDisabledRule: true, actorRole: 'admin' })).toEqual({ ok: true });
 
     const rule = listRules('category')[0];
     setRuleDisabled({ ruleId: rule.id, disabled: true });
     const second = add('POS PURCHASE TIM HORTONS #4821 TORONTO ON', -650, '2026-03-09');
-    expect(confirmCategory({ transactionId: second, categoryId: coffee, userId, createRule: false, actorRole: 'admin' })).toEqual({ ok: true });
+    expect(confirmCategory({ transactionId: second, categoryId: coffee, userId, createRule: false, enableDisabledRule: true, actorRole: 'admin' })).toEqual({ ok: true });
     expect(listRules('category')[0]).toMatchObject({ categoryId: restaurants });
     expect(listRules('category')[0].disabledAt).not.toBeNull();
   });

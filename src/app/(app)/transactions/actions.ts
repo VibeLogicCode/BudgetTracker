@@ -290,7 +290,15 @@ export async function setCategoryAction(_prev: ActionState, formData: FormData):
     // rather than overwrite, and reports the sentence ruleOwnedError provides instead of the
     // usual "Category updated."
     const teach = formData.get('teach') === '1';
-    const result = confirmCategory({ transactionId, categoryId: Number(raw), userId: user.id, createRule: teach, actorRole: user.role });
+    const result = confirmCategory({
+      transactionId,
+      categoryId: Number(raw),
+      userId: user.id,
+      createRule: teach,
+      // v1.57.1: a teach is the person's own "from now on", so a disabled rule it updates comes back on.
+      enableDisabledRule: teach,
+      actorRole: user.role,
+    });
     if (!result.ok) {
       return {
         error:

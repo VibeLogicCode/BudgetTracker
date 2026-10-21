@@ -1358,6 +1358,13 @@ export function confirmCategory(input: {
   categoryId: number;
   userId: number;
   createRule?: boolean;
+  /**
+   * v1.57.1. The person chose to file this merchant this way from now on (setCategoryAction's
+   * teach), so an exact rule the teach updates is turned back on if it was disabled. Every other
+   * caller leaves it off: quick add and Mark paid teach with no rule choice on screen, and the
+   * bulk and accept paths do not say so to the person.
+   */
+  enableDisabledRule?: boolean;
   /** The ACTOR's role, not the rule's. An admin may write over anyone's rule. */
   actorRole: 'admin' | 'member';
   at?: Date;
@@ -1421,9 +1428,12 @@ export function confirmCategory(input: {
     });
     if (!upserted.ok) return { ok: false, reason: 'owned_by_another', ownerName: upserted.ownerName };
     // v1.57.1: the upsert keeps a rule's disabled flag, so a teach over a disabled exact rule changed
-    // its category and filed nothing. Teaching says "file this merchant this way from now on", so
-    // the rule is turned back on, as marking a merchant again re-enables its recurring mark.
-    if (listRules('category').some((rule) => rule.id === upserted.ruleId && rule.disabledAt !== null)) {
+    // its category and filed nothing. When the person asked to file the merchant this way from now
+    // on, the rule is turned back on, as marking a merchant again re-enables its recurring mark.
+    if (
+      input.enableDisabledRule === true &&
+      listRules('category').some((rule) => rule.id === upserted.ruleId && rule.disabledAt !== null)
+    ) {
       setRuleDisabledFlag(upserted.ruleId, false, at);
       ruleEnabledAgain = true;
     }
