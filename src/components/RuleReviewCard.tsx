@@ -1,14 +1,15 @@
 import Link from 'next/link';
 import type { UnreviewedImportRow } from '@/lib/import/commit';
 import { Card, CardHeader } from '@/components/ui/Card';
+import { DismissAllImportsForm } from '@/components/DismissAllImportsForm';
 import { DismissImportForm } from '@/components/DismissImportForm';
 import { ListRow } from '@/components/ui/ListRow';
 import { buttonClass } from '@/components/ui/Button';
 
 /**
- * v1.26.0 Lane 3b. The standing notice for "rules ran on an import and nobody has looked at
- * what they did" -- a real objection was "i still need to confirm or deny no? i dont
- * just want to auto apply rules and never see what happened on my import." A rule-assigned row
+ * v1.26.0 Lane 3b. The standing notice for an import whose rules ran and whose results nobody
+ * has looked at yet. Rules are applied automatically on import, and the household still needs a
+ * way to see what they did and confirm or correct it afterwards. A rule-assigned row
  * never enters the review queue (REVIEW_WHERE treats `source = 'rule'` as settled), so without
  * this card the only way to find out what a rule did was to remember to go looking.
  *
@@ -38,14 +39,40 @@ import { buttonClass } from '@/components/ui/Button';
  * does two things (a look, a dismiss), and a third for undoing a dismiss nobody has asked to
  * undo would be a feature invented to justify itself. The data is never destroyed -- only
  * unreachable from this UI -- so adding the control later costs nothing already built.
+ *
+ * DISMISS ALL. Offered once two or more imports are listed. It posts the ids this card rendered
+ * (DismissAllImportsForm), so an import that arrives after the page loaded is never dismissed
+ * without having been on screen.
  */
 export const RULE_REVIEW_ROW_LIMIT = 5;
+
+function ImportRow({ row }: { row: UnreviewedImportRow }) {
+  return (
+    <ListRow
+      title={row.accountName}
+      meta={`${row.filename} · ${row.ruleRowCount} transaction${row.ruleRowCount === 1 ? '' : 's'} categorized by a rule`}
+      trailing={
+        <>
+          {/* The fixed contract URL (v1.26.0 Lane 3a/3b): a sibling lane builds this exact
+              screen against these exact params -- never invent or rename one here. */}
+          <Link
+            href={`/transactions?import=${row.importId}&source=rule&group=category`}
+            className={buttonClass('secondary', 'sm')}
+          >
+            Check
+          </Link>
+          <DismissImportForm importId={row.importId} />
+        </>
+      }
+    />
+  );
+}
 
 export function RuleReviewCard({ imports }: { imports: UnreviewedImportRow[] }) {
   if (imports.length === 0) return null;
 
   const shown = imports.slice(0, RULE_REVIEW_ROW_LIMIT);
-  const hiddenCount = imports.length - shown.length;
+  const hidden = imports.slice(RULE_REVIEW_ROW_LIMIT);
 
   return (
     <Card>
@@ -55,37 +82,28 @@ export function RuleReviewCard({ imports }: { imports: UnreviewedImportRow[] }) 
       />
       <ul className="border-t border-line text-sm">
         {shown.map((row) => (
-          <ListRow
-            key={row.importId}
-            title={row.accountName}
-            meta={`${row.filename} · ${row.ruleRowCount} transaction${row.ruleRowCount === 1 ? '' : 's'} categorized by a rule`}
-            trailing={
-              <>
-                {/* The fixed contract URL (v1.26.0 Lane 3a/3b): a sibling lane builds this exact
-                    screen against these exact params -- never invent or rename one here. */}
-                <Link
-                  href={`/transactions?import=${row.importId}&source=rule&group=category`}
-                  className={buttonClass('secondary', 'sm')}
-                >
-                  Check
-                </Link>
-                <DismissImportForm importId={row.importId} />
-              </>
-            }
-          />
+          <ImportRow key={row.importId} row={row} />
         ))}
-        {hiddenCount > 0 ? (
-          <li className="border-b border-line px-4 py-3 last:border-b-0 sm:px-5">
-            {/* Ruling P10 (ComingUpCard's own "+N more" precedent): points at the Import page,
-                the closest existing surface that lists every import -- there is no page that
-                lists only the unreviewed ones, and inventing one just for this overflow line
-                would be a second, unasked-for feature. */}
-            <Link href="/import" className="text-sm font-medium text-accent-text">
-              +{hiddenCount} more to check
-            </Link>
-          </li>
-        ) : null}
       </ul>
+      {hidden.length > 0 ? (
+        // The overflow opens in place: the remaining imports, each with the same Check and Dismiss
+        // controls as the rows above. No other page lists only the imports that still need a
+        // check, so a link away would land somewhere with nothing to do. A native <details> so the
+        // card stays a server component and needs no script; React does not own its `open`
+        // attribute, so a Dismiss inside it re-renders the card without closing it. The summary
+        // keeps `display: list-item` so the browser's marker survives.
+        <details className="border-t border-line text-sm">
+          <summary className="min-h-11 cursor-pointer px-4 py-3 font-medium text-accent-text marker:text-subtle sm:min-h-0 sm:px-5">
+            {`+${hidden.length} more to check`}
+          </summary>
+          <ul className="border-t border-line">
+            {hidden.map((row) => (
+              <ImportRow key={row.importId} row={row} />
+            ))}
+          </ul>
+        </details>
+      ) : null}
+      {imports.length >= 2 ? <DismissAllImportsForm importIds={imports.map((row) => row.importId)} /> : null}
     </Card>
   );
 }

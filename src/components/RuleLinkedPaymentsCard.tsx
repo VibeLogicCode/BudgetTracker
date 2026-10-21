@@ -56,7 +56,7 @@ export function RuleLinkedPaymentsCard({ payments }: { payments: RuleLinkedPayme
         ))}
         {hiddenCount > 0 ? (
           <li className="border-b border-line px-4 py-3 last:border-b-0 sm:px-5">
-            {/* The same overflow shape RuleReviewCard uses: point at the surface that lists every
+            {/* The same overflow shape ComingUpCard uses (Ruling P10): point at the surface that lists every
                 one of them rather than inventing a page for this overflow line alone. */}
             <Link href="/warranties" className="text-accent-text underline">
               {`${hiddenCount} more on Loans & Coverage`}

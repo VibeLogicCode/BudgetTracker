@@ -68,6 +68,38 @@ export async function dismissRuleImportAction(
   return {};
 }
 
+// Far above any real backlog of unchecked imports; it only stops a crafted post from turning one
+// press into tens of thousands of writes.
+const MAX_DISMISS_ALL = 1000;
+const importIdsField = z.array(importIdField).min(1).max(MAX_DISMISS_ALL);
+
+/**
+ * The card's "Dismiss all": the single dismiss above, applied to every import the card listed.
+ * Same guards in the same order, same refusal for a self-scoped viewer, same revalidation and the
+ * same state shape -- the only difference is that it reads every `importId` the form posts.
+ *
+ * It acts on the posted ids, never on "whatever is unreviewed right now". An import that arrives
+ * after the page was rendered was never on the card, so it must not be dismissed unseen. One bad
+ * id rejects the whole request before anything is written.
+ */
+export async function dismissAllRuleImportsAction(
+  _prev: DismissRuleImportState,
+  formData: FormData,
+): Promise<DismissRuleImportState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  const user = await requireUser();
+  // Same refusal as dismissRuleImportAction, for the same reason.
+  if (isSelfScoped(user)) return { error: 'Not available on this account.' };
+
+  const parsed = importIdsField.safeParse(formData.getAll('importId'));
+  if (!parsed.success) return { error: 'Invalid request.' };
+
+  for (const importId of new Set(parsed.data)) markImportRulesReviewed({ importId });
+  revalidatePath('/dashboard');
+  return {};
+}
+
 export interface DismissInsightState {
   error?: string;
 }
@@ -75,8 +107,8 @@ export interface DismissInsightState {
 const insightKeyField = z.string().min(1).max(64);
 
 /**
- * Reported 2026-09-20: "how do i get rid of take a look? it goes to transactions with no way to
- * clear it or am i missing something?" Nothing was missing; there was no way to clear one. See
+ * Reported 2026-09-20: a "Take a look" finding could be opened but never cleared, so one that had
+ * been checked and judged fine stayed on the card for good. See
  * src/lib/insight-dismissals.ts for why this is per finding rather than per merchant, and why it
  * needs no migration.
  *

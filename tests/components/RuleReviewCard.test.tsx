@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, within } from '@testing-library/react';
 import { RuleReviewCard, RULE_REVIEW_ROW_LIMIT } from '@/components/RuleReviewCard';
 import type { UnreviewedImportRow } from '@/lib/import/commit';
 
@@ -54,18 +54,72 @@ describe('RuleReviewCard (v1.26.0 Lane 3b)', () => {
     expect(screen.getByRole('button', { name: /dismiss/i })).toBeTruthy();
   });
 
-  it('caps the list at RULE_REVIEW_ROW_LIMIT and reports how many more there are', () => {
-    const rows = Array.from({ length: RULE_REVIEW_ROW_LIMIT + 3 }, (_, i) =>
+  it('shows the first RULE_REVIEW_ROW_LIMIT rows and opens the rest in place, never a link away', () => {
+    const rows = Array.from({ length: RULE_REVIEW_ROW_LIMIT + 4 }, (_, i) =>
       row({ importId: i + 1, filename: `statement-${i}.csv` }),
     );
-    render(<RuleReviewCard imports={rows} />);
-    expect(screen.getAllByRole('link', { name: 'Check' })).toHaveLength(RULE_REVIEW_ROW_LIMIT);
-    expect(screen.getByText('+3 more to check')).toBeTruthy();
+    const { container } = render(<RuleReviewCard imports={rows} />);
+
+    const details = container.querySelector('details');
+    expect(details).not.toBeNull();
+    const summary = details!.querySelector('summary');
+    expect(summary?.textContent).toBe('+4 more to check');
+
+    // The first five sit outside the disclosure, the other four inside it -- each with the same
+    // Check link and Dismiss control as the rows above.
+    const outside = Array.from(container.querySelectorAll('a')).filter((a) => !details!.contains(a));
+    expect(outside.filter((a) => a.textContent === 'Check')).toHaveLength(RULE_REVIEW_ROW_LIMIT);
+    const inside = within(details!);
+    const insideChecks = inside.getAllByRole('link', { name: 'Check', hidden: true });
+    expect(insideChecks.map((a) => a.getAttribute('href'))).toEqual(
+      [6, 7, 8, 9].map((id) => `/transactions?import=${id}&source=rule&group=category`),
+    );
+    expect(inside.getAllByRole('button', { name: 'Dismiss', hidden: true })).toHaveLength(4);
+    for (const i of [5, 6, 7, 8]) expect(details!.textContent).toContain(`statement-${i}.csv`);
+
+    // The Import screen never listed which imports still need a check, so nothing points there.
+    expect(container.querySelector('a[href="/import"]')).toBeNull();
   });
 
   it('renders no overflow line when everything fits inside the cap', () => {
     const rows = Array.from({ length: RULE_REVIEW_ROW_LIMIT }, (_, i) => row({ importId: i + 1 }));
-    render(<RuleReviewCard imports={rows} />);
+    const { container } = render(<RuleReviewCard imports={rows} />);
     expect(screen.queryByText(/more to check/)).toBeNull();
+    expect(container.querySelector('details')).toBeNull();
+  });
+
+  it('offers Dismiss all, carrying every listed import id, once there are two or more', () => {
+    const rows = Array.from({ length: RULE_REVIEW_ROW_LIMIT + 2 }, (_, i) => row({ importId: (i + 1) * 10 }));
+    const { container } = render(<RuleReviewCard imports={rows} />);
+    const button = screen.getByRole('button', { name: 'Dismiss all' });
+    const form = button.closest('form')!;
+    const ids = Array.from(form.querySelectorAll<HTMLInputElement>('input[type="hidden"][name="importId"]')).map(
+      (input) => input.value,
+    );
+    // Every row on the card, the hidden ones included -- and only those, so an import that
+    // arrives after the page loaded is never dismissed unseen.
+    expect(ids).toEqual(rows.map((r) => String(r.importId)));
+    expect(container.textContent).toContain('Marks all 7 imports as checked. The transactions are not changed.');
+  });
+
+  it('keeps an opened disclosure open when a dismiss re-renders the card', () => {
+    const rows = Array.from({ length: RULE_REVIEW_ROW_LIMIT + 3 }, (_, i) => row({ importId: i + 1 }));
+    const { container, rerender } = render(<RuleReviewCard imports={rows} />);
+    const details = container.querySelector('details')!;
+    details.open = true;
+
+    // One of the first five dismissed, then one inside the disclosure.
+    rerender(<RuleReviewCard imports={rows.filter((r) => r.importId !== 2)} />);
+    expect(container.querySelector('details')).toBe(details);
+    expect(details.open).toBe(true);
+    rerender(<RuleReviewCard imports={rows.filter((r) => r.importId !== 2 && r.importId !== 7)} />);
+    expect(container.querySelector('details')).toBe(details);
+    expect(details.open).toBe(true);
+    expect(details.querySelector('summary')?.textContent).toBe('+1 more to check');
+  });
+
+  it('has no Dismiss all with a single import', () => {
+    render(<RuleReviewCard imports={[row()]} />);
+    expect(screen.queryByRole('button', { name: 'Dismiss all' })).toBeNull();
   });
 });

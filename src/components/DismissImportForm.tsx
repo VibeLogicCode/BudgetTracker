@@ -14,9 +14,10 @@ import { dismissRuleImportAction, type DismissRuleImportState } from '../app/(ap
 const initial: DismissRuleImportState = {};
 
 /**
- * v1.26.0 Lane 3b. The one bit of client interactivity RuleReviewCard needs -- that card stays
- * a server component (every prop it renders arrives already computed), so this is a tiny client
- * child rather than a reason to convert the whole card, the same boundary-minimising move
+ * v1.26.0 Lane 3b. One of RuleReviewCard's two client children (the other is
+ * DismissAllImportsForm) -- that card stays a server component (every prop it renders arrives
+ * already computed), so this is a tiny client child rather than a reason to convert the whole
+ * card, the same boundary-minimising move
  * RecordPaymentForm already makes for the Coming-up card.
  */
 export function DismissImportForm({ importId }: { importId: number }) {

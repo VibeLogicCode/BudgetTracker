@@ -1021,7 +1021,7 @@ describe('DashboardPage — Lane 3b: the unreviewed-rule-imports card', () => {
     expect(link.getAttribute('href')).toBe(`/transactions?import=${importId}&source=rule&group=category`);
   });
 
-  it('caps the list and reports how many more there are', async () => {
+  it('shows five rows and holds the rest in an in-place disclosure', async () => {
     t = createTestDb();
     const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
     const accountId = createAccount({ name: 'Joint Chequing', type: 'chequing', ownerUserId: adult.id });
@@ -1034,9 +1034,15 @@ describe('DashboardPage — Lane 3b: the unreviewed-rule-imports card', () => {
     render(await DashboardPage({ searchParams: Promise.resolve({}) }));
 
     // RULE_REVIEW_ROW_LIMIT (RuleReviewCard.tsx) is 5 -- 7 unreviewed imports means 5 rows and
-    // an overflow line naming the other 2, never a silently truncated or unbounded list.
-    expect(screen.getAllByRole('link', { name: 'Check' })).toHaveLength(5);
-    expect(screen.getByText('+2 more to check')).toBeTruthy();
+    // a disclosure holding the other 2 -- every unreviewed import is on the card, none truncated.
+    const summary = screen.getByText('+2 more to check');
+    const details = summary.closest('details') as HTMLElement;
+    expect(summary.tagName).toBe('SUMMARY');
+    expect(within(details).getAllByRole('link', { name: 'Check', hidden: true })).toHaveLength(2);
+    const allChecks = screen.getAllByRole('link', { name: 'Check', hidden: true });
+    expect(allChecks.filter((a) => !details.contains(a))).toHaveLength(5);
+    const overflowLinks = Array.from(document.querySelectorAll('a')).filter((a) => /more to check/.test(a.textContent ?? ''));
+    expect(overflowLinks).toEqual([]);
   });
 
   it('a self viewer never sees the card, even with an unreviewed import on the books', async () => {
@@ -1079,6 +1085,176 @@ describe('DashboardPage — Lane 3b: the unreviewed-rule-imports card', () => {
     cleanup();
     render(await DashboardPage({ searchParams: Promise.resolve({}) }));
     expect(screen.queryByText('Rules categorized these on import')).toBeNull();
+  });
+});
+
+/**
+ * The card's "Dismiss all" (src/components/DismissAllImportsForm.tsx). Same guards, same
+ * revalidation and same state shape as the single dismiss above, and it acts only on the ids the
+ * form posts -- the ones the card listed -- never on "every unreviewed import in the database".
+ */
+describe('dismissAllRuleImportsAction', () => {
+  let t: TestDb | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  function addImport(accountId: number, userId: number, filename: string): number {
+    return t!.db.get<{ id: number }>(sql`
+      insert into imports (account_id, profile_id, filename, imported_by, rows_added, rows_duplicate, rows_error, created_at)
+      values (${accountId}, null, ${filename}, ${userId}, 0, 0, 0, ${nowIso()})
+      returning id`).id;
+  }
+
+  function addRuleRow(accountId: number, importId: number, userId: number): void {
+    t!.db.run(sql`
+      insert into transactions (account_id, import_id, date, raw_description, normalized_merchant, amount_cents,
+                                category_id, categorization_source, is_transfer, hash_version, created_by, created_at, updated_at)
+      values (${accountId}, ${importId}, '2026-03-04', 'PANTRY PLUS', 'PANTRY PLUS', -1800,
+              null, 'rule', 0, 1, ${userId}, ${nowIso()}, ${nowIso()})`);
+  }
+
+  async function seed(count: number) {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    const accountId = createAccount({ name: 'Everyday Spending', type: 'chequing', ownerUserId: adult.id });
+    const ids: number[] = [];
+    for (let i = 0; i < count; i += 1) {
+      const importId = addImport(accountId, adult.id, `batch-${i}.csv`);
+      addRuleRow(accountId, importId, adult.id);
+      ids.push(importId);
+    }
+    currentUser.value = { id: adult.id, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    return { ids };
+  }
+
+  function form(ids: Array<number | string>): FormData {
+    const fd = new FormData();
+    for (const id of ids) fd.append('importId', String(id));
+    return fd;
+  }
+
+  async function unreviewedIds(): Promise<number[]> {
+    const { unreviewedRuleImports } = await import('@/lib/import/commit');
+    return unreviewedRuleImports()
+      .map((row) => row.importId)
+      .sort((a, b) => a - b);
+  }
+
+  it('marks exactly the posted imports reviewed and leaves an unlisted one on the card', async () => {
+    const { ids } = await seed(3);
+    const { dismissAllRuleImportsAction } = await import('@/app/(app)/dashboard/actions');
+
+    // The third import stands in for one that arrived after the page loaded: not on the form.
+    const result = await dismissAllRuleImportsAction({}, form([ids[0], ids[1]]));
+    expect(result).toEqual({});
+    expect(await unreviewedIds()).toEqual([ids[2]]);
+  });
+
+  it('revalidates exactly what the single dismiss revalidates', async () => {
+    const { ids } = await seed(3);
+    const { dismissAllRuleImportsAction, dismissRuleImportAction } = await import('@/app/(app)/dashboard/actions');
+
+    vi.mocked(revalidatePath).mockClear();
+    const single = new FormData();
+    single.set('importId', String(ids[0]));
+    await dismissRuleImportAction({}, single);
+    const singlePaths = vi.mocked(revalidatePath).mock.calls.map((call) => call[0]);
+
+    vi.mocked(revalidatePath).mockClear();
+    await dismissAllRuleImportsAction({}, form([ids[1], ids[2]]));
+    const allPaths = vi.mocked(revalidatePath).mock.calls.map((call) => call[0]);
+
+    expect(singlePaths).toEqual(['/dashboard']);
+    expect(allPaths).toEqual(singlePaths);
+  });
+
+  it('refuses a self-scoped viewer, as the single dismiss does, and writes nothing', async () => {
+    const { ids } = await seed(2);
+    const kid = await createUser({ name: 'Kid', username: 'kid', password: 'correct horse battery', role: 'member' });
+    currentUser.value = { id: kid.id, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+    const { dismissAllRuleImportsAction, dismissRuleImportAction } = await import('@/app/(app)/dashboard/actions');
+
+    const single = new FormData();
+    single.set('importId', String(ids[0]));
+    const singleResult = await dismissRuleImportAction({}, single);
+    const allResult = await dismissAllRuleImportsAction({}, form(ids));
+    expect(singleResult.error).toBe('Not available on this account.');
+    expect(allResult).toEqual(singleResult);
+    expect(await unreviewedIds()).toEqual(ids);
+  });
+
+  it('refuses a cross-origin post and writes nothing', async () => {
+    const { ids } = await seed(2);
+    const { dismissAllRuleImportsAction } = await import('@/app/(app)/dashboard/actions');
+    const saved = requestHeaders;
+    requestHeaders = new Headers({ origin: 'http://evil.example', host: 'nas.local:3000' });
+    try {
+      expect(await dismissAllRuleImportsAction({}, form(ids))).toEqual({ error: CROSS_ORIGIN_ERROR });
+    } finally {
+      requestHeaders = saved;
+    }
+    expect(await unreviewedIds()).toEqual(ids);
+  });
+
+  it('rejects the whole request when any id is malformed, or when none is posted', async () => {
+    const { ids } = await seed(2);
+    const { dismissAllRuleImportsAction } = await import('@/app/(app)/dashboard/actions');
+
+    expect(await dismissAllRuleImportsAction({}, form([ids[0], 'abc']))).toEqual({ error: 'Invalid request.' });
+    expect(await dismissAllRuleImportsAction({}, form([ids[0], -3]))).toEqual({ error: 'Invalid request.' });
+    expect(await dismissAllRuleImportsAction({}, form([]))).toEqual({ error: 'Invalid request.' });
+    const withFile = form([ids[0]]);
+    withFile.append('importId', new File(['1'], 'not-an-id.txt'));
+    expect(await dismissAllRuleImportsAction({}, withFile)).toEqual({ error: 'Invalid request.' });
+    expect(await dismissAllRuleImportsAction({}, form(Array.from({ length: 1001 }, () => ids[0])))).toEqual({
+      error: 'Invalid request.',
+    });
+    expect(await unreviewedIds()).toEqual(ids);
+  });
+
+  it('accepts a repeated id and marks it once', async () => {
+    const { ids } = await seed(2);
+    const { dismissAllRuleImportsAction } = await import('@/app/(app)/dashboard/actions');
+    expect(await dismissAllRuleImportsAction({}, form([ids[0], ids[0]]))).toEqual({});
+    expect(await unreviewedIds()).toEqual([ids[1]]);
+  });
+
+  it('checks in the single dismiss order: origin, then viewer, then the ids', async () => {
+    await seed(2);
+    const kid = await createUser({ name: 'Kid', username: 'kid', password: 'correct horse battery', role: 'member' });
+    currentUser.value = { id: kid.id, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+    const { dismissAllRuleImportsAction } = await import('@/app/(app)/dashboard/actions');
+
+    // A self viewer posting junk is refused as a self viewer, not as a bad request.
+    expect(await dismissAllRuleImportsAction({}, form(['abc']))).toEqual({ error: 'Not available on this account.' });
+
+    // A cross-origin post is refused as cross-origin before the viewer is looked at.
+    const saved = requestHeaders;
+    requestHeaders = new Headers({ origin: 'http://evil.example', host: 'nas.local:3000' });
+    try {
+      expect(await dismissAllRuleImportsAction({}, form(['abc']))).toEqual({ error: CROSS_ORIGIN_ERROR });
+    } finally {
+      requestHeaders = saved;
+    }
+  });
+
+  it('the dashboard offers Dismiss all with two imports and not with one', async () => {
+    const { ids } = await seed(2);
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+    expect(screen.getByRole('button', { name: 'Dismiss all' })).toBeTruthy();
+
+    const single = new FormData();
+    single.set('importId', String(ids[0]));
+    const { dismissRuleImportAction } = await import('@/app/(app)/dashboard/actions');
+    await dismissRuleImportAction({}, single);
+
+    cleanup();
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+    expect(screen.getByText('Rules categorized these on import')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Dismiss all' })).toBeNull();
   });
 });
 
