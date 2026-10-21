@@ -346,6 +346,13 @@ export const HELP_SECTIONS: HelpSection[] = [
           line at the top says the same amount. Money coming in with no category is not counted there.
         </P>
         <P>
+          Open a card&rsquo;s transactions and each row has a menu: <B>Change category&hellip;</B> and{' '}
+          <B>Split&hellip;</B> happen right there, and the card&rsquo;s figure updates. A row a rule filed
+          says which rule, and changing its category offers to change this transaction only, to file that
+          merchant the same way from now on, or to always ask about it. <B>Open in Transactions</B> lists
+          exactly the rows the card adds up, with a way back to the same card.
+        </P>
+        <P>
           Once there are three full calendar months of history, each category can also show a
           suggestion, which is the median of your own past months and nothing else. It is applied
           only when you press. From the seventh of the month onward a budgeted category also shows

@@ -175,7 +175,8 @@ after an admin uses **Reset password**. Two-factor authentication stays optional
    set in March applies to March and every month after it until you change it again. Categories
    with three or more full months of history also show a suggested amount you can apply with one
    press, and from the seventh of the month each budgeted category shows where the month is
-   heading.
+   heading. A row filed in the wrong category can be fixed from the card itself, and the card says
+   which rule filed it.
 6. **Goals**, log money you set aside and watch the pace projection.
 7. **Reports**, category breakdowns, month-over-month trends, who-spent-what, category
    baselines, CSV export. Pick a date range from the presets or set your own.

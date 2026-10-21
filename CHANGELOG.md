@@ -21,6 +21,22 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+### Added
+
+- **Fix a row from the Budgets card.** Each row in a card's transaction list has a menu: change its
+  category or split it right there, and the card's figure updates. A row a rule filed says which rule,
+  and changing its category offers to change this transaction only, to file that merchant the same way
+  from now on, or to always ask about it. Open in Transactions lists exactly the rows the card adds up,
+  and Transactions shows a way back to the same month and card.
+- Budgets: Categorize on Not categorized yet opens the review queue when the queue shows exactly the rows the card counts, so a pick there can also teach a rule.
+
+### Fixed
+
+- Transactions: submitting the filter form after arriving on one category's own rows kept the
+  category but widened the list to its sub-categories; it now keeps the list as it was until another
+  category is chosen.
+- Changing a row's category or split, or sending Always ask rows back to review, now also refreshes Budgets, Dashboard and Reports.
+
 ## [1.56.1] - 2026-10-21
 
 ### Fixed
