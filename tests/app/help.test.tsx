@@ -165,6 +165,14 @@ describe('the help page tells one bills story', () => {
   });
 });
 
+describe('the help page uses the recurring-charge wording on the Dashboard', () => {
+  it('the dashboard help uses recurring-charge wording', () => {
+    const text = textOf(section('dashboard').body);
+    expect(text).not.toMatch(/subscription/i);
+    expect(text).toContain('recurring charges that went up since last time');
+  });
+});
+
 describe('the help page covers the v1.13.0 household features', () => {
   const all = () => textOf(<>{[HELP_ROUTINE, ...HELP_SECTIONS].map((s) => <div key={s.id}>{s.body}</div>)}</>);
 

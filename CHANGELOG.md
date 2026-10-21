@@ -51,6 +51,7 @@ All notable changes to Budget Tracker are recorded here.
 - **Mark recurring on a selection skips merchants already marked.** A member no longer gets a refusal because another member had already marked one of the merchants, and the message counts only the merchants that changed.
 - **An e-bill PDF keeps its line breaks** where the file marks the end of a line with an empty piece of text.
 - **Help describes adding a bill one way**: with its amount due and due date on the add form, and later installments on its page.
+- **Help calls the Dashboard's price rises recurring charges**, the word the rest of the app uses.
 
 ## [1.55.4] - 2026-10-20
 

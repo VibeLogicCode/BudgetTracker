@@ -149,7 +149,7 @@ export const HELP_SECTIONS: HelpSection[] = [
         </P>
         <P>
           A <B>Needs a look</B> card lists this month&rsquo;s unusual charges, duplicate-looking
-          charges and subscriptions that went up since last time — the same checks this app has
+          charges and recurring charges that went up since last time — the same checks this app has
           always run in the background, now on screen instead of only reaching you by
           notification. <B>All insights</B> opens the whole list on Insights. Like every other card here, it hides
           itself when there is nothing to flag.
