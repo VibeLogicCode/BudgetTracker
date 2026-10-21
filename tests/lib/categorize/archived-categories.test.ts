@@ -6,7 +6,11 @@ import {
   buildContext,
   categorizeTransaction,
   confirmCategory,
+  clearRuleFromTransactions,
   createRulesFromRow,
+  ruleClearIds,
+  ruleImpactCounts,
+  ruleImpactIds,
   runEngine,
 } from '@/lib/categorize/engine';
 import { listRules, upsertRuleFromCorrection, type MatchType } from '@/lib/categorize/rules';
@@ -113,6 +117,50 @@ describe('rules pointing at an archived category', () => {
     const ruleId = rule('BEAN BARN', 'contains', coffee);
     archiveCategory(food, true);
     expect(outcomeFor('BEAN BARN 0042')).toMatchObject({ categoryId: coffee, matchedRuleId: ruleId });
+  });
+});
+
+describe('attribution for a rule whose category is archived', () => {
+  it('Delete and clear reaches the rows an archived category rule filed', () => {
+    const { rule, add, read, coffee } = setup();
+    const r = rule('BEAN BARN', 'contains', coffee);
+    const a = add('BEAN BARN ROASTERS 0042');
+    runEngine([a]);
+    archiveCategory(coffee, true);
+
+    expect(ruleImpactCounts().get(r)).toBe(1);
+    expect(ruleImpactIds(r)).toEqual([a]);
+    expect(ruleClearIds(r)).toEqual([a]);
+    expect(clearRuleFromTransactions({ ruleId: r }).rowsCleared).toBe(1);
+    expect(read(a)).toMatchObject({ category_id: null, categorization_source: 'none' });
+  });
+
+  it('a shorter live rule is not credited with the archived rule rows', () => {
+    const { rule, add, read, coffee, restaurants } = setup();
+    const longer = rule('BEAN BARN ROASTERS', 'contains', coffee);
+    const shorter = rule('BEAN BARN', 'contains', restaurants);
+    const a = add('BEAN BARN ROASTERS 0042');
+    const b = add('BEAN BARN DOWNTOWN');
+    runEngine([a, b]);
+    archiveCategory(coffee, true);
+
+    expect(ruleImpactIds(longer)).toEqual([a]);
+    expect(ruleImpactIds(shorter)).toEqual([b]);
+    const counts = ruleImpactCounts();
+    expect(counts.get(longer)).toBe(1);
+    expect(counts.get(shorter)).toBe(1);
+    clearRuleFromTransactions({ ruleId: shorter });
+    expect(read(a).category_id).toBe(coffee);
+  });
+
+  it('does not credit an archived rule with a row it did not file', () => {
+    const { rule, add, coffee, restaurants } = setup();
+    const archived = rule('BEAN BARN ROASTERS', 'contains', coffee);
+    const shorter = rule('BEAN BARN', 'contains', restaurants);
+    archiveCategory(coffee, true);
+    const u = add('BEAN BARN ROASTERS 0042');
+    expect(ruleImpactIds(archived)).toEqual([]);
+    expect(ruleImpactIds(shorter)).toEqual([u]);
   });
 });
 

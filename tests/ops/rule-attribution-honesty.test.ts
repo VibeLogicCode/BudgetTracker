@@ -15,6 +15,7 @@ import {
 import { matchTypeAllowedForKind, upsertRuleFromCorrection, type MatchType, type RuleKind } from '@/lib/categorize/rules';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { nowIso } from '@/lib/clock';
+import { archiveCategory } from '@/lib/categories';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 
 /**
@@ -512,6 +513,27 @@ describe('migration 0024: attribution simulates the AMOUNT too, not only the tex
     const { inside, outside, merchantWide, bounded } = twoPolicies();
     const ids = [...ruleImpactIds(bounded), ...ruleImpactIds(merchantWide)].sort((a, b) => a - b);
     expect(ids).toEqual([inside, outside].sort((a, b) => a - b));
+  });
+});
+
+describe('an archived category rule is attributed the rows it filed', () => {
+  it('reaches the rows on all four surfaces and leaves no residue after a clear', () => {
+    const { db, userId, add } = fixture();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const txnId = add('THE COFFEE HOUSE DOWNTOWN');
+    const written = upsertRuleFromCorrection({
+      pattern: 'COFFEE HOUSE', matchType: 'contains', ruleKind: 'category',
+      categoryId: coffee, createdBy: userId, actorRole: 'admin',
+    });
+    if (!written.ok) throw new Error('unexpected refusal');
+    runEngine([txnId]);
+    archiveCategory(coffee, true);
+
+    expect(ruleImpactCounts().get(written.ruleId)).toBe(1);
+    expect(ruleImpactIds(written.ruleId)).toEqual([txnId]);
+    expect(ruleClearIds(written.ruleId)).toEqual([txnId]);
+    clearRuleFromTransactions({ ruleId: written.ruleId });
+    expect(countRows('category_id is not null', txnId)).toBe(0);
   });
 });
 

@@ -538,15 +538,48 @@ function attributedRuleId(
   amountCents: number | null,
   kind: RuleKind,
   ctx: CategorizeContext,
+  storedCategoryId: number | null = null,
 ): number | null {
   if (kind === 'category') {
-    const outcome = categorizeTransaction({ id: 0, normalizedMerchant, amountCents }, ctx);
-    return outcome.isTransfer ? null : outcome.matchedRuleId;
+    const live = categorizeTransaction({ id: 0, normalizedMerchant, amountCents }, ctx);
+    const liveWinner = live.isTransfer ? null : live.matchedRuleId;
+    // A rule whose category is archived no longer fires, yet its rows keep the category it filed.
+    // Asked with the row's stored category, look at the rule list with archived rules visible and
+    // credit the winner only when it is an archived rule that filed exactly that category;
+    // anything else keeps today's live answer.
+    if (storedCategoryId !== null && hasArchivedCategoryRule(ctx)) {
+      const visible = categorizeTransaction({ id: 0, normalizedMerchant, amountCents }, withArchivedRulesVisible(ctx));
+      if (!visible.isTransfer && visible.matchedRuleId !== null && visible.matchedRuleId !== liveWinner) {
+        const winner = ctx.rules.find((r) => r.id === visible.matchedRuleId);
+        if (winner && ruleCategoryArchived(winner) && winner.categoryId === storedCategoryId) return winner.id;
+      }
+    }
+    return liveWinner;
   }
   const rule = matchRule(normalizedMerchant, kind, ctx.rules, amountCents);
   if (rule === null) return null;
   if (kind === 'transfer' && !detectTransfer(normalizedMerchant, ctx)) return null;
   return rule.id;
+}
+
+/** Does the rule list hold a category rule whose category is archived? Gates every extra step the
+ *  archived-rule attribution takes, so a household without one runs exactly the queries it always did. */
+function hasArchivedCategoryRule(ctx: CategorizeContext): boolean {
+  return ctx.rules.some((rule) => ruleCategoryArchived(rule));
+}
+
+const visibleContexts = new WeakMap<CategorizeContext, CategorizeContext>();
+
+/** The same context with no rule treated as archived (ctx itself when none is), so a simulation can
+ *  see the rule that filed a row after its category was archived. Read-only; built once per context. */
+function withArchivedRulesVisible(ctx: CategorizeContext): CategorizeContext {
+  if (!hasArchivedCategoryRule(ctx)) return ctx;
+  let visible = visibleContexts.get(ctx);
+  if (!visible) {
+    visible = { ...ctx, rules: ctx.rules.map((rule) => (rule.categoryArchived ? { ...rule, categoryArchived: false } : rule)) };
+    visibleContexts.set(ctx, visible);
+  }
+  return visible;
 }
 
 /**
@@ -581,12 +614,17 @@ function contextHasBoundedRules(ctx: CategorizeContext): boolean {
 function ruleAttributor(
   kind: RuleKind,
   ctx: CategorizeContext,
-): (normalizedMerchant: string, amountCents: number | null) => number | null {
+): (normalizedMerchant: string, amountCents: number | null, storedCategoryId?: number | null) => number | null {
   const cache = new Map<string, number | null>();
   const amountMatters = contextHasBoundedRules(ctx);
-  return (normalizedMerchant, amountCents) => {
-    const key = amountMatters ? `${amountCents ?? ''}|${normalizedMerchant}` : normalizedMerchant;
-    if (!cache.has(key)) cache.set(key, attributedRuleId(normalizedMerchant, amountCents, kind, ctx));
+  // The stored category joins the key only for the category kind and only when an archived category
+  // rule exists, like the amount above.
+  const categoryMatters = kind === 'category' && hasArchivedCategoryRule(ctx);
+  return (normalizedMerchant, amountCents, storedCategoryId = null) => {
+    const base = amountMatters ? `${amountCents ?? ''}|${normalizedMerchant}` : normalizedMerchant;
+    const stored = categoryMatters ? storedCategoryId : null;
+    const key = categoryMatters ? `${stored ?? ''}|${base}` : base;
+    if (!cache.has(key)) cache.set(key, attributedRuleId(normalizedMerchant, amountCents, kind, ctx, stored));
     return cache.get(key) ?? null;
   };
 }
@@ -790,8 +828,14 @@ export function ruleImpactCounts(ctx: CategorizeContext = buildContext()): Map<n
 
   // category: every row a human has not decided, re-simulated fresh (see docblock above for why
   // this is wider than ELIGIBLE).
+  const categoryMatters = hasArchivedCategoryRule(ctx);
   const reachable = db
-    .select({ normalizedMerchant: transactions.normalizedMerchant, amountCents: amountColumn, c: sql<number>`count(*)` })
+    .select({
+      normalizedMerchant: transactions.normalizedMerchant,
+      amountCents: amountColumn,
+      categoryId: categoryMatters ? transactions.categoryId : sql<number | null>`null`,
+      c: sql<number>`count(*)`,
+    })
     .from(transactions)
     .where(
       and(
@@ -799,10 +843,13 @@ export function ruleImpactCounts(ctx: CategorizeContext = buildContext()): Map<n
         sql`not exists (select 1 from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id})`,
       ),
     )
-    .groupBy(...(amountMatters ? [transactions.normalizedMerchant, transactions.amountCents] : [transactions.normalizedMerchant]))
+    .groupBy(
+      ...(amountMatters ? [transactions.normalizedMerchant, transactions.amountCents] : [transactions.normalizedMerchant]),
+      ...(categoryMatters ? [transactions.categoryId] : []),
+    )
     .all();
   const attributedCategory = ruleAttributor('category', ctx);
-  for (const row of reachable) bump(attributedCategory(row.normalizedMerchant, row.amountCents), row.c);
+  for (const row of reachable) bump(attributedCategory(row.normalizedMerchant, row.amountCents, row.categoryId), row.c);
 
   // transfer / not_transfer: the same simulation, read against the CURRENT stored flag. Grouping by
   // (merchant, is_transfer) already collapses the table to one row per distinct merchant per flag
@@ -939,6 +986,8 @@ export function ruleImpactIds(ruleId: number, scope: RuleScope = {}, ctx: Catego
       // 2026-09-13 (migration 0024): selected so attributedToRule can ask the amount question off
       // a fetched row, rather than this list disagreeing with what an import would really do.
       amountCents: transactions.amountCents,
+      /** The category the row holds, so an archived category rule can be credited with what it filed. */
+      categoryId: transactions.categoryId,
       /** 2026-09-13: what the row's person IS, so the attribution branch below can report what
        *  applying the rule would CHANGE rather than every row it merely reaches. */
       attributedUserId: transactions.attributedUserId,
@@ -990,8 +1039,8 @@ function candidateRowsFor(kind: RuleKind) {
  *  rule exists, per (merchant, amount) -- across the whole scan. */
 function attributedToRule(rule: MerchantRuleRecord, ctx: CategorizeContext) {
   const attributedTo = ruleAttributor(rule.ruleKind, ctx);
-  return (row: { normalizedMerchant: string; amountCents: number | null }) =>
-    attributedTo(row.normalizedMerchant, row.amountCents) === rule.id;
+  return (row: { normalizedMerchant: string; amountCents: number | null; categoryId?: number | null }) =>
+    attributedTo(row.normalizedMerchant, row.amountCents, row.categoryId ?? null) === rule.id;
 }
 
 /**

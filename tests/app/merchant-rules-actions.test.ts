@@ -366,6 +366,22 @@ describe('deleteRuleAndClearAction (v1.24.0)', () => {
     expect(listRules().find((r) => r.id === ruleId)).toBeUndefined();
   });
 
+  it('clears the one row a rule filed after its category was archived, then deletes the rule', async () => {
+    const { db, sqlite, add, userId } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const a = add('TIM HORTONS', '2026-01-15');
+    upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: userId, actorRole: 'admin' });
+    rerunEngine();
+    const ruleId = listRules('category')[0].id;
+    archiveCategory(coffee, true);
+
+    const result = await deleteRuleAndClearAction({}, formData({ ruleId: String(ruleId), from: '', to: '' }));
+    expect(result.message).toMatch(/cleared from 1 transaction/);
+    const row = sqlite.prepare('select category_id from transactions where id = ?').get(a) as { category_id: number | null };
+    expect(row.category_id).toBeNull();
+    expect(listRules().find((r) => r.id === ruleId)).toBeUndefined();
+  });
+
   it('honours a date range and says which range it acted on', async () => {
     const { db, sqlite, add, userId } = setup();
     const coffee = categoryIdByName(db, 'Coffee');

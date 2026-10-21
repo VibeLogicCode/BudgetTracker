@@ -55,6 +55,7 @@ All notable changes to Budget Tracker are recorded here.
 - **Help describes adding a bill one way**: with its amount due and due date on the add form, and later installments on its page.
 - **An update check that cannot reach GitHub says why**, for example that the DNS lookup failed or the connection timed out, and what to check.
 - **Help calls the Dashboard's price rises recurring charges**, the word the rest of the app uses.
+- **Delete rule and clear works on a rule whose category is archived.** It clears the transactions that rule filed, and another rule on the same merchant is no longer credited with them.
 
 ## [1.55.4] - 2026-10-20
 
