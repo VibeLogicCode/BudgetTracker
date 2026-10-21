@@ -277,6 +277,27 @@ export function todayIso(now: Date = new Date(), tz?: string): string {
   }).format(now);
 }
 
+/** A stored instant (an ISO timestamp, UTC) as the calendar date it was in the household's zone. */
+export function localDateOf(isoInstant: string, tz?: string): string {
+  return todayIso(new Date(isoInstant), tz);
+}
+
+/**
+ * A stored instant as `YYYY-MM-DD HH:mm` in the household's zone. hourCycle 'h23' for the same
+ * reason as localHour: midnight must read 00, not 24.
+ */
+export function localDateTimeOf(isoInstant: string, tz?: string): string {
+  const instant = new Date(isoInstant);
+  const zone = tz ?? safeTz();
+  const time = new Intl.DateTimeFormat('en-GB', {
+    timeZone: zone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(instant);
+  return `${todayIso(instant, zone)} ${time}`;
+}
+
 export function currentMonth(now: Date = new Date(), tz?: string): string {
   return monthOf(todayIso(now, tz));
 }

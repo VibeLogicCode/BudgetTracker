@@ -371,6 +371,13 @@ describe('spec 2026-09-28 §2.1: the weekly digest opens with the last import da
     expect(bodyOf(userId).startsWith('Last import 2026-08-16.\n\n')).toBe(true);
   });
 
+  it('states the household date of an import made in the evening', () => {
+    const userId = emailUser();
+    importAt('2026-03-10T03:30:00.000Z'); // 23:30 on 2026-03-09 in the suite's zone
+    expect(evaluateWeeklyDigest({ userId, slotDate: '2026-08-17', now: NOW })).toBe(1);
+    expect(bodyOf(userId).startsWith('Last import 2026-03-09.\n\n')).toBe(true);
+  });
+
   it('has no such line for a household that has never imported', () => {
     const userId = emailUser();
     expect(evaluateWeeklyDigest({ userId, slotDate: '2026-08-17', now: NOW })).toBe(1);

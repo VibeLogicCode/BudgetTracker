@@ -3,6 +3,7 @@ import { requireUser } from '@/lib/auth/session';
 import { isSelfScoped } from '@/lib/auth/viewer';
 import { acceptsTransactions, listAccounts } from '@/lib/accounts';
 import { listUsers } from '@/lib/auth/users';
+import { readEnv } from '@/lib/env';
 import { hasReadableMapping, listProfiles } from '@/lib/import/presets';
 import { listImportHistory } from '@/lib/import/commit';
 import { isSimplefinManaged } from '@/lib/simplefin/connection';
@@ -135,6 +136,7 @@ export default async function ImportPage({
       initialDetection={initialDetection}
       initialNotice={initialNotice}
       history={listImportHistory(25)}
+      tz={readEnv().tz}
       simplefinManaged={managed.map((a) => a.name)}
       // Active users, offered on each card value's person select (v1.6.0, MUST-6.1). An
       // assignment to a since-deactivated user still shows correctly (ImportClient injects it

@@ -2,6 +2,8 @@ import { and, eq, sql, type SQL } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { accounts, imports } from '@/db/schema';
 import { ownerScope, type Viewer } from '@/lib/auth/viewer';
+import { localDateOf } from '@/lib/dates';
+import { readTz } from '@/lib/env-tz';
 
 /**
  * Spec 2026-09-28 §2.1. When was anything last imported, among the accounts this viewer may see.
@@ -20,7 +22,7 @@ import { ownerScope, type Viewer } from '@/lib/auth/viewer';
  * Active accounts only. A deactivated account is out of the reminder's sight (evaluate/stale.ts)
  * and out of this for the same reason: nobody is expected to import into it.
  */
-export function latestImportIso(viewer: Viewer): string | null {
+export function latestImportIso(viewer: Viewer, tz: string = readTz()): string | null {
   const scope = ownerScope(viewer);
   const clauses: SQL[] = [eq(accounts.isActive, true)];
   if (scope !== null) clauses.push(eq(accounts.ownerUserId, scope));
@@ -31,5 +33,5 @@ export function latestImportIso(viewer: Viewer): string | null {
     .where(and(...clauses))
     .get();
   const newest = row?.newest ?? null;
-  return newest === null ? null : newest.slice(0, 10);
+  return newest === null ? null : localDateOf(newest, tz);
 }

@@ -28,6 +28,7 @@ const props = {
   ],
   profiles: [{ id: 3, name: 'TD Chequing/Debit', isBuiltin: true, mapping: MAPPING }],
   history: [],
+  tz: 'America/Toronto',
   simplefinManaged: [],
   people: [],
 };

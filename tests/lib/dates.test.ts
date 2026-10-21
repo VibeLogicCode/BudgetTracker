@@ -12,6 +12,8 @@ import {
   isDateFormat,
   isIsoDate,
   isMonthKey,
+  localDateOf,
+  localDateTimeOf,
   localHour,
   localWeekday,
   monthEnd,
@@ -312,5 +314,24 @@ describe('dayLabel', () => {
 
   it('hands back anything that is not a date untouched', () => {
     expect(dayLabel('not-a-date', '2026-10-06')).toBe('not-a-date');
+  });
+});
+
+describe('localDateOf / localDateTimeOf: a stored instant in the household zone', () => {
+  // 03:30 UTC on the 10th is 23:30 on the 9th in Toronto (EDT, UTC-4).
+  const INSTANT = '2026-03-10T03:30:00.000Z';
+
+  it('reads the household date, not the UTC one', () => {
+    expect(localDateOf(INSTANT, 'America/Toronto')).toBe('2026-03-09');
+    expect(localDateOf(INSTANT, 'UTC')).toBe('2026-03-10');
+  });
+
+  it('reads the household date and time as YYYY-MM-DD HH:mm', () => {
+    expect(localDateTimeOf(INSTANT, 'America/Toronto')).toBe('2026-03-09 23:30');
+    expect(localDateTimeOf(INSTANT, 'UTC')).toBe('2026-03-10 03:30');
+  });
+
+  it('writes midnight as 00:00, never 24:00', () => {
+    expect(localDateTimeOf('2026-03-10T04:00:00.000Z', 'America/Toronto')).toBe('2026-03-10 00:00');
   });
 });

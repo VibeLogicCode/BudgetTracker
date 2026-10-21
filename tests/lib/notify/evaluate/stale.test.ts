@@ -321,3 +321,17 @@ describe('spec 2026-09-28 §2.2: a per-account cadence', () => {
     expect(evaluateStaleImport({ userId, now: NOW, tz: 'America/Toronto' })).toBe(0);
   });
 });
+
+describe('the import date is the household date', () => {
+  it('counts the days from the household date', () => {
+    const userId = emailUser();
+    saveUserSettings(userId, { ...DEFAULT_USER_SETTINGS, staleImportWeeks: 3 });
+    // 03:30 UTC on the 9th is 23:30 on the 8th in Toronto: 21 days before 2026-08-29.
+    importAt(userId, '2026-08-09T03:30:00.000Z');
+    expect(
+      evaluateStaleImport({ userId, now: new Date('2026-08-29T15:00:00Z'), tz: 'America/Toronto' }),
+    ).toBe(1);
+    const [row] = pendingOutbox(userId);
+    expect(row?.body).toContain('last import 2026-08-08 (21 days ago)');
+  });
+});

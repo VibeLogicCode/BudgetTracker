@@ -51,7 +51,7 @@ describe('ImportHistoryCard: the undo button is busy-guarded', () => {
       ),
     );
 
-    const { getByText } = render(<ImportHistoryCard history={HISTORY} />);
+    const { getByText } = render(<ImportHistoryCard history={HISTORY} tz="America/Toronto" />);
 
     const undo = getByText('Undo') as HTMLButtonElement;
     expect(undo.disabled).toBe(false);
@@ -80,7 +80,7 @@ describe('ImportHistoryCard: undo reports every table it touched (item AE / MON-
         })),
     );
 
-    const { getByText } = render(<ImportHistoryCard history={HISTORY} />);
+    const { getByText } = render(<ImportHistoryCard history={HISTORY} tz="America/Toronto" />);
 
     fireEvent.click(getByText('Undo'));
 
@@ -101,7 +101,7 @@ describe('ImportHistoryCard: undo reports every table it touched (item AE / MON-
         })),
     );
 
-    const { getByText, queryByText } = render(<ImportHistoryCard history={HISTORY} />);
+    const { getByText, queryByText } = render(<ImportHistoryCard history={HISTORY} tz="America/Toronto" />);
 
     fireEvent.click(getByText('Undo'));
 
@@ -122,7 +122,7 @@ describe('ImportHistoryCard: undo reports every table it touched (item AE / MON-
         })),
     );
 
-    const { getByText, queryByText } = render(<ImportHistoryCard history={HISTORY} />);
+    const { getByText, queryByText } = render(<ImportHistoryCard history={HISTORY} tz="America/Toronto" />);
     fireEvent.click(getByText('Undo'));
     await waitFor(() => expect(queryByText('march.csv')).toBeNull());
   });
@@ -135,7 +135,7 @@ describe('ImportHistoryCard: undo reports every table it touched (item AE / MON-
       .mockImplementationOnce(async () => ({ ok: true, json: async () => ({ importId: 77, willDelete: 3, willKeep: 1 }) }));
     vi.stubGlobal('fetch', fetchMock);
 
-    const { getByText } = render(<ImportHistoryCard history={HISTORY} />);
+    const { getByText } = render(<ImportHistoryCard history={HISTORY} tz="America/Toronto" />);
     fireEvent.click(getByText('Undo'));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(getByText('march.csv')).toBeTruthy();
@@ -149,7 +149,7 @@ describe('ImportHistoryCard: undo reports every table it touched (item AE / MON-
  */
 describe('ImportHistoryCard: F-03, the "View rows" link', () => {
   it('links each row to exactly its own import, with no date or person filter riding along', () => {
-    const { getByRole } = render(<ImportHistoryCard history={HISTORY} />);
+    const { getByRole } = render(<ImportHistoryCard history={HISTORY} tz="America/Toronto" />);
     const link = getByRole('link', { name: /view rows/i });
     expect(link.getAttribute('href')).toBe('/transactions?import=77');
   });
@@ -159,7 +159,7 @@ describe('ImportHistoryCard: responsive rows (v1.15.0, ruling S3)', () => {
   it('the File cell carries cell-stack-headline', () => {
     // Ruling S4 is the other half of this: the PREVIEW grid must never gain cell-stack-headline
     // or go responsive. It cannot, now that the two tables are in different files.
-    const { container } = render(<ImportHistoryCard history={HISTORY} />);
+    const { container } = render(<ImportHistoryCard history={HISTORY} tz="America/Toronto" />);
     // When: Account: File: By: Added: Dupes: Errors: Undo -- File is the third cell.
     expect(container.querySelector('tbody tr td:nth-child(3)')?.className).toContain('cell-stack-headline');
   });
@@ -168,8 +168,24 @@ describe('ImportHistoryCard: responsive rows (v1.15.0, ruling S3)', () => {
   // import from another), so both carry cell-stack-meta -- a small muted line under the File
   // headline instead of two more labelled rows of their own.
   it('the When and Account cells carry cell-stack-meta', () => {
-    const { container } = render(<ImportHistoryCard history={HISTORY} />);
+    const { container } = render(<ImportHistoryCard history={HISTORY} tz="America/Toronto" />);
     expect(container.querySelector('tbody tr td:nth-child(1)')?.className).toContain('cell-stack-meta');
     expect(container.querySelector('tbody tr td:nth-child(2)')?.className).toContain('cell-stack-meta');
+  });
+});
+
+describe('ImportHistoryCard: the When cell is in the household time zone', () => {
+  const EVENING: ImportHistoryRow[] = [{ ...HISTORY[0], createdAt: '2026-03-10T03:30:00.000Z' }];
+  const whenOf = (container: HTMLElement): string | null =>
+    container.querySelector('td[data-label="When"]')?.textContent ?? null;
+
+  it('reads the household date and time', () => {
+    const { container } = render(<ImportHistoryCard history={EVENING} tz="America/Toronto" />);
+    expect(whenOf(container)).toBe('2026-03-09 23:30');
+  });
+
+  it('follows the zone it is given', () => {
+    const { container } = render(<ImportHistoryCard history={EVENING} tz="UTC" />);
+    expect(whenOf(container)).toBe('2026-03-10 03:30');
   });
 });

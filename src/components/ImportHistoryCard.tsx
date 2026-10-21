@@ -7,6 +7,7 @@ import { Notice } from '@/components/ui/Notice';
 import { TableWrap } from '@/components/ui/Table';
 import { buttonClass } from '@/components/ui/Button';
 import { ImportIcon } from '@/components/icons';
+import { localDateTimeOf } from '@/lib/dates';
 import { transactionsHref } from '@/lib/transaction-links';
 import type { ImportHistoryRow } from '@/lib/import/commit';
 
@@ -33,8 +34,11 @@ export function ImportHistoryCard({
   history,
   /** Rows imported during THIS visit, which the server list (fetched before them) cannot know. */
   extraRows = [],
+  /** The household's time zone, a plain prop: @/lib/env cannot be imported into a client file. */
+  tz,
 }: {
   history: ImportHistoryRow[];
+  tz: string;
   extraRows?: ImportHistoryRow[];
 }) {
   const [historyRows, setHistoryRows] = useState<ImportHistoryRow[]>(history);
@@ -146,7 +150,7 @@ export function ImportHistoryCard({
                       `cell-stack-meta` puts these on a small muted line under it instead of two
                       more labelled rows of their own. */}
                   <td className="tabnum whitespace-nowrap text-muted cell-stack-meta" data-label="When">
-                    {row.createdAt.slice(0, 16).replace('T', ' ')}
+                    {localDateTimeOf(row.createdAt, tz)}
                   </td>
                   {/* Truncate with a title, never a bare ellipsis: the full account name and
                       the full filename stay readable on hover and to a screen reader. */}

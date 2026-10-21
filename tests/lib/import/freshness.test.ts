@@ -85,3 +85,27 @@ describe('latestImportIso', () => {
     expect(latestImportIso({ id: bob, role: 'member', visibility: 'self' })).toBe('2026-08-10');
   });
 });
+
+/** An evening import is already tomorrow in UTC; the digest line states the household's date. */
+describe('latestImportIso: the household date', () => {
+  it('reads the household date of an import made after 20:00 local time', () => {
+    setup();
+    const a = insertTestAccount(t.db, { name: 'Chequing' });
+    importAt(a, '2026-03-10T03:30:00.000Z'); // 23:30 on the 9th in America/Toronto
+    expect(latestImportIso(HOUSEHOLD_VIEWER)).toBe('2026-03-09');
+  });
+
+  it('follows the clock change at the end of daylight time', () => {
+    setup();
+    const a = insertTestAccount(t.db, { name: 'Chequing' });
+    importAt(a, '2026-11-02T04:30:00.000Z'); // 23:30 on 1 November (EST)
+    expect(latestImportIso(HOUSEHOLD_VIEWER)).toBe('2026-11-01');
+  });
+
+  it('takes the zone as a parameter', () => {
+    setup();
+    const a = insertTestAccount(t.db, { name: 'Chequing' });
+    importAt(a, '2026-03-10T03:30:00.000Z');
+    expect(latestImportIso(HOUSEHOLD_VIEWER, 'UTC')).toBe('2026-03-10');
+  });
+});

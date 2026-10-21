@@ -92,6 +92,8 @@ export function BatchClient(props: {
   accounts: AccountOption[];
   profiles: ProfileOption[];
   history: ImportHistoryRow[];
+  /** The household's time zone, for the history's When column. */
+  tz: string;
   simplefinManaged: string[];
   people?: PersonOption[];
   /**
@@ -102,7 +104,7 @@ export function BatchClient(props: {
   /** v1.55.2. Something the page has to say on arrival, e.g. that the handed-back file is gone. */
   initialNotice?: string | null;
 }) {
-  const { history, initialDetection = null, initialNotice = null, ...shared } = props;
+  const { history, tz, initialDetection = null, initialNotice = null, ...shared } = props;
   const [rows, setRows] = useState<BatchRow[] | null>(null);
   const [open, setOpen] = useState<DetectionResult | null>(initialDetection);
   const [confirming, setConfirming] = useState(false);
@@ -487,7 +489,7 @@ export function BatchClient(props: {
           {showHistory ? 'Hide history' : 'Show history'}
         </button>
       </div>
-      {showHistory ? <ImportHistoryCard history={history} /> : null}
+      {showHistory ? <ImportHistoryCard history={history} tz={tz} /> : null}
     </div>
   );
 }

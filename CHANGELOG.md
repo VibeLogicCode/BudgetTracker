@@ -37,6 +37,7 @@ All notable changes to Budget Tracker are recorded here.
 
 ### Fixed
 
+- **Import dates follow the household's time zone.** An evening import no longer shows as the next day in the import history, the digest's Last import line, or the reminder that imports have gone quiet.
 - **A loan's payoff estimate uses the day its interest posts**, instead of assuming the 1st of each month.
 - **Receipt amounts written with a space between the thousands** (such as 1 234,56 $) are read whole instead of losing the first digits.
 - **Not recurring is offered for a merchant an item covers.** On the recurring charges page, a merchant listed only because a bill or a loan rule covers it can now be taken off the lists; the item and its bills are unchanged.

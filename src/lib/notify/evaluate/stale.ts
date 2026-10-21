@@ -3,7 +3,7 @@ import { getDb } from '@/db/client';
 import { accounts, imports } from '@/db/schema';
 import { viewerFor } from '@/lib/auth/users';
 import { isSelfScoped } from '@/lib/auth/viewer';
-import { daysBetweenIso, todayIso } from '@/lib/dates';
+import { daysBetweenIso, localDateOf, todayIso } from '@/lib/dates';
 import { staleThresholdWeeks } from '@/lib/import/cadence';
 import { getUserSettings } from '@/lib/notify/config';
 import { staleImportBatchKey } from '@/lib/notify/events';
@@ -88,7 +88,7 @@ export function evaluateStaleImport(input: { userId: number; now: Date; tz: stri
    */
   const stale = rows
     .map((row) => {
-      const lastImportIso = row.newest.slice(0, 10);
+      const lastImportIso = localDateOf(row.newest, input.tz);
       const weeks = staleThresholdWeeks(row.expectedImportWeeks, settings.staleImportWeeks);
       return { name: row.accountName, lastImportIso, daysAgo: daysBetweenIso(lastImportIso, today), weeks };
     })
