@@ -131,8 +131,10 @@ The dialog is titled **Category for <merchant>** with the date and amount under 
 app filed on its own (source `rule` or `bayes`) and a viewer who may author rules (not
 self-scoped), it adds a radio group **Future <MERCHANT> rows** with three choices:
 
-1. **Change this transaction only** (default). Posts no `teach`. Rules and the guesser are left
-   alone, the plain Transactions behaviour.
+1. **Change this transaction only** (default). Posts no `teach`. No rule is written or changed; the
+   guesser learns from the pick, exactly as it does from the Transactions select (`confirmCategory`
+   trains with `createRule: false` too). Corrected in v1.57.1: this line used to say the guesser was
+   left alone.
 2. **Also file <MERCHANT> this way from now on.** Posts `teach=1`: `confirmCategory(createRule:
    true)` writes or updates the EXACT unbounded rule for this merchant text (or the one bounded
    exact rule covering the amount, `teachTarget`), the review-mode path. The sentence under the
@@ -245,8 +247,8 @@ personal section's panels post with the person's scope as today; the viewer narr
 
 - Recategorize and split are the two frequent fixes; the rest can go through one row on
   Transactions.
-- A fix teaches nothing unless chosen: the default option changes one transaction, as the
-  Transactions select does.
+- A fix writes no rule unless chosen: the default option changes one transaction (and trains the
+  guesser), as the Transactions select does.
 - "Back to the card" means the top-level card scrolled into view and opened; reopening a child
   row's own panel is not required.
 - Dashboard and Reports are not revalidated by a recategorize (they never were).
