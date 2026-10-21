@@ -241,11 +241,54 @@ describe('CategoryCombobox: the listbox escapes its container', () => {
     expect(parseFloat(listbox.style.top)).toBeGreaterThanOrEqual(140);
   });
 
-  /** A dropdown that stays put while the page scrolls under it is worse than one that closes. */
-  it('closes on scroll rather than floating away from its field', () => {
+  function rect(top: number): DOMRect {
+    return { top, bottom: top + 40, left: 40, right: 240, width: 200, height: 40, x: 40, y: top, toJSON: () => ({}) } as DOMRect;
+  }
+
+  it('stays open while its own list is scrolled', () => {
     render(<CategoryCombobox options={OPTIONS} value={null} onChange={() => {}} label="Category" />);
     open();
+    fireEvent.scroll(screen.getByRole('listbox'));
     expect(screen.queryByRole('listbox')).toBeTruthy();
+  });
+
+  it('keeps focus in the field when the list itself (its scrollbar, its padding) is pressed', () => {
+    render(<CategoryCombobox options={OPTIONS} value={null} onChange={() => {}} label="Category" />);
+    open();
+    // fireEvent returns false when the handler called preventDefault -- which is what stops the
+    // browser moving focus off the input, and so stops blur from closing the list.
+    expect(fireEvent.mouseDown(screen.getByRole('listbox'))).toBe(false);
+    expect(screen.queryByRole('listbox')).toBeTruthy();
+  });
+
+  it('follows its field when the page scrolls, instead of closing', () => {
+    render(<CategoryCombobox options={OPTIONS} value={null} onChange={() => {}} label="Category" />);
+    const input = screen.getByRole('combobox') as HTMLInputElement;
+    const spy = vi.spyOn(input, 'getBoundingClientRect').mockReturnValue(rect(300));
+    fireEvent.focus(input);
+    expect(screen.getByRole('listbox').style.top).toBe('344px');
+
+    spy.mockReturnValue(rect(200));
+    fireEvent.scroll(window);
+    expect(screen.getByRole('listbox').style.top).toBe('244px');
+  });
+
+  it('follows its field when the window resizes, as a phone keyboard does', () => {
+    render(<CategoryCombobox options={OPTIONS} value={null} onChange={() => {}} label="Category" />);
+    const input = screen.getByRole('combobox') as HTMLInputElement;
+    const spy = vi.spyOn(input, 'getBoundingClientRect').mockReturnValue(rect(300));
+    fireEvent.focus(input);
+    spy.mockReturnValue(rect(120));
+    fireEvent(window, new Event('resize'));
+    expect(screen.getByRole('listbox').style.top).toBe('164px');
+  });
+
+  it('closes once its field has scrolled fully out of view', () => {
+    render(<CategoryCombobox options={OPTIONS} value={null} onChange={() => {}} label="Category" />);
+    const input = screen.getByRole('combobox') as HTMLInputElement;
+    const spy = vi.spyOn(input, 'getBoundingClientRect').mockReturnValue(rect(300));
+    fireEvent.focus(input);
+    spy.mockReturnValue(rect(-60));
     fireEvent.scroll(window);
     expect(screen.queryByRole('listbox')).toBeNull();
   });

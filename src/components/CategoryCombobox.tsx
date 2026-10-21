@@ -10,6 +10,22 @@ const UNCATEGORIZED = 'Uncategorized';
 const GAP_PX = 4;
 
 /**
+ * Where the list goes for a field at `rect`: under it, or above it when a list `height` tall would
+ * run past the bottom of the window. `height` is 0 before the list has rendered, which places it
+ * below; the flip runs once it has a height. One function for opening, flipping and following.
+ */
+function listPosition(rect: DOMRect, height: number): { top: number; left: number; width: number } {
+  const below = rect.bottom + GAP_PX;
+  const top = height > 0 && below + height > window.innerHeight ? Math.max(GAP_PX, rect.top - GAP_PX - height) : below;
+  return { top, left: rect.left, width: rect.width };
+}
+
+/** True once no part of the field is inside the window -- the only time following it is pointless. */
+function outOfView(rect: DOMRect): boolean {
+  return rect.bottom <= 0 || rect.top >= window.innerHeight || rect.right <= 0 || rect.left >= window.innerWidth;
+}
+
+/**
  * The options a query leaves, with the tree still intact.
  *
  * Two rules beyond a plain substring test, both about keeping the result readable as a TREE
@@ -128,9 +144,8 @@ export function CategoryCombobox({
    * Every call site renders inside RowDialog, whose panel wraps `<Card as="div">`, and `.card`
    * carries `overflow-hidden` -- so a category list opened low in a dialog was CLIPPED by its own
    * container. Fixed positioning, placed from the input's own getBoundingClientRect(), escapes
-   * the clip without a portal. The price is that it does not track the container as it scrolls,
-   * so scrolling closes it instead (below) -- cheaper and sturdier than repositioning a dropdown
-   * the reader has already scrolled away from.
+   * the clip without a portal. The price is that it does not move with the page on its own, so
+   * the effect below re-places it whenever the page, an ancestor or the window changes.
    */
   const [box, setBox] = useState<{ top: number; left: number; width: number } | null>(null);
 
@@ -168,38 +183,52 @@ export function CategoryCombobox({
   const place = useCallback((): void => {
     const rect = inputRef.current?.getBoundingClientRect();
     if (rect === undefined) return;
-    setBox({ top: rect.bottom + GAP_PX, left: rect.left, width: rect.width });
+    setBox(listPosition(rect, 0));
     setOpen(true);
   }, []);
 
-  // Flip upward when there is no room below -- the last field in a tall dialog is exactly where a
-  // downward list would open past the bottom of the window.
-  useLayoutEffect(() => {
-    if (!open || box === null) return;
-    const element = listRef.current;
+  /** Re-measures the field and moves the open list with it, flipping upward when needed. */
+  const follow = useCallback((): void => {
     const rect = inputRef.current?.getBoundingClientRect();
-    if (element === null || rect === undefined) return;
-    const height = element.getBoundingClientRect().height;
-    if (height > 0 && rect.bottom + GAP_PX + height > window.innerHeight) {
-      const top = Math.max(GAP_PX, rect.top - GAP_PX - height);
-      if (top !== box.top) setBox({ ...box, top });
-    }
-    // `box` is deliberately absent: including it re-runs this on the very state it sets.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+    if (rect === undefined) return;
+    const height = listRef.current?.getBoundingClientRect().height ?? 0;
+    setBox((current) => {
+      const next = listPosition(rect, height);
+      return current !== null && current.top === next.top && current.left === next.left && current.width === next.width
+        ? current
+        : next;
+    });
+  }, []);
 
-  // A fixed list cannot follow its field, so anything that moves the field closes the list. Same
-  // trade RowMenu makes, for the same reason.
+  // Flip upward when there is no room below -- the last field in a tall dialog is exactly where a
+  // downward list would open past the bottom of the window. Runs once the list has a height.
+  useLayoutEffect(() => {
+    if (open) follow();
+  }, [open, follow]);
+
+  // The list follows its field. Scrolling the page or any ancestor (capture catches both) and
+  // resizing the window -- which is what a phone's on-screen keyboard does -- re-place it rather
+  // than close it; it closes only once the field has left the window entirely. A scroll of the
+  // list ITSELF is ignored: capture delivers that one here too, and it moves nothing.
   useEffect(() => {
     if (!open) return;
-    const dismiss = () => close();
-    window.addEventListener('scroll', dismiss, true);
-    window.addEventListener('resize', dismiss);
-    return () => {
-      window.removeEventListener('scroll', dismiss, true);
-      window.removeEventListener('resize', dismiss);
+    const onMove = (event: Event) => {
+      const list = listRef.current;
+      if (event.type === 'scroll' && list !== null && event.target instanceof Node && list.contains(event.target)) return;
+      const rect = inputRef.current?.getBoundingClientRect();
+      if (rect !== undefined && outOfView(rect)) {
+        close();
+        return;
+      }
+      follow();
     };
-  }, [open, close]);
+    window.addEventListener('scroll', onMove, true);
+    window.addEventListener('resize', onMove);
+    return () => {
+      window.removeEventListener('scroll', onMove, true);
+      window.removeEventListener('resize', onMove);
+    };
+  }, [open, close, follow]);
 
   function choose(index: number | null): void {
     const option = index === null ? undefined : visible[index];
@@ -286,6 +315,12 @@ export function CategoryCombobox({
               : { position: 'fixed', top: box.top, left: box.left, width: box.width }
           }
           className="z-50 max-h-64 overflow-y-auto rounded border border-line bg-surface shadow-pop"
+          onMouseDown={(event) => {
+            // Anywhere on the list, not only on an option: pressing its scrollbar or padding would
+            // otherwise take focus from the input, and the blur would close the list mid-drag.
+            event.preventDefault();
+            if (blurTimer.current !== null) clearTimeout(blurTimer.current);
+          }}
         >
           {visible.length === 0 ? (
             <li className="px-2 py-1 text-sm text-muted">No category matches that.</li>
