@@ -350,6 +350,37 @@ describe('CategoryCombobox: the listbox escapes its container', () => {
     expect(screen.queryByRole('listbox')).toBeNull();
   });
 
+  // Tailwind v4's scale-*, translate-* and rotate-* utilities set these properties, not `transform`.
+  it('the individual scale, translate and rotate properties hold fixed elements too', () => {
+    const { panel } = fixedPanelInClippingCard({ overflow: 'hidden', scale: '1' });
+    fireEvent.scroll(panel);
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
+  it('past a non-clipping ancestor that holds fixed elements, a clipping ancestor above it still counts', () => {
+    const { container } = render(
+      <div data-testid="card" style={{ overflow: 'hidden' }}>
+        <div style={{ transform: 'translateX(0px)' }}>
+          <div data-testid="panel" style={{ position: 'fixed', overflowY: 'auto' }}>
+            <CategoryCombobox options={OPTIONS} value={null} onChange={() => {}} label="Category" />
+          </div>
+        </div>
+      </div>,
+    );
+    vi.spyOn(container.querySelector('[data-testid="card"]') as HTMLElement, 'getBoundingClientRect').mockReturnValue(
+      { top: 900, bottom: 1000, left: 0, right: 800, width: 800, height: 100, x: 0, y: 900, toJSON: () => ({}) } as DOMRect,
+    );
+    const panel = container.querySelector('[data-testid="panel"]') as HTMLElement;
+    vi.spyOn(panel, 'getBoundingClientRect').mockReturnValue(
+      { top: 100, bottom: 600, left: 0, right: 800, width: 800, height: 500, x: 0, y: 100, toJSON: () => ({}) } as DOMRect,
+    );
+    const input = screen.getByRole('combobox') as HTMLInputElement;
+    vi.spyOn(input, 'getBoundingClientRect').mockReturnValue(rect(300));
+    fireEvent.focus(input);
+    fireEvent.scroll(panel);
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
   it('is not a Tab stop, so Tab leaves the field instead of landing on the list', () => {
     render(<CategoryCombobox options={OPTIONS} value={null} onChange={() => {}} label="Category" />);
     open();

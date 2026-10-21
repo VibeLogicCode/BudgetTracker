@@ -34,23 +34,22 @@ const CLIPPING_OVERFLOW = new Set(['auto', 'scroll', 'hidden', 'clip']);
 
 /**
  * v1.57.1. An element that a `position: fixed` descendant is placed against instead of the window,
- * so its overflow clips that descendant again: a transform, filter, perspective, paint or layout
- * containment (or a container query box, which implies layout containment), or will-change naming
- * one of those. Read through getPropertyValue, so an engine that does not know a property gives ''.
+ * so its overflow clips that descendant again: a transform (or the individual translate, rotate and
+ * scale properties Tailwind's utilities set), a 3D context, a filter, perspective, an offset path,
+ * paint or layout containment (a container query box and content-visibility: auto imply it), or
+ * will-change naming one of those. Read through getPropertyValue, so an engine that does not know
+ * a property gives ''.
  */
 function holdsFixedElements(style: CSSStyleDeclaration): boolean {
-  const set = (name: string) => {
-    const value = style.getPropertyValue(name).trim();
-    return value !== '' && value !== 'none';
-  };
+  const value = (name: string) => style.getPropertyValue(name).trim();
+  const set = (name: string) => value(name) !== '' && value(name) !== 'none';
   return (
-    set('transform') ||
-    set('filter') ||
-    set('backdrop-filter') ||
-    set('perspective') ||
-    /\b(paint|layout|strict|content)\b/.test(style.getPropertyValue('contain')) ||
-    /\b(size|inline-size)\b/.test(style.getPropertyValue('container-type')) ||
-    /\b(transform|filter|perspective|contain)\b/.test(style.getPropertyValue('will-change'))
+    ['transform', 'translate', 'rotate', 'scale', 'filter', 'backdrop-filter', '-webkit-backdrop-filter', 'perspective', 'offset-path'].some(set) ||
+    value('transform-style') === 'preserve-3d' ||
+    value('content-visibility') === 'auto' ||
+    /\b(paint|layout|strict|content)\b/.test(value('contain')) ||
+    /\b(size|inline-size)\b/.test(value('container-type')) ||
+    /\b(transform|translate|rotate|scale|filter|perspective|offset-path|contain)\b/.test(value('will-change'))
   );
 }
 
