@@ -23,6 +23,7 @@ import {
   readOcrCrashGuardState,
   recordOcrJobCrashSurvived,
 } from '@/lib/warranty/ocr/onnx/probe';
+import { ScannedPdfError } from '@/lib/warranty/ocr/pdf';
 import { findStagedReceipt, writeSidecar } from '@/lib/warranty/staging';
 
 /**
@@ -195,7 +196,7 @@ async function runStagedJob(stagingId: string): Promise<void> {
     const { text: capped } = truncateOcrText(text);
     // Spec 2026-09-30 §2.3: zero boxes used to be stored as 'done' with '' and the tile said "Read".
     if (capped.trim().length === 0) {
-      writeSidecar(stagingId, { status: 'failed', error: NO_TEXT_MESSAGE });
+      writeSidecar(stagingId, { status: 'failed', error: NO_TEXT_MESSAGE, retryable: false });
       return;
     }
     const today = todayIso();
@@ -207,7 +208,7 @@ async function runStagedJob(stagingId: string): Promise<void> {
       candidates: { amounts: amountCandidates(capped), dates: dateCandidates(capped, today) },
     });
   } catch (error) {
-    writeSidecar(stagingId, { status: 'failed', error: messageOf(error) });
+    writeSidecar(stagingId, { status: 'failed', error: messageOf(error), retryable: !(error instanceof ScannedPdfError) });
   }
 }
 
@@ -304,7 +305,7 @@ function condemnCrashedJob(key: string): void {
     return;
   }
   const stagingId = key.slice(2);
-  writeSidecar(stagingId, { status: 'failed', error: OCR_CRASH_CONDEMNED_MESSAGE });
+  writeSidecar(stagingId, { status: 'failed', error: OCR_CRASH_CONDEMNED_MESSAGE, retryable: false });
 }
 
 /**

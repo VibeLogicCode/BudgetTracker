@@ -57,6 +57,8 @@ const ocrSidecarSchema = z.object({
   status: z.enum(['done', 'failed']),
   text: z.string().optional(),
   error: z.string().optional(),
+  /** False when reading the same file again would fail the same way; absent means a retry may help. */
+  retryable: z.boolean().optional(),
   suggestions: suggestedFieldsSchema.optional(),
   lines: z.array(z.string()).optional(),
   candidates: z.object({ amounts: z.array(amountCandidateSchema), dates: z.array(dateCandidateSchema) }).optional(),

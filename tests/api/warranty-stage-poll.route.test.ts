@@ -103,6 +103,12 @@ describe('GET /api/warranties/receipts/stage/[stagingId]', () => {
     expect(await (await poll(stagingId)).json()).toEqual({ status: 'failed', error: 'OCR timed out.' });
   });
 
+  it('passes retryable: false through on a failure a retry cannot fix', async () => {
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', userId);
+    writeSidecar(stagingId, { status: 'failed', error: 'No text.', retryable: false });
+    expect(await (await poll(stagingId)).json()).toEqual({ status: 'failed', error: 'No text.', retryable: false });
+  });
+
   it('400s a staging id that is not a UUID, before any path is built', async () => {
     const response = await poll('../../budget.db');
     expect(response.status).toBe(400);

@@ -106,7 +106,7 @@ describe('staged jobs', () => {
     const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     enqueueOcrJob({ kind: 'staged', stagingId });
     await drainOcrQueue();
-    expect(readSidecar(stagingId)).toEqual({ status: 'failed', error: NO_TEXT_MESSAGE });
+    expect(readSidecar(stagingId)).toEqual({ status: 'failed', error: NO_TEXT_MESSAGE, retryable: false });
   });
 
   it('writes a failed sidecar when the engine is unavailable', async () => {
@@ -118,7 +118,7 @@ describe('staged jobs', () => {
     const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     enqueueOcrJob({ kind: 'staged', stagingId });
     await drainOcrQueue();
-    expect(readSidecar(stagingId)).toEqual({ status: 'failed', error: OCR_UNAVAILABLE_MESSAGE });
+    expect(readSidecar(stagingId)).toEqual({ status: 'failed', error: OCR_UNAVAILABLE_MESSAGE, retryable: true });
   });
 
   it('writes a failed sidecar carrying the scanned-PDF message', async () => {
@@ -130,7 +130,19 @@ describe('staged jobs', () => {
     const stagingId = writeStagedReceipt(Buffer.from('%PDF-1.7\n'), 'application/pdf', 1);
     enqueueOcrJob({ kind: 'staged', stagingId });
     await drainOcrQueue();
-    expect(readSidecar(stagingId)?.error).toBe(SCANNED_PDF_MESSAGE);
+    expect(readSidecar(stagingId)).toEqual({ status: 'failed', error: SCANNED_PDF_MESSAGE, retryable: false });
+  });
+
+  it('marks an ordinary engine failure retryable', async () => {
+    setOcrEngineForTests({
+      recognize: async () => {
+        throw new Error('boom');
+      },
+    });
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
+    enqueueOcrJob({ kind: 'staged', stagingId });
+    await drainOcrQueue();
+    expect(readSidecar(stagingId)).toEqual({ status: 'failed', error: 'boom', retryable: true });
   });
 
   it('drains quietly when the staged file has already been purged', async () => {
@@ -495,7 +507,7 @@ describe('defect fix (v1.5.0): reconcileOcrCrashOnBoot', () => {
       markOcrJobInFlight(key);
       reconcileOcrCrashOnBoot();
     }
-    expect(readSidecar(stagingId)).toEqual({ status: 'failed', error: OCR_CRASH_CONDEMNED_MESSAGE });
+    expect(readSidecar(stagingId)).toEqual({ status: 'failed', error: OCR_CRASH_CONDEMNED_MESSAGE, retryable: false });
   });
 
   it('does NOT let a different job inherit an earlier job\'s crash count', () => {

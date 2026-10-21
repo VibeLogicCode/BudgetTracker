@@ -276,6 +276,26 @@ describe('ReceiptUploader', () => {
     expect(screen.getByText(/No text was found on this image/)).toBeTruthy();
   });
 
+  it.each([
+    ['retryable: false', { retryable: false }, false],
+    ['retryable: true', { retryable: true }, true],
+    ['no retryable key', {}, true],
+  ])('Try again with a failed poll answer carrying %s', async (_label, extra, shown) => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(stageResponse({ originalFilename: 'bill.pdf', mime: 'application/pdf' }))
+      .mockResolvedValue({ ok: true, json: async () => ({ status: 'failed', error: 'Nothing to read.', ...extra }) } as Response);
+    vi.stubGlobal('fetch', fetchMock);
+    const { container } = render(<ReceiptUploader onStagedChange={vi.fn()} />);
+
+    await pickAndPoll(container, fetchMock);
+
+    expect(screen.getByText('Nothing to read.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Try again with bill.pdf' }) !== null).toBe(shown);
+    expect(screen.getByRole('button', { name: 'Remove bill.pdf' })).toBeTruthy();
+  });
+
   it('names Try again after its file', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const fetchMock = vi

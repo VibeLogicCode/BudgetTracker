@@ -44,7 +44,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ stagingId: 
   const sidecar = readSidecar(stagingId);
   if (sidecar === null) return Response.json({ status: 'pending' });
   if (sidecar.status === 'failed') {
-    return Response.json({ status: 'failed', error: sidecar.error ?? 'OCR failed.' });
+    return Response.json({ status: 'failed', error: sidecar.error ?? 'OCR failed.', retryable: sidecar.retryable });
   }
   return Response.json({ status: 'done', suggestions: sidecar.suggestions ?? {}, lines: sidecar.lines ?? [], candidates: sidecar.candidates ?? { amounts: [], dates: [] } });
 }

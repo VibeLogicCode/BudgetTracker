@@ -27,6 +27,8 @@ export interface StagedFile {
   previewUrl: string | null;
   ocr: 'pending' | 'done' | 'failed';
   error?: string;
+  /** False when trying the same file again would fail the same way; the tile then offers no Try again. */
+  retryable?: boolean;
   /** Spec 2026-09-30 §2.3: what the reader recognised, line by line, shown under the tile. */
   lines?: string[];
   /** Every amount and date found, with the words around it, offered as chips. */
@@ -129,6 +131,7 @@ interface PollResponse {
   lines?: string[];
   candidates?: { amounts: AmountCandidate[]; dates: DateCandidate[] };
   error?: string;
+  retryable?: boolean;
 }
 
 const READ_FAILED_MESSAGE = 'That receipt could not be read.';
@@ -442,8 +445,8 @@ export function ReceiptUploader({
         shared notice, which several receipts share and which stays on while any still reads.
         Rendered as a text node only (MUST-13.3) — never dangerouslySetInnerHTML.
       */
-      const fail = (error: string) => {
-        setFiles((prev) => prev.map((file) => (file.stagingId === stagingId ? { ...file, ocr: 'failed', error } : file)));
+      const fail = (error: string, retryable?: boolean) => {
+        setFiles((prev) => prev.map((file) => (file.stagingId === stagingId ? { ...file, ocr: 'failed', error, retryable } : file)));
         settle();
       };
       const timer = setInterval(async () => {
@@ -470,7 +473,7 @@ export function ReceiptUploader({
           const body = (await response.json()) as PollResponse;
           if (signal.aborted || body.status === 'pending') return;
           if (body.status === 'failed') {
-            fail(body.error ?? READ_FAILED_MESSAGE);
+            fail(body.error ?? READ_FAILED_MESSAGE, body.retryable);
             return;
           }
           // The read is over, and only a failure offers Try again: the file is not needed now.
@@ -741,7 +744,7 @@ export function ReceiptUploader({
                   </details>
                 ) : null}
                 <div className="flex flex-wrap gap-1">
-                  {file.ocr === 'failed' ? (
+                  {file.ocr === 'failed' && file.retryable !== false ? (
                     <button
                       type="button"
                       onClick={() => retry(file.stagingId)}
