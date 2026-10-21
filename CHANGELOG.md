@@ -57,6 +57,7 @@ All notable changes to Budget Tracker are recorded here.
 - **Help calls the Dashboard's price rises recurring charges**, the word the rest of the app uses.
 - **Delete rule and clear works on a rule whose category is archived.** It clears the transactions that rule filed, and another rule on the same merchant is no longer credited with them.
 - **A rule on an archived category can be edited.** The form shows its category marked archived, and saves once you pick a live one.
+- **The category picker behaves inside dialogs and under the page header.** Escape closes only its list, a right or middle click no longer picks a category, and its list no longer covers the page header.
 
 ## [1.55.4] - 2026-10-20
 

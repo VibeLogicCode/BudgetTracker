@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, cleanup, screen, fireEvent } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { CategoryCombobox, filterCategoryOptions } from '@/components/CategoryCombobox';
+import { RowDialog } from '@/components/ui/RowDialog';
 import type { CategoryOption } from '@/lib/category-order';
 
 afterEach(cleanup);
@@ -334,5 +337,58 @@ describe('CategoryCombobox: the listbox escapes its container', () => {
     spy.mockReturnValue(rect(-60));
     fireEvent.scroll(window);
     expect(screen.queryByRole('listbox')).toBeNull();
+  });
+});
+
+describe('CategoryCombobox: Escape, mouse button and layer', () => {
+  function renderInDialog(onClose: () => void, onChange: (next: number | null) => void = () => {}) {
+    render(
+      <RowDialog dialogId="d" title="T" onClose={onClose}>
+        <CategoryCombobox options={OPTIONS} value={null} onChange={onChange} label="Category" />
+      </RowDialog>,
+    );
+  }
+
+  it('Escape inside a dialog closes only the open list', () => {
+    const onClose = vi.fn();
+    renderInDialog(onClose);
+    const input = open();
+    expect(screen.queryByRole('listbox')).not.toBeNull();
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(screen.queryByRole('listbox')).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('a second Escape, with the list closed, reaches the dialog', () => {
+    const onClose = vi.fn();
+    renderInDialog(onClose);
+    const input = open();
+    fireEvent.keyDown(input, { key: 'Escape' });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('a right or middle click does not pick an option', () => {
+    const onChange = vi.fn();
+    render(<CategoryCombobox options={OPTIONS} value={null} onChange={onChange} label="Category" />);
+    open();
+    const option = () => screen.getByRole('option', { name: 'Groceries' });
+    fireEvent.mouseDown(option(), { button: 2 });
+    fireEvent.mouseDown(option(), { button: 1 });
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.queryByRole('listbox')).not.toBeNull();
+    fireEvent.mouseDown(option(), { button: 0 });
+    expect(onChange).toHaveBeenCalledWith(2);
+  });
+
+  it('its list sits below the sticky app header', () => {
+    render(<CategoryCombobox options={OPTIONS} value={null} onChange={() => {}} label="Category" />);
+    open();
+    const listClass = screen.getByRole('listbox').className;
+    expect(listClass).toMatch(/\bz-20\b/);
+    const shell = readFileSync(join(process.cwd(), 'src/components/app-shell/AppShell.tsx'), 'utf8');
+    const header = /<header[^>]*className="[^"]*\bsticky\b[^"]*\bz-(\d+)\b/.exec(shell);
+    expect(header).not.toBeNull();
+    expect(Number(header![1])).toBeGreaterThan(20);
   });
 });

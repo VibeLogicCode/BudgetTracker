@@ -312,7 +312,11 @@ export function CategoryCombobox({
       return;
     }
     if (event.key === 'Escape') {
+      // A closed list has nothing of its own to dismiss, so Escape belongs to whatever is around
+      // the field (a dialog). An open one takes it, and the dialog stays.
+      if (!open) return;
       event.preventDefault();
+      event.stopPropagation();
       close();
     }
   }
@@ -364,7 +368,7 @@ export function CategoryCombobox({
           // Not a Tab stop: a scrollable list is keyboard-focusable by default, and Tab landing on
           // it would blur the input, close the list and drop focus to the page.
           tabIndex={-1}
-          className="z-50 max-h-64 overflow-y-auto overscroll-contain rounded border border-line bg-surface shadow-pop"
+          className="z-20 max-h-64 overflow-y-auto overscroll-contain rounded border border-line bg-surface shadow-pop"
           onMouseDown={(event) => {
             // Anywhere on the list, not only on an option: pressing its scrollbar or padding would
             // otherwise take focus from the input, and the blur would close the list mid-drag.
@@ -386,6 +390,9 @@ export function CategoryCombobox({
                 }`}
                 onMouseEnter={() => setHighlight(index)}
                 onMouseDown={(event) => {
+                  // Primary button only: a right or middle press picks nothing (the list's own
+                  // handler still keeps focus in the input).
+                  if (event.button !== 0) return;
                   // mouseDown, not click: the input's blur would otherwise close the list first
                   // and the click would land on nothing.
                   event.preventDefault();
