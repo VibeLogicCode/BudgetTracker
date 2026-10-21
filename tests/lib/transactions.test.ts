@@ -157,8 +157,8 @@ describe('listTransactions', () => {
   });
 
   /**
-   * v1.21.0 item 3 (a reported screen, chip row: "filter on page transactions only
-   * filter where i directly assign parent and ignore all child"). A top-level chip's own
+   * v1.21.0 item 3 (a reported screen, chip row: the filter on the transactions page only
+   * matched where the parent was assigned directly and ignored every child). A top-level chip's own
    * meaning is "this category and its children" -- the same rule foldRollup (budgets.ts) and
    * categoryBreakdown's parentId ?? categoryId (reports.ts) already use for the SAME category's
    * total, so the list a chip shows now agrees with the number that chip's own budget card
@@ -282,8 +282,8 @@ describe('listTransactions', () => {
   });
 
   /**
-   * v1.24.0 Lane A item 2 (reported: "currently once i apply a trasnfer its hard to find
-   * that data again"). `transferView: 'only'` is the new state -- the recovery path for a
+   * v1.24.0 Lane A item 2 (reported: once a transfer is applied it is hard to find
+   * that data again). `transferView: 'only'` is the new state -- the recovery path for a
    * mis-tagged transfer, which REVIEW_WHERE (src/lib/categorize/engine.ts) excludes
    * unconditionally, so it needs its own way back into view. All three states proven against the
    * same fixture: one ordinary row, one transfer.

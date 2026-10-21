@@ -69,8 +69,8 @@ interface Row {
 const rowsOf = async (response: Response): Promise<Row[]> => ((await response.json()) as { rows: Row[] }).rows;
 
 /**
- * 2026-09-15. N files in, one classified row each back. The reported ask, verbatim: "do you think we
- * can add abiltiy to import multiple fdiles at once?"
+ * 2026-09-15. N files in, one classified row each back. The reported ask: import several files at
+ * once instead of one at a time.
  *
  * WHAT THIS FILE DOES NOT COVER: whether the detections are correct. That is
  * tests/lib/import/detect-account.test.ts and detect-profile.test.ts, and ruling B1 says this route

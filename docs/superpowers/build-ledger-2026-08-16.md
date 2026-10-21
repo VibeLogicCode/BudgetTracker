@@ -1,7 +1,7 @@
 # SDD ledger — plan: docs/superpowers/plans/2026-08-15-budget-tracker.md
 
 Spec: docs/superpowers/specs/2026-08-15-budget-tracker-design.md (v1.3, binding authority)
-Session: 2026-08-15 overnight autonomous run. User asleep; full build authorized ("finish it before i wake up").
+Session: 2026-08-15 overnight autonomous run. User asleep; full build authorized (finish it before the user wakes).
 Git HEAD at start: bc40dd2 (only commit; everything since uncommitted).
 
 ## Rulings (pre-execution)

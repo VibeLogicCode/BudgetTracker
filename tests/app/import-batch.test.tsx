@@ -309,9 +309,8 @@ describe('BatchClient: opening one row', () => {
 });
 
 /**
- * 2026-09-15, reported after v1.44.1: "when i click on the row that said ready it
- * took me to old page. it should have view rows option whichi should take me to last screenshot
- * similar to what i used to see."
+ * 2026-09-15, reported after v1.44.1: clicking a batch row marked ready opened the old page
+ * instead of a view-rows step leading to the latest preview screen.
  *
  * The file was already staged and both pickers were already right -- the row carries the detection
  * -- but opening it only SEEDED that state and then sat on step 1 behind an empty drop zone and a
@@ -454,8 +453,8 @@ describe('BatchClient: arriving with a file already in hand', () => {
 });
 
 /**
- * 2026-09-15, reported after v1.44.1: "i should also have a history button on new page to take me
- * to page that shows me history of what was imported like in older screenshot."
+ * 2026-09-15, reported after v1.44.1: the new page needed a history button leading to a page
+ * showing the history of what was imported, as the older screen had.
  *
  * History was a card inside ImportClient, so the moment the batch screen became what the page
  * opens on, it vanished unless you clicked into a file first. Same class of miss as the page guide

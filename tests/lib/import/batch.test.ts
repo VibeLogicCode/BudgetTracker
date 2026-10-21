@@ -190,8 +190,8 @@ describe('classifyDetection: already imported', () => {
 });
 
 /**
- * 2026-09-15, reported after v1.44.1: "on first page it should show summary like
- * last screenshot showing how many duplicates and what it will import."
+ * 2026-09-15, reported after v1.44.1: the first page needed a summary, as in the latest
+ * preview screen, showing how many duplicates there were and what would be imported.
  *
  * The list said "7 rows", which reads as "about to add 7". It was about to add ONE -- six of the
  * seven were already in the account. The number that matters was the one number not on the screen.

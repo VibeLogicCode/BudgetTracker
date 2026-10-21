@@ -145,8 +145,8 @@ describe('drizzle/0021_household_channels.sql', () => {
       )
       .run();
     insertHouseholdTelegram(current.sqlite, 1);
-    // The reported defect, inverted into an assertion: "once i set my own channel i cannot add
-    // another channel for joint notifcations".
+    // The reported defect, inverted into an assertion: once a person set their own channel they
+    // could not add another channel for joint notifications.
     const rows = current.sqlite
       .prepare("select scope, user_id, destination from notification_targets where channel = 'telegram' order by scope")
       .all() as { scope: string; user_id: number | null; destination: string }[];

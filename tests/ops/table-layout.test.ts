@@ -21,7 +21,7 @@ function tsxFiles(dir: string): string[] {
  * `.cell-truncate` clips a cell and shows an ellipsis. That is a legitimate choice for a value
  * that repeats down a column -- an account name -- and an illegitimate one on its own, because
  * an ellipsis with nothing behind it does not tidy data away, it HIDES it. The whole reported
- * bug was "data is being cut off", so shipping a fix that cuts text off differently would be
+ * bug was that data was being cut off, so shipping a fix that cuts text off differently would be
  * the same defect wearing a stylesheet.
  *
  * `title` is the condition of use: hover and assistive tech both read it, so the full value

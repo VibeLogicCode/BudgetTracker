@@ -50,7 +50,7 @@ function manualRow(accountId: number, userId: number, over: Partial<{ descriptio
 }
 
 /**
- * The owner, 2026-09-13: "it recorded this payment now which i have no way of removing." Record
+ * Reported 2026-09-13: a recorded payment could not be removed. Record
  * payment on a bill writes a transaction, and until now NOTHING in the app could delete a
  * transaction -- undoImport was the only code that deleted rows, and only rows an import created.
  * So a row entered by hand, or written by Record payment, was permanent.

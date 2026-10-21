@@ -8,11 +8,11 @@ import { readEnv } from '@/lib/env';
 /**
  * 2026-09-08. "Is last month's data all in?" — and the answer is a recorded fact, not a guess.
  *
- * WHY NOT INFERRED, in the report: "what happens if 1 of the accounts doesnt have any entry
- * for 15 days in next month and there is nothing to import ... because we have simplefin too
- * transactions can auto come in too using logic we have now is not reliable."
+ * WHY NOT INFERRED, in the report: if one account has no entry for 15 days in the next
+ * month and there is nothing to import, and transactions can also arrive automatically through
+ * SimpleFIN, the inference the app used was not reliable.
  *
- * He is right, and the failure is specific. The obvious rule — "every account has been imported
+ * The report is right, and the failure is specific. The obvious rule — "every account has been imported
  * since the month ended" — cannot distinguish a quiet savings account with nothing to fetch from
  * one whose statement has not arrived. Both look identical from the imports table: no new import,
  * no new rows. So a low-traffic account silently blocks the monthly summary forever, and no

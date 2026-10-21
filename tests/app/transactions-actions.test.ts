@@ -671,11 +671,9 @@ describe('assignToLoanAction: the opt-in "also mark as a transfer" checkbox', ()
 });
 
 /**
- * v1.27.0 item 1 -- reported:
- *
- *   "when i add items to loan they are marked transfer by default but it also adds a rule. for
- *    example i moved this to work loan as this was re ebuisnment but next time i buy from
- *    [that shop] i dont want it to automatically caretgorize it as transfer."
+ * v1.27.0 item 1 -- reported: adding items to a loan marked them as transfers by default but also
+ * added a rule, so the next purchase from the same store would be categorized as a transfer
+ * automatically, which was not wanted.
  *
  * The checkbox is pre-armed ON and posts `alsoTransfer=1`; setTransferFlag does not only set
  * `is_transfer`, it upserts an exact merchant rule. So one reimbursement filed against a work loan

@@ -174,8 +174,8 @@ export function runScheduledEvaluation(
   now: Date = new Date(),
   options?: {
     /**
-     * Reported 2026-09-08: "it shouldnt send notifications on boot. when it reboots it sends
-     * notifications about budget".
+     * Reported 2026-09-08: notifications should not be sent on boot; a reboot sent
+     * notifications about budgets.
      *
      * SLOT events still catch up at boot -- that is MUST-6.1, and it is the whole reason a
      * container that was off overnight still gets yesterday's coming_due and its weekly digest.
@@ -214,8 +214,8 @@ export function runScheduledEvaluation(
            * It was the one detector still sending a message PER CATEGORY -- up to five a day, on
            * this daily slot. For a household that imports on Sundays that meant five notifications
            * on Sunday about five categories, six days of silence while the figures did not move,
-           * and five more the following Sunday. The reported original complaint, exactly:
-           * "there is 1 message per budget can we not send a summary message ... less repetitive".
+           * and five more the following Sunday. The reported original complaint: there was one message per budget, and a single
+           * summary message would be less repetitive.
            *
            * The projection is now a section of the weekly summary, between Over and Close
            * (evaluate/digest.ts, collectBudgets). Same arithmetic, same thresholds, same
@@ -353,8 +353,8 @@ export function runScheduledEvaluation(
   }
 
   /**
-   * 2026-09-08 (reported: "there is 1 message per budget can we not send a summary message
-   * with key figures and less repetative text so its easier to read and digest info").
+   * 2026-09-08 (reported: there was one message per budget; a single summary message with
+   * key figures and less repetitive text would be easier to read and digest).
    *
    * evaluateBudgets is NO LONGER CALLED. Every figure it used to send one message at a time --
    * category, spent, limit, how far over -- is now a section of the weekly summary, which the

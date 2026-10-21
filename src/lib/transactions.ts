@@ -52,8 +52,8 @@ export interface TransactionFilter {
   accountId?: number | null;
   categoryId?: number | 'uncategorized' | null;
   /**
-   * v1.21.0 item 3 (a reported screen, chip row: "filter on page transactions only
-   * filter where i directly assign parent and ignore all child"). Only meaningful when
+   * v1.21.0 item 3 (a reported screen, chip row: the filter on the transactions page only
+   * matched where the parent was assigned directly and ignored every child). Only meaningful when
    * `categoryId` is a number:
    *   - false/omitted (what a chip does) -- `categoryId` AND its children match. The category
    *     tree is two levels deep (src/lib/categories.ts), so "children" here means exactly
@@ -74,8 +74,8 @@ export interface TransactionFilter {
   search?: string | null;
   uncategorizedOnly?: boolean;
   /**
-   * v1.24.0 Lane A item 2 (reported: "currently once i apply a trasnfer its hard to find
-   * that data again"). Three states, not a boolean -- a mis-tagged transfer needs a way BACK.
+   * v1.24.0 Lane A item 2 (reported: once a transfer is applied it is hard to find
+   * that data again). Three states, not a boolean -- a mis-tagged transfer needs a way BACK.
    * REVIEW_WHERE (src/lib/categorize/engine.ts) excludes every transfer unconditionally, so a
    * row wrongly flagged a transfer was already invisible to the review queue before this field
    * existed; the old two-state "hide transfers" checkbox then ALSO hid it from the default list
@@ -1400,8 +1400,7 @@ export function countExcludingCategory(categoryId: number): number {
 /**
  * Delete a transaction nobody imported.
  *
- * WHY THIS EXISTS (reported 2026-09-13): "it recorded this payment now which i have no way of
- * removing." Record payment on a bill writes a real transaction, and until this function there was
+ * WHY THIS EXISTS (reported 2026-09-13): a recorded payment could not be removed. Record payment on a bill writes a real transaction, and until this function there was
  * no delete path in the app at all -- undoImport was the only code that removed transaction rows,
  * and it only removes rows an import created. So a row typed in by hand, or written by Record
  * payment for a bill that was actually paid by a statement line, was permanent.

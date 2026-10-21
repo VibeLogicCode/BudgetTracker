@@ -46,8 +46,8 @@ export function SendDigestNow({ canNotifyHousehold }: { canNotifyHousehold: bool
 
   return (
     /**
-     * Reported 2026-09-08: "doesnt fit the width or height of add transaction, seems out of
-     * place". Two separate mistakes, both here.
+     * Reported 2026-09-08: the button did not match the width or height of the add-transaction
+     * button and looked out of place. Two separate mistakes, both here.
      *
      * HEIGHT: the button carried `btn btn--secondary btn--sm` and stopped there, while
      * QuickAddTrigger beside it also carries `min-h-11 sm:min-h-0` -- the 44px touch floor this

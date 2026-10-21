@@ -7,8 +7,8 @@ import { CREEP_LOOKBACK_DAYS } from '@/lib/predict/constants';
 import { deleteSetting, setSetting } from '@/lib/settings';
 
 /**
- * Reported 2026-09-20: "how do i get rid of take a look? it goes to transactions with no way to
- * clear it or am i missing something?"
+ * Reported 2026-09-20: there was no way to get rid of a take-a-look item, which only led to
+ * transactions with no way to clear it.
  *
  * Nothing was missing -- there was no way to clear one. The Needs-a-look card's own docblock had
  * ruled a dismiss out, but the argument recorded there ("a card with a dismiss button is a card

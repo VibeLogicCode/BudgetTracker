@@ -216,8 +216,8 @@ describe('Chip filters (ruling D6) bug fix: hrefs come from the SERVER-known fil
 });
 
 /**
- * v1.24.0 Lane A item 2 (reported: "currently once i apply a trasnfer its hard to find that
- * data again"). readFilter (page.tsx, not exported) parses `?transfers=` into
+ * v1.24.0 Lane A item 2 (reported: once a transfer is applied it is hard to find that
+ * data again). readFilter (page.tsx, not exported) parses `?transfers=` into
  * TransactionFilter.transferView -- proven here end-to-end through the real page and a real
  * transfer/non-transfer pair, the same way the note test above (Item 2) proves a value reaches
  * the client rather than unit-testing a private function directly.
@@ -334,8 +334,8 @@ describe('TransactionsPage: ?queue= parses to reviewQueue (Lane R item R1)', () 
 });
 
 /**
- * v1.26.0 Lane 1 (reported: "shows amazon i dont know what orignal entry was so maybe its
- * wrong maybe its not"). Proves renameRules (page.tsx's own prop -- see its doc comment) actually
+ * v1.26.0 Lane 1 (reported: a row showed a merchant name with no way to see the original
+ * entry, so it was impossible to tell whether the rename was right). Proves renameRules (page.tsx's own prop -- see its doc comment) actually
  * reaches the client end-to-end: a real rename rule in the database, matched against a real
  * renamed row's normalizedMerchant the SAME way applyRenameRules/resolveRename
  * (src/lib/categorize/engine.ts) already do, surfaced in the bank-text dialog's "Rule: …" line

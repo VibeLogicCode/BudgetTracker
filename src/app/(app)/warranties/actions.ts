@@ -639,8 +639,8 @@ export async function reconcileLoanAction(
 /**
  * Record a payment on a loan by hand, on any past date.
  *
- * Reported 2026-09-19: "can i add a manual payment option to loan where it wasnt in transactions
- * and back date it ... that will recompute the interest?"
+ * Reported 2026-09-19: a loan needed a manual payment option for a payment that was not in
+ * transactions, back-datable, that recomputes the interest.
  *
  * WHY THIS WRITES A REAL TRANSACTION rather than a loan-only payment row. A loan payment IS
  * spending -- MUST-13.2 is the rule that a car payment still belongs in the Transport budget and
@@ -1143,7 +1143,7 @@ export async function unlinkLedgerTransactionAction(
 const recomputeBalanceSchema = z.object({ itemId: z.coerce.number().int().positive() });
 
 /**
- * Item 6 (v1.21.0 backlog): "there must be a route back" for a loan whose balance predates the
+ * Item 6 (v1.21.0 backlog): there had to be a route back for a loan whose balance predates the
  * link()-order fix and is already wrong -- a real case had no repair short of deleting
  * and recreating the item. recomputeLoanBalance (src/lib/loans.ts) replays every linked payment
  * in the order its TRANSACTION actually happened, not the order it was linked, and reports the

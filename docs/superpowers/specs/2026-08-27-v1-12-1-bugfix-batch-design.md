@@ -37,7 +37,7 @@ Two are the kind of security gap a household never finds out about: changing you
 sign out the session you changed it because of (Z), and two-factor can be switched off from a stolen
 session in one click with no notification (AA).
 
-The rest are smaller and are here because the owner said "no harm in completing them".
+The rest are smaller and are here because the owner saw no harm in completing them.
 
 ---
 

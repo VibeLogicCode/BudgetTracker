@@ -380,8 +380,9 @@ export async function previewRuleClearAction(
 }
 
 /**
- * v1.24.0, the reported ask in full: "delete rule and un-apply from transactions... showing user
- * this cannot be undone, this will update transactions, all date ranges or user chooses".
+ * v1.24.0, the reported ask in full: deleting a rule should also un-apply it from transactions,
+ * warn that this cannot be undone and will update transactions, and let the user choose all date
+ * ranges or a specific one.
  *
  * CLEAR FIRST, DELETE SECOND, and the order is load-bearing: attribution is derived, never stored
  * (no rule id lives on a transaction -- see ruleImpactIds), so the rule must still exist for
@@ -543,8 +544,8 @@ export async function applyRuleNowAction(_prev: RuleActionState, formData: FormD
 }
 
 /**
- * v1.21.0 (item 11): "report a count before and after... the difference between a useful
- * button and a frightening one." The household-wide action gets the full two-step treatment
+ * v1.21.0 (item 11): report a count before and after, which is the difference between a useful
+ * button and a frightening one. The household-wide action gets the full two-step treatment
  * (preview, then confirm) precisely because it is the broad one -- eligibleForRerun() has no
  * per-rule scope to keep it narrow the way Apply now's does. Not bound to a <form> the way the
  * mutating actions above are -- called directly from client code as a plain RPC (any exported

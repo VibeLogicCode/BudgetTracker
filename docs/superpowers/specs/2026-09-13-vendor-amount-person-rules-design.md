@@ -16,13 +16,13 @@ rebuild, no row rewritten. `drizzle/meta/_journal.json` gains `idx: 24` after `0
 
 ## Problem
 
-The owner, verbatim:
+The reports, described plainly:
 
-1. *"insurance is with same company but different amount but imported categorizes the last setting
-   i do so everything goes to home or auto. can i set in rule vendor + amount rule? they dont have to
-   be automatic but something i create from kebab menu?"*
-2. *"think about person too so its not just on vendor rule, even sets household, or individual
-   person."*
+1. Two insurance policies from one company were imported under whichever category was corrected
+   last, so everything went to home or auto; a rule needed to match vendor plus amount, created
+   from the kebab menu rather than automatically.
+2. A rule should be able to name a person too, not only a vendor, and even set household or an
+   individual person.
 
 What the code does today, and why each half of the ask is currently impossible rather than merely
 missing:

@@ -1416,7 +1416,7 @@ describe('sending a spending summary on demand', () => {
   });
 
   it('drains the outbox rather than leaving the message for the five-minute tick', async () => {
-    // The defect the report hit: "they came with a real delay". enqueue() only writes a pending
+    // The defect the report hit: the messages arrived with a real delay. enqueue() only writes a pending
     // row; without kickOutbox() delivery waits for the scheduler. A source assertion, because the
     // drain is fire-and-forget by design and has no return value to await.
     const source = fs.readFileSync(path.join(process.cwd(), 'src/app/(app)/dashboard/actions.ts'), 'utf8');

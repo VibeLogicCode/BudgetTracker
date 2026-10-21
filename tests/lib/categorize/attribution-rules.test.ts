@@ -67,8 +67,8 @@ function rule(input: { pattern: string; attributedUserId: number | null; matchTy
 }
 
 /**
- * The owner, 2026-09-13: "think about person too so its not just on vendor rule, even sets
- * household, or individual person."
+ * Reported 2026-09-13: a rule should be able to name a person too, not only a vendor, and even
+ * set household or an individual person.
  *
  * A rule could say what a charge IS (a category) but never WHOSE it is. Attribution was decided
  * once, at import, by the per-card map or else the account's owner, and after that only by hand.

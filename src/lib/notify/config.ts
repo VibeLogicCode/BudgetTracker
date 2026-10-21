@@ -407,8 +407,8 @@ export function hasAnyEnabledTarget(): boolean {
 }
 
 /**
- * 2026-09-09 (reported: "i only import data on sundays i dont want daily messages they need to
- * be weekly only or when i press notify in app manually").
+ * 2026-09-09 (reported: data is imported only on Sundays, so daily messages were unwanted;
+ * they need to be weekly only, or sent when notify is pressed in the app).
  *
  * HOW OFTEN the spending summary is sent. Deliberately separate from digestWeekday/digestHour,
  * which answer WHEN: the weekday is the anchor the summary re-pins to so a late send cannot make

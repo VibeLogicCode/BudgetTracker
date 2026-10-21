@@ -128,7 +128,7 @@ what Budgets renders, so the two cannot diverge.
 
 ## 3. Nothing alerts when the balance pipeline quietly stops
 
-**Owner declined the alert on 2026-08-23** ("leave this"). Not started, and not to be started
+**Owner declined the alert on 2026-08-23** (to be left as it is). Not started, and not to be started
 unasked. Recorded in full below because the reasoning still holds and because v1.8.0 narrowed
 the exposure considerably without closing it.
 
@@ -1372,7 +1372,7 @@ Effort: M · Proposed release: v1.14.0
 One item each, kept brief. Status for all: SHIPPED in v1.12.1 — from 2026-08-27 fresh-eyes review; see
 docs/reviews/2026-08-27-fresh-eyes-review.md at the id named in each title.
 
-**Owner re-scope (2026-08-27):** "no harm in completing them" — every item in this section moves
+**Owner re-scope (2026-08-27):** there was no harm in completing them, so every item in this section moves
 into v1.12.1 alongside S–AE, so v1.12.1 is now S–AE plus AT, AU, AV, AW, AX, AY, AZ, BA, BB, BC, BD,
 BE, BF, BG (26 items). Two rulings taken with it:
 
@@ -1829,10 +1829,10 @@ but only for a link somebody happens to notice.
 
 ## Vendor + amount + person rules — shipped in v1.39.0
 
-The owner, 2026-09-13, twice: *"insurance is with same company but different amount but imported
-categorizes the last setting i do so everything goes to home or auto. can i set in rule vendor +
-amount rule? they dont have to be automatic but something i create from kebab menu?"* and *"think
-about person too so its not just on vendor rule, even sets household, or individual person."*
+Reported 2026-09-13, twice. First: two insurance policies from one company were imported under
+whichever category was corrected last, so everything went to home or auto; a rule needed to match
+vendor plus amount, created from the kebab menu rather than automatically. Second: a rule should be
+able to name a person too, not only a vendor, and even set household or an individual person.
 
 Planned in `docs/superpowers/specs/2026-09-13-vendor-amount-person-rules-design.md` (19 planner
 rulings P1–P19, tasks T1–T10). **T1–T9 shipped.** Migration `0024` landed in v1.38.0 and did

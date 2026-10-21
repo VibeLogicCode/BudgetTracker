@@ -41,10 +41,10 @@ function refusal(run: () => unknown): string {
 }
 
 /**
- * Migration 0024, for the reported report of 2026-09-13: "insurance is with same company but
- * different amount but imported categorizes the last setting i do so everything goes to home or
- * auto. can i set in rule vendor + amount rule?" -- plus "think about person too so its not just
- * on vendor rule, even sets household, or individual person."
+ * Migration 0024, for the reports of 2026-09-13. First: two insurance policies from one company
+ * were imported under whichever category was corrected last, so everything went to home or auto;
+ * a rule needed to match vendor plus amount. Second: a rule should be able to name a person too,
+ * not only a vendor, and even set household or an individual person.
  *
  * Spec: docs/superpowers/specs/2026-09-13-vendor-amount-person-rules-design.md.
  */

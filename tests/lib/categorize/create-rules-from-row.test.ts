@@ -39,8 +39,8 @@ function rowState(id: number) {
 const MERCHANT = 'ACME INSURANCE';
 
 /**
- * The owner, 2026-09-13: "can i set in rule vendor + amount rule? they dont have to be automatic
- * but something i create from kebab menu?" -- and, separately, "think about person too".
+ * Reported 2026-09-13: a rule needed to match vendor plus amount, created from the kebab menu
+ * rather than automatically; and, separately, a rule should be able to name a person too.
  *
  * ONE engine function behind the kebab dialog. It writes up to two rules (a category rule and a
  * person rule, both bounded by the same window) and then applies them to the merchant's own rows.

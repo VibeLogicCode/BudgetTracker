@@ -378,8 +378,8 @@ describe('carried amount display — "$X plus $Y carried"', () => {
 });
 
 /**
- * 2026-09-01 fix (reported: "when roll over text comes in it messes up the
- * allignemnt"). budgets-client.tsx's EditRow used to render the carried-amount and sinking-fund
+ * 2026-09-01 fix (reported: rollover text appearing in a row threw the row's
+ * alignment off). budgets-client.tsx's EditRow used to render the carried-amount and sinking-fund
  * sentences as flex ITEMS -- each carrying `w-full` -- inside the same flex-wrap container as
  * the amount input, the clear button, the suggestion button and the rollover checkbox. `w-full`
  * inside `flex-wrap` forces a line break, so on the one row with something to report, every

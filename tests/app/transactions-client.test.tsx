@@ -432,8 +432,8 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
   });
 
   /**
-   * v1.27.0 item 1 (the report: "it also adds a rule ... next time i buy from [that shop] i
-   * dont want it to automatically caretgorize it as transfer"). The control's copy has to answer
+   * v1.27.0 item 1 (the report: assigning to a loan also added a rule, so the next purchase from
+   * the same shop would be categorized as a transfer automatically). The control's copy has to answer
    * the question the report had to discover by being bitten by it, because the per-row "Mark as
    * transfer" control one menu away DOES author a rule and says so in its own success message.
    * Asserted as copy rather than left to the docblock: a person reading a pre-armed checkbox is the
@@ -4082,8 +4082,8 @@ describe('v1.26.0 Lane 3a: what the review filter does and does not offer', () =
 
 
 /**
- * The owner, 2026-09-13, looking at "Page 1 of 6 — 266 transactions": "how do i go to next page on
- * transactions?" There was no way. The footer has printed a page count since F-02 while the flat
+ * Reported 2026-09-13, looking at the "Page 1 of 6 — 266 transactions" footer: there was no way to
+ * go to the next page of transactions. The footer has printed a page count since F-02 while the flat
  * list carried no pager at all -- the GROUPED view got Previous/Next groups links and this one was
  * never given the same. `?page=` was already read (filter-params.ts readFilter), so every page
  * after the first existed and was reachable only by typing a URL.
@@ -4138,7 +4138,7 @@ describe('TransactionsClient — the flat list can be paged', () => {
 
 
 /**
- * The owner, 2026-09-13: "it recorded this payment now which i have no way of removing." Record
+ * Reported 2026-09-13: a recorded payment could not be removed. Record
  * payment on a bill writes a real transaction; nothing in the app could delete one. The line drawn
  * (deleteManualTransaction, src/lib/transactions.ts) is `importId`: a row an import brought in is
  * that import's to remove, through Undo import, which knows which rows it alone covers.
@@ -4193,9 +4193,9 @@ describe('TransactionsClient — deleting a row nobody imported', () => {
 
 
 /**
- * The owner, 2026-09-13: "there is no way for me to assign a transaction to a bill or a contract?
- * if i say record payment from the bill menu it creates a payment but i should only be assigning
- * it a payment not manually creating a record." Loans have had this since v1.7.0; bills had only
+ * Reported 2026-09-13: there was no way to assign a transaction to a bill or a contract; Record
+ * payment from the bill menu created a payment, when the need was only to assign an existing
+ * transaction as the payment, not to create a record by hand. Loans have had this since v1.7.0; bills had only
  * a text-matching rule or Record payment, which writes a second transaction.
  */
 describe('TransactionsClient — assigning a row to a bill', () => {
@@ -4268,8 +4268,8 @@ describe('TransactionsClient — assigning a row to a bill', () => {
   });
 
   /**
-   * The owner, 2026-09-14, on v1.38.0: "assign to bill works but when i assign to bill the UI menu
-   * doesnt close, transaction gets applied and no feedback to user that its done."
+   * Reported 2026-09-14, on v1.38.0: assigning to a bill worked, but the menu did not close and
+   * the user got no feedback that it was done.
    *
    * Both halves were the same omission. Every other action on this page contributes its result to
    * the page's one banner (the `notice`/`error` pair) and every dialog that must survive a refusal
@@ -4327,11 +4327,11 @@ describe('TransactionsClient — assigning a row to a bill', () => {
 });
 
 /**
- * The owner, 2026-09-13: "insurance is with same company but different amount but imported
- * categorizes the last setting i do so everything goes to home or auto. can i set in rule vendor +
- * amount rule? they dont have to be automatic but something i create from kebab menu?" -- and
- * "think about person too so its not just on vendor rule, even sets household, or individual
- * person."
+ * Reported 2026-09-13, two reports. First: two insurance policies from one company were imported
+ * under whichever category was corrected last, so everything went to home or auto; a rule needed to
+ * match vendor plus amount, created from the kebab menu rather than automatically. Second: a rule
+ * should be able to name a person too, not only a vendor, and even set household or an individual
+ * person.
  *
  * Exercised in BOTH the table branch and the review-card branch. That is the PENDING-FIXES CB
  * lesson stated as a test: this page renders rows twice, from one rowMenu, and an editor proved
@@ -4407,7 +4407,7 @@ describe('TransactionsClient — creating a rule from a row', () => {
   });
 
   /**
-   * The owner, 2026-09-14: "price from insurer can change after a year or months". A window fenced
+   * 2026-09-14, the report: an insurer's price can change after a year or a few months. A window fenced
    * around one premium goes stale at the first renewal and the charge falls through to the
    * merchant-wide rule silently. An open-ended pair -- "less than $200" for one policy, "more than
    * $200" for the other -- covers every amount between them, so a price rise cannot fall out of

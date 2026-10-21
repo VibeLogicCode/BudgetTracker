@@ -243,9 +243,9 @@ describe('the help page explains loan direction (spec BU)', () => {
   });
 
   /**
-   * 2026-09-13, the report: "insurance is with same company but different amount but imported
-   * categorizes the last setting i do so everything goes to home or auto" and "think about person
-   * too... even sets household, or individual person."
+   * 2026-09-13, two reports. First: two insurance policies from one company were imported under
+   * whichever category was corrected last, so everything went to home or auto. Second: a rule
+   * should be able to name a person too, and even set household or an individual person.
    *
    * The last assertion is ruling P18's stated gap, on purpose: a correction edits the
    * MERCHANT-wide rule, so a household with an amount rule under it can make the two disagree.
@@ -261,7 +261,7 @@ describe('the help page explains loan direction (spec BU)', () => {
   });
 
   /**
-   * The owner, 2026-09-14: "price from insurer can change after a year or months". A window fenced
+   * 2026-09-14, the report: an insurer's price can change after a year or a few months. A window fenced
    * around one premium goes stale at renewal and the charge falls back to the merchant-wide rule
    * with nothing on screen to say so. Two one-sided rules meeting at a split point cover every
    * amount, so there is no gap to fall into -- and the help has to SAY that, because the durable

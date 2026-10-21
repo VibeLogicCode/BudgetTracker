@@ -858,7 +858,7 @@ export function WarrantyDetailClient({
             interest maths, and reading a monthly rate as a yearly one understates it twelvefold.
           */}
           {/*
-            Reported 2026-09-19: "where does it show me interest that has computed since?" -- on a
+            Reported 2026-09-19: nowhere showed the interest computed since the start -- on a
             loan with a rate, a basis and a start date, but no balance. The answer was nowhere, and
             the page said nothing: a dash where the balance goes and no ledger card at all.
 

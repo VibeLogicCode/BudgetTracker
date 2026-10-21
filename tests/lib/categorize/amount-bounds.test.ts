@@ -7,9 +7,9 @@ import {
 } from '@/lib/categorize/amount-bounds';
 
 /**
- * The owner, 2026-09-13: "insurance is with same company but different amount but imported
- * categorizes the last setting i do so everything goes to home or auto. can i set in rule vendor +
- * amount rule?"
+ * Reported 2026-09-13: two insurance policies from one company were imported under whichever
+ * category was corrected last, so everything went to home or auto; a rule needed to match vendor
+ * plus amount.
  *
  * This module is the WHOLE of "does this amount fall inside that window" -- one predicate, shared
  * by matchRule, by the kebab dialog that prefills a window, and (later) by the loan matcher's

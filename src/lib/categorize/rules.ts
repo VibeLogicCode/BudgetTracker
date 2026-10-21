@@ -68,8 +68,8 @@ export type RuleKind =
   | 'always_ask';
 
 /**
- * 2026-09-13. The report: "think about person too so its not just on vendor rule, even sets
- * household, or individual person."
+ * 2026-09-13. The report: a rule should be able to name a person too, not only a vendor, and
+ * even set household or an individual person.
  *
  * WHY A KIND AND NOT A COLUMN ON A CATEGORY RULE. A person column on the category kind would let
  * one rule say both things -- and then a person-ONLY rule is a category rule with a NULL category,

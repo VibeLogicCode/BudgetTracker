@@ -390,7 +390,7 @@ export function runEngine(txnIds: number[]): EngineResult {
 }
 
 /**
- * v1.24.0 (the ask: "can we do date range on this... date should be on re-apply logic too").
+ * v1.24.0 (the ask: a date range on this, and on the re-apply logic too).
  * Inclusive ISO `YYYY-MM-DD` bounds on transactions.date; null/undefined on either side means
  * unbounded on that side, so `{}` is "all time" and stays the default everywhere.
  *
@@ -453,8 +453,8 @@ export interface RerunPreview {
 }
 
 /**
- * v1.21.0 (item 11): "report a count before and after... that is the difference between a
- * useful button and a frightening one". A read-only dry run over exactly the rows
+ * v1.21.0 (item 11): report a count before and after, which is the difference between a
+ * useful button and a frightening one. A read-only dry run over exactly the rows
  * runEngine(txnIds) would touch, so a confirm step can say "this will change N transactions"
  * BEFORE anything is written.
  *
@@ -886,8 +886,8 @@ export function ruleImpactCounts(ctx: CategorizeContext = buildContext()): Map<n
 }
 
 /**
- * v1.24.0 (the ask: "user deletes the rule but nothing gets fixed... delete rule and remove it
- * from transactions"). The IDS behind ruleImpactCounts' figure for ONE rule, optionally bounded to
+ * v1.24.0 (the ask: deleting a rule left its transactions unfixed; deleting should also remove
+ * the rule's effect from them). The IDS behind ruleImpactCounts' figure for ONE rule, optionally bounded to
  * a date range. Not a second definition of "affects": each branch below is the same predicate
  * ruleImpactCounts' own branch for that kind uses, narrowed from `count(*)` to a list of ids and
  * from every rule to this one. That sameness is the whole point -- the dialog that says "41
@@ -1065,9 +1065,9 @@ export function ruleClearIds(ruleId: number, scope: RuleScope = {}, ctx: Categor
 }
 
 /**
- * v1.24.0, the reported actual ask: "when we add a merchant rule and reapply, if the user messes up
- * the transactions get updated. User deletes the rule but nothing gets fixed... delete rule and
- * remove it from transactions, all or for a date range."
+ * v1.24.0, the reported actual ask: when a merchant rule is added and re-applied, and the user
+ * gets it wrong, the transactions are updated, and deleting the rule fixed nothing; deleting should
+ * also remove the rule from transactions, for all dates or a date range.
  *
  * THERE IS NO UNDO, and that is a fact about the schema, not a choice: nothing anywhere records a
  * transaction's category from BEFORE a rule touched it (categorization_source is only
@@ -1078,8 +1078,8 @@ export function ruleClearIds(ruleId: number, scope: RuleScope = {}, ctx: Categor
  * for a person to decide deliberately. The dialogs say all of this in plain words before the click
  * -- that is the only "safety" available here, and pretending otherwise would be worse.
  *
- * Nothing is re-run afterward. Asked for literally ("we can set those transactions as
- * uncategorized"), and right on its own terms: re-running the remaining rules would let a broader
+ * Nothing is re-run afterward. Asked for literally (set those transactions as
+ * uncategorized), and right on its own terms: re-running the remaining rules would let a broader
  * rule immediately re-categorize the very rows just cleared, so the button would look like it had
  * done nothing at all. A person who wants the other rules applied presses Run rules, deliberately,
  * and can see what that will do first.
@@ -1492,9 +1492,9 @@ function otherTransferRuleMatches(normalizedMerchant: string, ctx: CategorizeCon
  * does not own it gets the whole action refused -- no row touched, no rule deleted -- exactly
  * as confirmCategory and upsertRuleFromCorrection already refuse for the rule they write.
  *
- * v1.27.0 item 1 (reported: "when i add items to loan they are marked
- * transfer by default but it also adds a rule ... next time i buy from best buy woodbridge i
- * dont want it to automatically caretgorize it as transfer"). `learnRule` splits the two things
+ * v1.27.0 item 1 (reported: adding items to a loan marked them
+ * as transfers by default but also added a rule, so the next purchase from the same store would
+ * be categorized as a transfer automatically, which was not wanted). `learnRule` splits the two things
  * this function used to do as one -- see its own docblock just below.
  */
 export function setTransferFlag(input: {
@@ -1642,10 +1642,10 @@ export function setTransferFlag(input: {
 /**
  * 2026-09-13. The one engine function behind the kebab's "Create a rule…" dialog.
  *
- * The owner, twice: "insurance is with same company but different amount but imported categorizes
- * the last setting i do so everything goes to home or auto. can i set in rule vendor + amount
- * rule? they dont have to be automatic but something i create from kebab menu?" and "think about
- * person too so its not just on vendor rule, even sets household, or individual person."
+ * Two reports. First: two insurance policies from one company were imported under whichever
+ * category was corrected last, so everything went to home or auto; a rule needed to match vendor
+ * plus amount, created from the kebab menu rather than automatically. Second: a rule should be
+ * able to name a person too, not only a vendor, and even set household or an individual person.
  *
  * So it writes UP TO TWO RULES -- a category rule and an attribution rule, both carrying the same
  * amount window -- and then applies them to the merchant's own rows. Two rules rather than one

@@ -14,7 +14,7 @@ import type { LoanDirection } from '@/lib/warranty/constants';
  * The loan ledger, laid out the way a statement is (ledger spec U1–U8).
  *
  * The owner asked for this in as many words: a table showing the original amount, the monthly
- * interest, the payments and the part-months, "similar to what a bank would show". For a personal
+ * interest, the payments and the part-months, similar to what a bank would show. For a personal
  * loan there is no statement to compare against, so this IS the record -- which is why every row
  * carries where its figure came from, and why the posting rows can be checked by hand.
  *
@@ -175,8 +175,8 @@ export const LoanLedgerCard = memo(function LoanLedgerCard({
         >
           <div role="group" aria-label="How to group the ledger" className="flex flex-wrap items-center gap-1">
             {/*
-              Reported 2026-09-19: "i click on month and view changes by date range but label stays
-              same". It was one button reading "By month" with aria-pressed -- which a screen reader
+              Reported 2026-09-19: choosing the month view changed the date range but the label stayed
+              the same. It was one button reading "By month" with aria-pressed -- which a screen reader
               announces and a sighted reader cannot see, so after pressing it there was nothing on
               the page saying which of the two views was on. Two options, the active one filled.
             */}

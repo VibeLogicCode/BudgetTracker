@@ -7,9 +7,9 @@
  * `install/update.ps1` rebuild from source and never enter the application at all, so without
  * this entry point the source-build path would still upgrade with no fresh backup.
  *
- * The owner's constraint drove the shape: "synology is only 1 type of device we r running it on.
- * now it can run on docker on unix linux windows so we need something that works for all devices
- * just like the app". The portable half of any updater is the part that runs INSIDE the container,
+ * A constraint drove the shape: Synology is only one of the devices this runs on, and it now runs
+ * in Docker on Unix, Linux and Windows, so the updater has to work for all of them, just like the
+ * app. The portable half of any updater is the part that runs INSIDE the container,
  * because that is identical on every host. So the backup logic lives in Node
  * (src/lib/backup/pre-upgrade.ts) and every path — the in-app button, update.sh, update.ps1 —
  * calls that one implementation. The scripts contribute one line of glue each, not a second

@@ -1,8 +1,8 @@
 /**
  * 2026-09-13. WHO A TRANSACTION BELONGS TO, decided once at insert -- the order, in one place.
  *
- * The report: "think about person too so its not just on vendor rule, even sets household, or
- * individual person."
+ * The report: a rule should be able to name a person too, not only a vendor, and even set
+ * household or an individual person.
  *
  * THE ORDER, and the argument for it (ruling P11):
  *

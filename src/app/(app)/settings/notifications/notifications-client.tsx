@@ -1154,8 +1154,8 @@ export function NotificationsClient(data: NotificationsPageData) {
                 {/* The knobs, each with its default in the hint text. */}
                 {/*
                   2026-09-09, and FIRST because it is the one that decides whether the three timing
-                  knobs below it matter at all: "i only import data on sundays i dont want daily
-                  messages they need to be weekly only or when i press notify in app manually."
+                  knobs below it matter at all: data is imported only on Sundays, so daily messages are
+                  unwanted: they need to be weekly only, or sent when notify is pressed in the app.
 
                   The summary is gated on new transactions in every mode, so "at most" is the honest
                   word in each label -- a week with no import sends nothing whichever is chosen.

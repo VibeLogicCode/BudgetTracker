@@ -15,9 +15,9 @@ import { fileURLToPath } from 'node:url';
  * merchant IS the fact. "File this reimbursement against the work loan" does not -- what makes
  * that money not-spending is the LOAN LINK, and the shop it happened to be spent at is incidental.
  *
- * v1.27.0 item 1 exists because those two got conflated. The a reported it: "when i add items
- * to loan they are marked transfer by default but it also adds a rule ... next time i buy from
- * [that shop] i dont want it to automatically caretgorize it as transfer". The assign-to-loan
+ * v1.27.0 item 1 exists because those two got conflated. It was reported: adding items to a loan
+ * marked them as transfers by default but also added a rule, so the next purchase from the same
+ * store would be categorized as a transfer automatically. The assign-to-loan
  * editor's "Also mark as a transfer" checkbox was pre-armed ON and posted to setTransferFlag,
  * which does not only set `is_transfer` -- it upserts an exact transfer rule for the merchant. One
  * loan assignment, and every future purchase from that shop was silently flagged out of spending.

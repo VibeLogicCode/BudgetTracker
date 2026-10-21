@@ -142,8 +142,8 @@ describe('the weekly digest existence pre-check', () => {
 });
 
 /**
- * Reported 2026-09-08: "it shouldnt send notifications on boot. when it reboots it sends
- * notifications about budget."
+ * Reported 2026-09-08: notifications should not be sent on boot; a reboot sent
+ * notifications about budgets.
  *
  * The boot pass exists for SLOT catch-up (MUST-6.1) -- a container that was off overnight still
  * owes yesterday's coming_due and the weekly digest. It never needed to run the TICK-triggered

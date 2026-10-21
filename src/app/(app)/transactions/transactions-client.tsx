@@ -241,7 +241,7 @@ function pageFooterWords(page: TransactionPage): string {
  * mobile card list, the desktop table) for the same reason that function exists: three copies of
  * a string drift, and so do three copies of a link.
  *
- * Reported by the report 2026-09-13 -- "how do i go to next page on transactions?" -- looking at a
+ * Reported 2026-09-13: there was no way to go to the next page of transactions, looking at a
  * footer that said "Page 1 of 6" and carried nothing to press. `?page=` has been read since the
  * filter was extracted (readFilter, ./filter-params.ts), so every one of those pages already
  * existed; only the way to reach one was missing, while the GROUPED view has had Previous/Next
@@ -320,8 +320,8 @@ function categoryChipHref(current: string, categoryId: string | null): string {
 }
 
 /**
- * v1.24.0 Lane A item 2 (reported: "currently once i apply a trasnfer its hard to find that
- * data again"). The three states TransactionFilter.transferView understands
+ * v1.24.0 Lane A item 2 (reported: once a transfer is applied it is hard to find that
+ * data again). The three states TransactionFilter.transferView understands
  * (src/lib/transactions.ts), paired with the `transfers` query value each one navigates to.
  * `'all'` clears the param entirely (filterHref's own null-means-delete contract) rather than
  * writing `transfers=all`. `'none'` keeps writing `transfers=0` -- the value existing bookmarked
@@ -525,8 +525,8 @@ export function TransactionsClient({
    *  category to all N matching…" kebab item never appears for a table row. */
   matchingCounts?: Record<number, number>;
   /**
-   * v1.26.0 Lane 1 (reported: "shows amazon i dont know what orignal entry was so maybe its
-   * wrong maybe its not"). Keyed by transaction id, only for a row whose display_source is
+   * v1.26.0 Lane 1 (reported: a row showed a merchant name with no way to see the original
+   * entry, so it was impossible to tell whether the rename was right). Keyed by transaction id, only for a row whose display_source is
    * 'rename' AND whose current rename rule could actually be resolved (page.tsx's own doc
    * comment on this prop has the "why absent, not null" reasoning) -- what bankTextDialog (below)
    * needs to show the "Rule: contains AMAZON → "Amazon"" line and its Edit/Delete links. Empty
@@ -1459,8 +1459,8 @@ export function TransactionsClient({
             Assign to bill…
           </RowMenuButton>
         )}
-        {/* 2026-09-13, reported: "can i set in rule vendor + amount rule? ... something i
-            create from kebab menu?" Sits with Split and the two assign items, inside the
+        {/* 2026-09-13, reported: a rule matching vendor plus amount, created from the kebab
+            menu. Sits with Split and the two assign items, inside the
             non-transfer block: a transfer has no category to file and belongs to nobody, so
             neither outcome this dialog offers means anything on one.
 
@@ -1633,9 +1633,9 @@ export function TransactionsClient({
    * exactly what's rendered below. Title names the row being assigned.
    */
   /**
-   * 2026-09-13 (a report): "there is no way for me to assign a transaction to a bill... if i
-   * say record payment from the bill menu it creates a payment but i should only be assigning it
-   * a payment not manually creating a record."
+   * 2026-09-13 (a report): there was no way to assign a transaction to a bill; Record payment
+   * from the bill menu created a payment, when the need was only to assign an existing transaction
+   * as the payment, not to create a record by hand.
    *
    * The bill sibling of newLoanDialog below, minus its "New loan…" branch: a bill's installments
    * are a schedule somebody entered, so this dialog assigns to one and never invents one. Leaving
@@ -1797,11 +1797,10 @@ export function TransactionsClient({
   }
 
   /**
-   * 2026-09-13. The owner, twice over: "insurance is with same company but different amount but
-   * imported categorizes the last setting i do so everything goes to home or auto. can i set in
-   * rule vendor + amount rule? they dont have to be automatic but something i create from kebab
-   * menu?" -- and "think about person too so its not just on vendor rule, even sets household, or
-   * individual person."
+   * 2026-09-13. Two reports. First: two insurance policies from one company were imported under whichever
+   * category was corrected last, so everything went to home or auto; a rule needed to match vendor
+   * plus amount, created from the kebab menu rather than automatically. Second: a rule should be
+   * able to name a person too, not only a vendor, and even set household or an individual person.
    *
    * NOT AUTOMATIC, in as many words. Preview counts and writes nothing; Create is a second,
    * deliberate click that says how many rows it is about to touch. The apply-all item one line up
@@ -1911,7 +1910,7 @@ export function TransactionsClient({
         <form action={createRuleAction} className="flex flex-col gap-3" data-testid="create-rule-form">
           <input type="hidden" name="normalizedMerchant" value={row.normalizedMerchant} />
           {/*
-            2026-09-14, the report: "price from insurer can change after a year or months."
+            2026-09-14, the report: an insurer's price can change after a year or a few months.
 
             A window FENCED AROUND one premium is the wrong shape for the job this dialog exists
             for. Two policies with one insurer are told apart by the gap BETWEEN them, not by the
@@ -2321,8 +2320,8 @@ export function TransactionsClient({
             >
               {row.displayDescription ?? row.normalizedMerchant}
             </strong>
-            {/* v1.26.0 Lane 1 item 1 (reported: "shows amazon i dont know what orignal entry
-                was so maybe its wrong maybe its not"). A rule-renamed row shows the bank text
+            {/* v1.26.0 Lane 1 item 1 (reported: a row showed a merchant name with no way to see
+                the original entry, so it was impossible to tell whether the rename was right). A rule-renamed row shows the bank text
                 UNCONDITIONALLY -- a `contains` rule can fire on text that is not the brand at
                 all, and a card is where this app asks a person to VERIFY a row, so the bank's own
                 wording belongs on screen with no interaction, not behind the existing heuristic
@@ -2780,8 +2779,8 @@ export function TransactionsClient({
   }
 
   /**
-   * v1.26.0 Lane 3a item 2 (owner: "if rules set category grocier i can just scoll and look at all
-   * the groceries 1 shot whiel receiving rather then by just date"). The grouped view: one row per
+   * v1.26.0 Lane 3a item 2 (owner: when rules set a category such as groceries, one should be able to
+   * scroll through all of that category's transactions in one go while receiving, rather than only by date). The grouped view: one row per
    * category cluster, largest absolute total first (groupTransactionsByCategory already returns
    * them in that order -- no second sort here, which is what stops the screen and the data layer
    * from ever disagreeing about which cluster is most worth checking).
@@ -3156,8 +3155,8 @@ export function TransactionsClient({
     // Lane 0 shell tightening: gap-6 -> gap-4 sm:gap-5, the same page-level stack gap every other
     // page converts to this release, landing everywhere at once (Lane 0's own docblock).
     <div data-page-width={reviewMode ? undefined : 'wide'} className="flex flex-col gap-4 sm:gap-5">
-      {/* v1.24.0 Lane A item 1 (reported: "Review page still says trasaction. can we change
-          that its confusing?"). The review queue is a FILTER on this page, not a separate page --
+      {/* v1.24.0 Lane A item 1 (reported: the review page header still said transaction, which
+          was confusing). The review queue is a FILTER on this page, not a separate page --
           the PageGuide right below already branches on reviewMode for exactly that reason -- so
           the header has to say which one a person is looking at instead of always saying
           "Transactions" regardless of which filter narrowed the list underneath it. */}
@@ -3465,8 +3464,8 @@ export function TransactionsClient({
             </div>
 
             {/*
-              v1.24.0 Lane A item 2 (reported: "currently once i apply a trasnfer its hard to
-              find that data again"). ALWAYS visible, never folded behind the Filters(N)
+              v1.24.0 Lane A item 2 (reported: once a transfer is applied it is hard to
+              find that data again). ALWAYS visible, never folded behind the Filters(N)
               disclosure the old two-state checkbox lived in. Burying it there is what made a
               mis-tagged transfer unreachable in the first place: REVIEW_WHERE
               (src/lib/categorize/engine.ts) excludes every transfer unconditionally, so once a

@@ -16,8 +16,8 @@ afterEach(() => {
 });
 
 /**
- * Reported 2026-09-20: "how do i get rid of take a look? it goes to transactions with no way to
- * clear it". The card had no dismiss at all, and the reason recorded in its own docblock -- that a
+ * Reported 2026-09-20: there was no way to get rid of a take-a-look item, which only led to
+ * transactions with no way to clear it. The card had no dismiss at all, and the reason recorded in its own docblock -- that a
  * card with a dismiss is a card somebody dismisses once and never sees again -- was an argument
  * about dismissing the WHOLE CARD. It does not answer the question asked, which is what to do with
  * one charge you have already looked at and decided is fine.

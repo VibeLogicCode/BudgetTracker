@@ -418,7 +418,7 @@ describe('the Windows quick start pulls what the NAS pulls', () => {
   });
 
   /**
-   * Asked directly: "what about a machine with virtualization disabled -- will we show an error?"
+   * Asked directly: whether a machine with virtualization disabled would show an error.
    * It has to be checked BEFORE the Docker install, or the script downloads two gigabytes onto a
    * machine that cannot run the result and then blames the wrong thing three minutes later.
    */

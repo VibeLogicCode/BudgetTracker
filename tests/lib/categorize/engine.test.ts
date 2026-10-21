@@ -443,9 +443,9 @@ describe('transfer toggling', () => {
 });
 
 /**
- * v1.27.0 item 1 (reported: "when i add items to loan they are marked transfer
- * by default but it also adds a rule ... next time i buy from best buy woodbridge i dont want it to
- * automatically caretgorize it as transfer").
+ * v1.27.0 item 1 (reported: adding items to a loan marked them as transfers by default but also
+ * added a rule, so the next purchase from the same store would be categorized as a transfer
+ * automatically, which was not wanted).
  *
  * The five cases above cover `learnRule: true` -- today's behaviour, unchanged. In particular
  * "turning the flag on teaches an EXACT transfer rule" is already the proof that the explicit
@@ -1362,8 +1362,8 @@ describe('ruling R4, fix round 2 (item BJ): setTransferFlag refuses over the rul
 });
 
 /**
- * v1.24.0 (the ask: "user deletes the rule but nothing gets fixed... delete rule and remove it
- * from transactions, all or for a date range"). Two things are being pinned here, and the first
+ * v1.24.0 (the ask: deleting a rule left its transactions unfixed; deleting should also remove
+ * the rule's effect from them, for all dates or a date range). Two things are being pinned here, and the first
  * matters more than it looks: ruleImpactIds must agree EXACTLY with ruleImpactCounts, because the
  * rules table shows the count and the dialog's button acts on the ids. If those two definitions
  * ever drift, the app states a number it does not honour -- which is worse than stating none.

@@ -186,9 +186,9 @@ describe('MerchantRulesClient — filter chips and search (item 10)', () => {
 });
 
 /**
- * v1.27.0, owner finding in full: "what do redunent rules do in mecharant rules page? do they
- * have any negative impact? can we tell user in a better what what it is as currently a yellow
- * banner catches eye but i dont know what to do". The explanation used to be the last sentence of
+ * v1.27.0, owner finding in full: nobody could tell what a redundant rule does on the merchant
+ * rules page, or whether it does any harm; the yellow banner caught the eye without saying what to
+ * do, and the user needed a clearer explanation. The explanation used to be the last sentence of
  * a long PageGuide paragraph, out of view unless that panel was expanded, and the chip itself said
  * nothing. This block pins the in-view explanation (both halves) and the Delete these N action
  * that follows from it -- reusing the SAME bulk-delete confirm the multi-select toolbar already
@@ -418,8 +418,8 @@ describe('MerchantRulesClient — per-rule Apply now (item 11: scoped, understan
 });
 
 /**
- * v1.24.0 (asked 2026-09-01: "when we click re-run it should open a dialogue... blurred popup
- * with proper disclaimer"). The preview-then-confirm behaviour item 11 built is unchanged; it moved
+ * v1.24.0 (asked 2026-09-01: re-run should open a dialogue, a blurred popup with a proper
+ * disclaimer). The preview-then-confirm behaviour item 11 built is unchanged; it moved
  * from an inline strip into a RowDialog and gained the all-time/date-range choice. See
  * RunRulesDialog's own docblock in merchant-rules-client.tsx (and the retired carve-out in
  * RowDialog.tsx) for why the earlier "this one stays inline" reasoning was reversed.

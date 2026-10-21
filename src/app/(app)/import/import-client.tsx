@@ -319,9 +319,8 @@ export function ImportClient({
   const [summary, setSummary] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // v1.26.0 Lane 3b. The post-commit offer to inspect what rules did (the report: "i still need
-  // to confirm or deny no? i dont just want to auto apply rules and never see what happened on
-  // my import."). Its own state rather than folded into `summary` -- the offer carries an
+  // v1.26.0 Lane 3b. The post-commit offer to inspect what rules did (the report: rules were applied
+  // automatically with no chance to confirm or deny them or to see what happened on the import). Its own state rather than folded into `summary` -- the offer carries an
   // importId a plain string cannot, and it must be cleared by a fresh preview the same way
   // `summary` already is, but never touched by anything else. null renders nothing: this is an
   // offer, not a gate, and the result screen below reads exactly as it always has when there is
@@ -492,8 +491,8 @@ export function ImportClient({
   }
 
   /**
-   * 2026-09-15, reported after v1.44.1: "when i click on the row that said ready it took me to old
-   * page. it should have view rows option whichi should take me to last screenshot".
+   * 2026-09-15, reported after v1.44.1: clicking a batch row marked ready opened the old page
+   * instead of a view-rows step leading to the latest preview screen.
    *
    * When the batch screen opens a row it hands over a file that is ALREADY staged, with both
    * pickers already resolved -- so every input the preview hop needs is in hand before this

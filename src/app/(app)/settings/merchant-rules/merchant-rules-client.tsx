@@ -164,7 +164,7 @@ function categoryLabelFor(id: number | null, categories: CategoryRecord[]): stri
 }
 
 /**
- * v1.24.0 (asked for): "all date ranges or user chooses". One control, two dialogs -- Delete and
+ * v1.24.0 (asked for): all date ranges, or the user chooses. One control, two dialogs -- Delete and
  * clear, and Run rules -- because a person setting a range in one of them and then the other must
  * meet the same two fields in the same order, not two different inventions.
  *
@@ -457,8 +457,8 @@ function ClearRuleDialog({
  * inline "Re-run rules" panel (and is quoted in RowDialog.tsx's own when-to-use docblock as the
  * worked example of a page-level panel that correctly stayed inline). That reasoning was sound on
  * its own terms -- a re-run only ever adds, so there was nothing destructive to weigh -- but the
- * the dialog was asked for anyway (2026-09-01: "when we click re-run it should open a dialogue
- * saying re-runs rules for all or specific date range... blurred popup with proper disclaimer"),
+ * the dialog was asked for anyway (2026-09-01: re-run should open a dialogue
+ * covering all dates or a specific date range, with a proper disclaimer),
  * and the reason is one this file could not see from inside its own decision: with delete-and-clear
  * now asking the SAME "all time or a date range" question in a blurred dialog, leaving the re-run
  * as an inline strip would teach that the two idioms mean different degrees of seriousness. One
@@ -1185,8 +1185,8 @@ export function MerchantRulesClient({
                           v1.24.0. Two delete items for a category or transfer rule -- "the rule
                           only" and "the rule and what it did" -- because those are two genuinely
                           different acts and the old single Delete quietly did the first while a
-                          person expected the second (the report: "user deletes the rule
-                          but nothing gets fixed").
+                          person expected the second (the report: deleting a rule left
+                          the transactions it had changed untouched).
 
                           A RENAME rule keeps ONE item: deleting it already reverts every row it
                           set, so a "delete only" choice does not exist for that kind and offering

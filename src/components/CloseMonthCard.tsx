@@ -22,11 +22,11 @@ export interface OpenMonthView {
  * 2026-09-08. "September is not closed" — the one place the household says last month's data is
  * all in, so the monthly summary can wait for it instead of firing on a calendar date.
  *
- * WHY A BUTTON AND NOT A RULE, in the report: "what happens if 1 of the accounts doesnt have
- * any entry for 15 days in next month and there is nothing to import ... because we have simplefin
- * too transactions can auto come in too using logic we have not is not reliable."
+ * WHY A BUTTON AND NOT A RULE, in the report: if one account has no entry for 15 days in the
+ * next month and there is nothing to import, and transactions can also arrive automatically
+ * through SimpleFIN, the inference the app used was not reliable.
  *
- * He is right. A quiet savings account with nothing to import is indistinguishable, from the data,
+ * The report is right. A quiet savings account with nothing to import is indistinguishable, from the data,
  * from one whose statement has not arrived — so any inference either stalls the summary forever or
  * eventually sends figures that are wrong. A person knows. One press covers every manual account.
  *

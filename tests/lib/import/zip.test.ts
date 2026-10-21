@@ -3,8 +3,8 @@ import zlib from 'node:zlib';
 import { ZipError, readZipEntries, looksLikeZip, MAX_ZIP_ENTRIES } from '@/lib/import/zip';
 
 /**
- * 2026-09-15, ruling B11/B12. Asked for alongside the multi-file drop: "if its
- * a zip it should inzip and import".
+ * 2026-09-15, ruling B11/B12. Asked for alongside the multi-file drop: a zip should be
+ * unzipped and its contents imported.
  *
  * WHY THE TESTS BUILD REAL ARCHIVES rather than mocking a reader. Every guard in zip.ts is about
  * bytes a hostile or merely broken archive can carry -- a name that climbs out of the directory, a

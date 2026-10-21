@@ -18,8 +18,8 @@ import type { ImportHistoryRow } from '@/lib/import/commit';
  * since the page was written, which was fine while that component WAS the import page -- and
  * stopped being fine the moment the batch screen became the landing surface, because History then
  * only existed once a household had clicked into a single file. Reported directly:
- * "i should also have a history button on new page to take me to page that shows me history of
- * what was imported like in older screenshot."
+ * the new page needed a history button leading to a page showing the history of what was
+ * imported, as the older screen had.
  *
  * It owns its own rows and its own undo. The alternative -- lifting both into two parents -- would
  * have put the same fetch, the same confirm dialog and the same list-splicing in two places, and

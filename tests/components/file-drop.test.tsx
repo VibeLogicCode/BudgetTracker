@@ -42,8 +42,8 @@ describe('FileDrop: the click path is the real one', () => {
 });
 
 /**
- * The owner, twice -- 2026-09-13 and again on v1.38.0, 2026-09-14: "ui is still an issue here in
- * 38 for drag and drop component", with a screenshot of the browser's own grey "Choose File / No
+ * Reported twice -- 2026-09-13 and again on v1.38.0, 2026-09-14: the drag and drop component's UI
+ * was still a problem, shown by a screenshot of the browser's own grey "Choose File / No
  * file chosen" widget sitting in the middle of the drop zone, directly under our own heading that
  * already said "Choose a file".
  *
@@ -152,15 +152,15 @@ describe('the two pure helpers', () => {
 });
 
 /**
- * 2026-09-15. The report downloads ten statements and feeds them in one at a time: "throughwing all
- * together lets app handle the process". `rejectionFor` refused a multi-file drop outright, in one
+ * 2026-09-15. The report downloads ten statements and feeds them in one at a time; the ask was to
+ * throw them all in together and let the app handle the process. `rejectionFor` refused a multi-file drop outright, in one
  * line, and that line is the whole of what stood in the way.
  *
  * THE RULE THAT SHAPES ALL OF THIS: a mixed drop must not be refused wholesale. Nine statements and
  * one PDF is the realistic drop -- a bank folder has a PDF in it -- and throwing the nine away
  * because of the one would be worse than what it replaces. So multi mode PARTITIONS rather than
- * refuses, which is also a real ask ("icase onf the files is not supported it should
- * handle it accodingy").
+ * refuses, which is also a real ask (if one of the files is not supported, the app should
+ * handle it accordingly).
  */
 describe('partitionDrop: a bad file does not condemn the good ones', () => {
   it('splits a mixed drop, keeping the good and naming each reject', () => {

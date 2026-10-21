@@ -1685,9 +1685,9 @@ function markMatchingUnpaid(
 /**
  * Link a transaction the bank already sent to one of a bill's installments.
  *
- * WHY IT EXISTS (reported 2026-09-13): "there is no way for me to assign a transaction to a
- * bill or a contract? if i say record payment from the bill menu it creates a payment but i should
- * only be assigning it a payment not manually creating a record." A loan has had
+ * WHY IT EXISTS (reported 2026-09-13): there was no way to assign a transaction to a
+ * bill or a contract; Record payment from the bill menu created a payment, when the need was only
+ * to assign an existing transaction as the payment, not to create a record by hand. A loan has had
  * assignTransactionToLoan on the row menu since v1.7.0; a bill had only the rule matcher (text,
  * automatic) and Record payment (which WRITES a transaction). Neither is "this line on my
  * statement is that bill's payment".
@@ -3289,8 +3289,8 @@ export interface DebtPoint {
    * v1.48.0, ledger spec G2. Interest POSTED across every loan up to and including this month.
    *
    * Cumulative, not per-month, so the series reads as "how much of this debt is interest" against
-   * the balance line above it -- which is the question the owner asked, in the words "how the
-   * intrest has been growing".
+   * the balance line above it -- which is the question the owner asked: how the
+   * interest has been growing.
    */
   interestCents: number;
 }

@@ -1395,8 +1395,8 @@ describe('A10: the statement file is stored after the statement row', () => {
 });
 
 /**
- * Reported 2026-09-19: "can i add a manual payment option to loan where it wasnt in transactions
- * and back date it ... that will recompute the interest?"
+ * Reported 2026-09-19: a loan needed a manual payment option for a payment that was not in
+ * transactions, back-datable, that recomputes the interest.
  *
  * The answer had been no: a loan's balance could only be moved by importing the transaction first
  * and linking it. Cash, an e-transfer nobody has imported, or a month of payments entered after the

@@ -52,9 +52,9 @@ function paidState(installmentId: number) {
 }
 
 /**
- * The owner, 2026-09-13: "there is no way for me to assign a transaction to a bill or a contract?
- * if i say record payment from the bill menu it creates a payment but i should only be assigning
- * it a payment not manually creating a record."
+ * Reported 2026-09-13: there was no way to assign a transaction to a bill or a contract; Record
+ * payment from the bill menu created a payment, when the need was only to assign an existing
+ * transaction as the payment, not to create a record by hand.
  *
  * A loan has had `assignTransactionToLoan` on the row menu since v1.7.0. A bill had only two
  * routes: a payment-matching rule (automatic, text-matched) or Record payment, which WRITES a new

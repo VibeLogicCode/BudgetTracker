@@ -185,8 +185,8 @@ describe('F5: the working opens instead of hovering', () => {
 });
 
 /**
- * Reported 2026-09-19: "i click on month and view changes by date range but label stays same." It
- * was one button carrying aria-pressed -- which a screen reader announces and a sighted reader
+ * Reported 2026-09-19: choosing the month view changed the date range but the label stayed
+ * the same. It was one button carrying aria-pressed -- which a screen reader announces and a sighted reader
  * cannot see. Two options now, so the control shows which view is on rather than only knowing it.
  */
 /** The grouping control belongs with the full table, which since 2026-09-20 is in the dialog. */

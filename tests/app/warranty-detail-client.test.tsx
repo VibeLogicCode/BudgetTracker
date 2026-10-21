@@ -127,9 +127,9 @@ describe('WarrantyDetailClient', () => {
   // --- Bug fix (v1.2.4): edit replaces the view, kind-aware success message ---
 
   /**
-   * Reported 2026-09-19: "why does the edit card open half the width of the cards below? why don't
-   * we follow the design language we have on other pages where edit opens with a blurred
-   * background?" Both halves of that were fair. The form carried its own `max-w-2xl` inside a
+   * Reported 2026-09-19: the edit card opened at half the width of the cards below it, and did not
+   * follow the design language of other pages, where edit opens over a blurred background. Both
+   * halves of that were fair. The form carried its own `max-w-2xl` inside a
    * full-width column, and Rename/Note on Transactions had been using RowDialog -- backdrop, focus
    * trap, Escape -- since v1.21.0. The edit form is the same shell now.
    */

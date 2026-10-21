@@ -5,11 +5,11 @@ import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { closeMonth, closeMonthsAutomatically, closedMonthsAwaitingSummary, markMonthSummarySent, monthState, openMonths } from '@/lib/month-close';
 
 /**
- * 2026-09-08. Reported: "what happens if 1 of the accounts doesnt have any entry for 15 days in
- * next month and there is nothing to import ... because we have simplefin too transactions can auto
- * come in too using logic we have now is not reliable."
+ * 2026-09-08. Reported: if one account has no entry for 15 days in the next month and there is
+ * nothing to import, and transactions can also arrive automatically through SimpleFIN, the
+ * inference the app used was not reliable.
  *
- * He is right, and these tests pin the answer: a manual account's completeness is a HUMAN
+ * The report is right, and these tests pin the answer: a manual account's completeness is a HUMAN
  * statement, a SimpleFIN-linked account's is a machine one, and nothing is ever inferred from
  * import timing.
  */

@@ -34,8 +34,8 @@ function personOf(txnId: number): number | null {
 }
 
 /**
- * The owner, 2026-09-13: "think about person too so its not just on vendor rule, even sets
- * household, or individual person."
+ * Reported 2026-09-13: a rule should be able to name a person too, not only a vendor, and even
+ * set household or an individual person.
  *
  * Ruling P17: the order is written ONCE, here, rather than inline in commitImport's closure --
  * because it is the sentence three surfaces have to agree on. Ruling P11 decides the order

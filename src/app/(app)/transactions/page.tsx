@@ -5,8 +5,8 @@ import { listCategories } from '@/lib/categories';
 import { findUserById, listAttributablePeople } from '@/lib/auth/users';
 import { loanLinksForTransactions, listLoanRows } from '@/lib/loans';
 import { resolveRenameRule, reviewQueueCount } from '@/lib/categorize/engine';
-// v1.26.0 Lane 1 (reported: "shows amazon i dont know what orignal entry was so maybe its
-// wrong maybe its not"). Read-only imports: listRules for the rule set, and (v1.31.0 R-09)
+// v1.26.0 Lane 1 (reported: a row showed a merchant name with no way to see the original
+// entry, so it was impossible to tell whether the rename was right). Read-only imports: listRules for the rule set, and (v1.31.0 R-09)
 // resolveRenameRule from the engine for the resolution itself -- this page used to spell the
 // resolution out with matchRule plus its own emptiness test, which was a second definition of
 // the same question. See renameRules below for why this is the one honest way to answer "which
@@ -70,8 +70,8 @@ export default async function TransactionsPage({
   const filter = readFilter(params, range, ownerScope(viewer), reviewMode);
   const page = listTransactions(filter, viewer);
   /**
-   * v1.26.0 Lane 3a item 2 (owner: "if rules set category grocier i can just scoll and look at all
-   * the groceries 1 shot whiel receiving rather then by just date"). `?group=category` renders the
+   * v1.26.0 Lane 3a item 2 (owner: when rules set a category such as groceries, one should be able to
+   * scroll through all of that category's transactions in one go while receiving, rather than only by date). `?group=category` renders the
    * clusters instead of the rows -- groupTransactionsByCategory over the SAME `filter` object the
    * row query above already used, so the groups can never describe a different set than the list
    * they link into (that function's own doc comment, src/lib/transactions.ts, makes the same point

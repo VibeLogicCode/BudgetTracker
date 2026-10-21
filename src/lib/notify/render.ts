@@ -526,8 +526,8 @@ function refreshLines(rows: readonly RefreshLine[]): string[] {
 }
 
 /**
- * 2026-09-08 (reported: "there is 1 message per budget can we not send a summary message with
- * key figures and less repetative text"). One budget's standing, with the figures that matter.
+ * 2026-09-08 (reported: there was one message per budget; a single summary message with key
+ * figures and less repetitive text was wanted). One budget's standing, with the figures that matter.
  *
  * Replaces the bare `string[]` of category names the digest used to carry. Names alone forced the
  * household to go and look up every figure, which is why the per-category alerts existed at all --
@@ -649,9 +649,9 @@ function budgetBlock(budgets: BudgetSummary): string[] {
 /**
  * 2026-09-09. The batched "what is due" message.
  *
- * Reported: "there is 1 message per budget can we not send a summary message with key figures
- * and less repetitive text so its easier to read and digest info" -- said about budgets, and the
- * same complaint applies unchanged here. Five items inside the window used to be five
+ * Reported: one message per budget was too repetitive, and a single summary message with
+ * key figures and less repetitive text would be easier to read and digest -- said about budgets,
+ * and the same complaint applies unchanged here. Five items inside the window used to be five
  * notifications, each with its own subject, arriving in the same minute.
  *
  * OVERDUE FIRST and under its own heading, because a bill that is late and one that is due next

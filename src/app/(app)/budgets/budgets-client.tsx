@@ -933,8 +933,8 @@ function EditRow({
         hidden={hidden}
         className={`border-b border-line px-4 py-2 last:border-b-0 sm:px-5 ${depth === 0 ? 'bg-surface-2' : ''}`}
       >
-        {/* 2026-09-01 fix (reported: "when roll over text comes in it messes up the
-            allignemnt"). Tier 1 -- every CONTROL in the row (name/disclosure, the amount input
+        {/* 2026-09-01 fix (reported: rollover text appearing in a row threw the row's
+            alignment off). Tier 1 -- every CONTROL in the row (name/disclosure, the amount input
             or its read-only span, clear, the suggestion button, the rollover checkbox) lives in
             this one flex-wrap container, and nothing else does. The carried-amount and
             sinking-fund sentences used to be flex ITEMS in here too, each carrying `w-full` --

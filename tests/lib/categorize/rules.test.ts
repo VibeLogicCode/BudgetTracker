@@ -839,9 +839,9 @@ describe('ruling R4 (item AH / SEC-6): a member cannot overwrite another person 
 });
 
 /**
- * 2026-09-13, the report: "insurance is with same company but different amount but
- * imported categorizes the last setting i do so everything goes to home or auto. can i set in
- * rule vendor + amount rule?"
+ * 2026-09-13, the report: two insurance policies from one company were imported under whichever
+ * category was corrected last, so everything went to home or auto; a rule needed to match vendor
+ * plus amount.
  *
  * Migration 0024 lets two rules for one merchant coexist when their amount windows differ. These
  * are the read-side consequences: which of the two wins, when a bounded rule must NOT fire, and

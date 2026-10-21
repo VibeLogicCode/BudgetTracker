@@ -342,8 +342,8 @@ export const merchantRules = sqliteTable(
      */
     matchType: text('match_type', { enum: ['exact', 'contains', 'word'] }).notNull(),
     /**
-     * 'attribution' is 2026-09-13 (the report: "think about person too... even sets household, or
-     * individual person"). NO MIGRATION widened this column and none was needed:
+     * 'attribution' is 2026-09-13 (the report: a rule should name a person too, even
+     * setting household or an individual person). NO MIGRATION widened this column and none was needed:
      * drizzle/0000_init.sql declares rule_kind as `text DEFAULT 'category' NOT NULL` with no CHECK,
      * so this enum has only ever been a TypeScript-level claim -- exactly as 'word' was for
      * match_type in v1.25.0. merchant_rule_merges.dropped_rule_kind is deliberately NOT widened

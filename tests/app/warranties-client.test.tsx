@@ -330,7 +330,7 @@ describe('the recorded-billing header line (F-05)', () => {
  */
 describe('F4: the kind pills', () => {
   /**
-   * Reported 2026-09-19: "i love the pill but on phone it does render properly." Six options wrap
+   * Reported 2026-09-19: the pill control did not render properly on a phone. Six options wrap
    * onto two rows at phone width, and PillNav's default `rounded-full` shell -- right for the two-
    * and three-option controls it was built for -- draws a blob around a two-row box.
    */
