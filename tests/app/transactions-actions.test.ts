@@ -2859,7 +2859,17 @@ describe('card-row fixes revalidate every page whose figures they change', () =>
     const txnId = addTxn('MAPLE GROCER', -4217);
     vi.mocked(revalidatePath).mockClear();
     await setCategoryAction({}, formData({ transactionId: String(txnId), categoryId: String(categoryIdByName(db, 'Groceries')) }));
-    expect(revalidated()).toEqual(expect.arrayContaining(FIGURE_PAGES));
+    expect(revalidated()).toEqual(expect.arrayContaining([...FIGURE_PAGES, '/review']));
+  });
+
+  it('clearing the category (Uncategorized)', async () => {
+    const { db, addTxn } = setup();
+    const txnId = addTxn('MAPLE GROCER', -4217);
+    await setCategoryAction({}, formData({ transactionId: String(txnId), categoryId: String(categoryIdByName(db, 'Groceries')) }));
+    vi.mocked(revalidatePath).mockClear();
+    const result = await setCategoryAction({}, formData({ transactionId: String(txnId), categoryId: '' }));
+    expect('error' in result).toBe(false);
+    expect(revalidated()).toEqual(expect.arrayContaining([...FIGURE_PAGES, '/review']));
   });
 
   it('a category change that teaches the merchant', async () => {
@@ -2875,7 +2885,7 @@ describe('card-row fixes revalidate every page whose figures they change', () =>
     vi.mocked(revalidatePath).mockClear();
     const result = await setAlwaysAskAction({}, formData({ pattern: 'GIFTS R US', matchType: 'contains' }));
     expect('error' in result).toBe(false);
-    expect(revalidated()).toEqual(expect.arrayContaining(FIGURE_PAGES));
+    expect(revalidated()).toEqual(expect.arrayContaining([...FIGURE_PAGES, '/settings/merchant-rules']));
   });
 
   it('sending rows back to review', async () => {
@@ -2885,6 +2895,6 @@ describe('card-row fixes revalidate every page whose figures they change', () =>
     vi.mocked(revalidatePath).mockClear();
     const result = await sendBackToReviewAction({}, formData({ ruleId: String(saved.ruleId) }));
     expect('error' in result).toBe(false);
-    expect(revalidated()).toEqual(expect.arrayContaining(FIGURE_PAGES));
+    expect(revalidated()).toEqual(expect.arrayContaining([...FIGURE_PAGES, '/settings/merchant-rules']));
   });
 });

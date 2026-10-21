@@ -533,10 +533,21 @@ describe('categoryTransactionsAction — task-3 (S-01): a self-scoped member cou
     const result = await categoryTransactionsAction({ scope: 'household', userId: null, month: '2026-03', categoryId: groceries });
     if ('error' in result) throw new Error(result.error);
     const byId = new Map(result.rows.map((row) => [row.id, row]));
-    expect(byId.get(ruled)?.filedBy).toEqual({ ruleId: rule.ruleId, pattern: 'PHONEMART', matchType: 'contains' });
+    expect(byId.get(ruled)?.filedBy).toEqual({ ruleId: rule.ruleId, pattern: 'PHONEMART', matchType: 'contains', bounded: false });
     expect(byId.get(asked)).toMatchObject({ filedBy: null, alwaysAsked: true });
     expect(byId.get(split)).toMatchObject({ filedBy: null, splitId: expect.any(Number), parentAmountCents: -10000 });
     expect(result.splits[split]?.map((part) => part.amountCents)).toEqual([-6000, -4000]);
+  });
+
+  it('flags a filing rule that has an amount window as bounded', async () => {
+    const { alice, groceries, spend } = seedWithTransactions();
+    const ruled = spend({ attributedUserId: null, amountCents: -4217, merchant: 'PHONEMART 884', categoryId: null, source: 'none' });
+    const rule = upsertRuleFromCorrection({ pattern: 'PHONEMART', matchType: 'contains', ruleKind: 'category', categoryId: groceries, createdBy: alice, actorRole: 'admin', amountMinCents: 2000, amountMaxCents: 8000 });
+    if (!rule.ok) throw new Error('unexpected refusal');
+    runEngine([ruled]);
+    const result = await categoryTransactionsAction({ scope: 'household', userId: null, month: '2026-03', categoryId: groceries });
+    if ('error' in result) throw new Error(result.error);
+    expect(result.rows.find((row) => row.id === ruled)?.filedBy).toEqual({ ruleId: rule.ruleId, pattern: 'PHONEMART', matchType: 'contains', bounded: true });
   });
 });
 

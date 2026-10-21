@@ -5,7 +5,7 @@ import { RecategorizeDialog, type RecategorizeRow } from '@/components/transacti
 
 afterEach(() => cleanup());
 
-const ROW: RecategorizeRow = { id: 77, merchant: 'Phonemart', normalizedMerchant: 'PHONEMART 884', date: '2026-03-12', amountCents: -4217, categoryId: 1, source: 'rule', filedBy: { ruleId: 9, pattern: 'PHONEMART', matchType: 'contains' }, alwaysAsked: false };
+const ROW: RecategorizeRow = { id: 77, merchant: 'Phonemart', normalizedMerchant: 'PHONEMART 884', date: '2026-03-12', amountCents: -4217, categoryId: 1, source: 'rule', filedBy: { ruleId: 9, pattern: 'PHONEMART', matchType: 'contains', bounded: false }, alwaysAsked: false };
 const OPTIONS: { id: number; label: string; depth: 0 | 1 }[] = [{ id: 1, label: 'Groceries', depth: 0 }, { id: 2, label: 'Phone', depth: 0 }];
 
 describe('RecategorizeDialog', () => {
@@ -40,8 +40,32 @@ describe('the rule choice (spec §2.4)', () => {
   });
 
   it('says the rule itself changes when it is exact on this merchant', () => {
-    render(<RecategorizeDialog {...base} row={{ ...ROW, filedBy: { ruleId: 9, pattern: 'PHONEMART 884', matchType: 'exact' } }} canAuthorRules isAdmin={false} />);
+    render(<RecategorizeDialog {...base} row={{ ...ROW, filedBy: { ruleId: 9, pattern: 'PHONEMART 884', matchType: 'exact', bounded: false } }} canAuthorRules isAdmin={false} />);
     expect(screen.getByText('Changes the rule PHONEMART 884 → Groceries to the category you pick.')).toBeTruthy();
+  });
+
+  it('offers no Also file option when the filing rule is amount-bounded, and keeps the other two and the admin link', () => {
+    render(<RecategorizeDialog {...base} row={{ ...ROW, filedBy: { ruleId: 9, pattern: 'PHONEMART', matchType: 'contains', bounded: true } }} canAuthorRules isAdmin />);
+    expect(screen.queryByLabelText(/Also file/)).toBeNull();
+    expect(screen.queryByText(/wins over/)).toBeNull();
+    expect((screen.getByLabelText(/Change this transaction only/) as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByLabelText(/Always ask about PHONEMART 884 from now on/)).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Edit the rule under Settings' }).getAttribute('href')).toBe('/settings/merchant-rules?kind=category&q=PHONEMART');
+  });
+
+  it('posts no teach once Uncategorized is picked after Also file was chosen, and disables the option meanwhile', () => {
+    render(<RecategorizeDialog {...base} row={ROW} canAuthorRules isAdmin={false} />);
+    fireEvent.click(screen.getByLabelText(/Also file PHONEMART 884 this way from now on/));
+    const form = screen.getByRole('button', { name: 'Save category' }).closest('form') as HTMLFormElement;
+    expect(new FormData(form).get('teach')).toBe('1');
+    const input = screen.getByRole('combobox') as HTMLInputElement;
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'Uncat' } });
+    fireEvent.mouseDown(screen.getByRole('option', { name: /Uncategorized/ }));
+    expect(new FormData(form).get('categoryId')).toBe('');
+    expect(new FormData(form).get('teach')).toBeNull();
+    expect((screen.getByLabelText(/Also file PHONEMART 884 this way from now on/) as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByLabelText(/Change this transaction only/) as HTMLInputElement).checked).toBe(true);
   });
 
   it('Always ask posts no teach and tells the caller to open the Always ask dialog; it is absent once the merchant is already asked about', () => {

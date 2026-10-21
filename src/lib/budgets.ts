@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, gte, isNull, lte, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
-import { budgetRollover, budgets, loanPayments, transactions, transactionSplits } from '@/db/schema';
+import { budgetRollover, budgets, transactions, transactionSplits } from '@/db/schema';
 import { isSelfScoped, ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { listCategories, type CategoryRecord } from '@/lib/categories';
 import { REVIEW_WHERE, UNCATEGORIZED_WHERE } from '@/lib/categorize/engine';
@@ -364,22 +364,20 @@ export function uncategorizedSpend(
     .where(and(...clauses))
     .get();
 
-  const hiddenRow = getDb()
+  // Every counted row already meets REVIEW_WHERE's other clauses, so the card rows that pass it are
+  // exactly the ones with no loan link; the rest are hidden from the queue.
+  const inQueueRow = getDb()
     .select({ n: sql<number>`count(*)` })
     .from(transactions)
-    .where(
-      and(
-        ...clauses,
-        sql`exists (select 1 from ${loanPayments} where ${loanPayments.txnId} = ${transactions.id})`,
-      ),
-    )
+    .where(and(...clauses, REVIEW_WHERE))
     .get();
+  const hidden = Number(row?.count ?? 0) - Number(inQueueRow?.n ?? 0);
   const extraRow = getDb()
     .select({ n: sql<number>`count(*)` })
     .from(transactions)
     .where(and(...scoped, REVIEW_WHERE, UNCATEGORIZED_WHERE, gte(transactions.amountCents, 0)))
     .get();
-  const queueShowsSameRows = !isSelfScoped(viewer) && Number(hiddenRow?.n ?? 0) === 0 && Number(extraRow?.n ?? 0) === 0;
+  const queueShowsSameRows = !isSelfScoped(viewer) && hidden === 0 && Number(extraRow?.n ?? 0) === 0;
   return { totalCents: Number(row?.totalCents ?? 0), count: Number(row?.count ?? 0), queueShowsSameRows };
 }
 

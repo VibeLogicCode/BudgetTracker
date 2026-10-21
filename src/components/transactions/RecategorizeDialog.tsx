@@ -65,6 +65,11 @@ export function RecategorizeDialog({
   // Spec §2.4: only a row a rule or the guesser filed, and only for a viewer who may author rules.
   const offerChoice = canAuthorRules && (row.source === 'rule' || row.source === 'bayes');
   const filedBy = row.filedBy;
+  // An amount-bounded filing rule outranks a new exact rule, so the teach option would promise
+  // something that does not happen; with Uncategorized picked there is no category to teach.
+  const teachOffered = filedBy?.bounded !== true;
+  const teachDisabled = picked === null;
+  const effective: RuleChoice = choice === 'teach' && (teachDisabled || !teachOffered) ? 'keep' : choice;
   const currentLabel = options.find((o) => o.id === row.categoryId)?.label ?? 'its category';
   const teachHint =
     filedBy !== null && filedBy.matchType === 'exact' && filedBy.pattern === row.normalizedMerchant
@@ -84,30 +89,32 @@ export function RecategorizeDialog({
         action={action}
         onSubmit={() => {
           onClose();
-          if (offerChoice && choice === 'ask') onAlwaysAsk();
+          if (offerChoice && effective === 'ask') onAlwaysAsk();
         }}
         className="flex flex-col gap-4"
       >
         <input type="hidden" name="transactionId" value={row.id} />
-        {offerChoice && choice === 'teach' ? <input type="hidden" name="teach" value="1" /> : null}
+        {offerChoice && effective === 'teach' ? <input type="hidden" name="teach" value="1" /> : null}
         <CategoryCombobox name="categoryId" label="Category" options={options} value={picked} onChange={setPicked} />
         {offerChoice ? (
           <fieldset className="flex flex-col gap-2">
             <legend className="mb-1 text-sm font-medium text-ink">{`Future ${row.normalizedMerchant} rows`}</legend>
             <label className="flex items-start gap-2 text-sm">
-              <input type="radio" name="ruleChoice" value="keep" checked={choice === 'keep'} onChange={() => setChoice('keep')} className="mt-1" />
+              <input type="radio" name="ruleChoice" value="keep" checked={effective === 'keep'} onChange={() => setChoice('keep')} className="mt-1" />
               <span>Change this transaction only</span>
             </label>
-            <label className="flex items-start gap-2 text-sm">
-              <input type="radio" name="ruleChoice" value="teach" checked={choice === 'teach'} onChange={() => setChoice('teach')} className="mt-1" />
-              <span>
-                {`Also file ${row.normalizedMerchant} this way from now on`}
-                <span className="block text-xs text-muted">{teachHint}</span>
-              </span>
-            </label>
+            {teachOffered ? (
+              <label className="flex items-start gap-2 text-sm">
+                <input type="radio" name="ruleChoice" value="teach" checked={effective === 'teach'} disabled={teachDisabled} onChange={() => setChoice('teach')} className="mt-1" />
+                <span>
+                  {`Also file ${row.normalizedMerchant} this way from now on`}
+                  <span className="block text-xs text-muted">{teachHint}</span>
+                </span>
+              </label>
+            ) : null}
             {row.alwaysAsked ? null : (
               <label className="flex items-start gap-2 text-sm">
-                <input type="radio" name="ruleChoice" value="ask" checked={choice === 'ask'} onChange={() => setChoice('ask')} className="mt-1" />
+                <input type="radio" name="ruleChoice" value="ask" checked={effective === 'ask'} onChange={() => setChoice('ask')} className="mt-1" />
                 <span>
                   {`Always ask about ${row.normalizedMerchant} from now on`}
                   <span className="block text-xs text-muted">This transaction is filed as you pick; then you set the Always ask rule.</span>

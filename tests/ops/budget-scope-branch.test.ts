@@ -58,7 +58,10 @@ function stripComments(source: string): string {
  * shipped guards in this repo asserted an empty offender list with a broken detector; that is the
  * mistake this paragraph exists to not repeat.)
  */
-const ALLOWED_SCOPE_TERNARIES: Record<string, string> = {};
+const ALLOWED_SCOPE_TERNARIES: Record<string, string> = {
+  'src/app/(app)/transactions/transactions-client.tsx':
+    "Back to Budgets names the card the URL's person points at (household when the link carried no person); it is not the viewer's read scope.",
+};
 
 const SCOPE_TERNARY = /\?\s*(['"])(household|personal)\1\s*:\s*(['"])(household|personal)\3/g;
 

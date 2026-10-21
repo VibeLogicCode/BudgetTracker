@@ -4,12 +4,14 @@ import { headers } from 'next/headers';
 import { isSameOrigin, CROSS_ORIGIN_ERROR } from '@/lib/auth/csrf';
 import { requireUser } from '@/lib/auth/session';
 import { categoryTransactions, type BudgetScope, type CategoryTransactionRow } from '@/lib/budgets';
+import { isBounded } from '@/lib/categorize/amount-bounds';
 import { buildContext, categoryRuleThatFiled } from '@/lib/categorize/engine';
 import { alwaysAskRuleFor, listRules, type MatchType } from '@/lib/categorize/rules';
 import { isMonthKey } from '@/lib/dates';
 import { splitsForTransactions, type SplitRow } from '@/lib/splits';
 
-export interface FiledByRule { ruleId: number; pattern: string; matchType: MatchType }
+/** `bounded`: the rule has an amount window, so a new exact rule would not outrank it. */
+export interface FiledByRule { ruleId: number; pattern: string; matchType: MatchType; bounded: boolean }
 export interface CategoryPanelRow extends CategoryTransactionRow {
   /** Spec 2026-10-21 (fix from Budgets) §2.3. The category rule that filed the row, when one still stands behind it. */
   filedBy: FiledByRule | null;
@@ -78,10 +80,10 @@ export async function categoryTransactionsAction(input: {
     );
     return {
       ...row,
-      filedBy: rule ? { ruleId: rule.id, pattern: rule.pattern, matchType: rule.matchType } : null,
+      filedBy: rule ? { ruleId: rule.id, pattern: rule.pattern, matchType: rule.matchType, bounded: isBounded(rule) } : null,
       alwaysAsked: alwaysAskRuleFor(row.normalizedMerchant, askRules) !== null,
     };
   });
-  const splitIds = rows.filter((row) => row.splitId !== null).map((row) => row.id);
+  const splitIds = [...new Set(rows.filter((row) => row.splitId !== null).map((row) => row.id))];
   return { rows: panelRows, splits: Object.fromEntries(splitsForTransactions(splitIds)) };
 }

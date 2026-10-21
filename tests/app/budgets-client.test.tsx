@@ -1347,7 +1347,7 @@ function panelRow(over: Partial<CategoryPanelRow> = {}): CategoryPanelRow {
     parentAmountCents: -4217,
     source: 'rule',
     splitId: null,
-    filedBy: { ruleId: 9, pattern: 'PHONEMART', matchType: 'contains' },
+    filedBy: { ruleId: 9, pattern: 'PHONEMART', matchType: 'contains', bounded: false },
     alwaysAsked: false,
     ...over,
   };

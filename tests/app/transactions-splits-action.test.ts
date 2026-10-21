@@ -113,7 +113,7 @@ describe('saveSplitsAction', () => {
     );
     expect(result.error).toBeUndefined();
     expect(vi.mocked(revalidatePath).mock.calls.map((call) => call[0])).toEqual(
-      expect.arrayContaining(['/budgets', '/transactions', '/dashboard', '/reports']),
+      expect.arrayContaining(['/budgets', '/transactions', '/dashboard', '/reports', '/review']),
     );
   });
 
