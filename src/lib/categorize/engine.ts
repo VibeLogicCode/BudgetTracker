@@ -582,6 +582,18 @@ function withArchivedRulesVisible(ctx: CategorizeContext): CategorizeContext {
   return visible;
 }
 
+/** Spec 2026-10-21 (fix from Budgets) §2.3. The category rule that filed a row, by the one definition the Rules page's Affects column uses (attributedRuleId), or null: not a rule-filed row, or no current rule accounts for its category (edited, deleted or shadowed since). Never names a rule it cannot stand behind. */
+export function categoryRuleThatFiled(
+  row: { normalizedMerchant: string; amountCents: number | null; categoryId: number | null; source: 'rule' | 'bayes' | 'manual' | 'none' },
+  ctx: CategorizeContext = buildContext(),
+): MerchantRuleRecord | null {
+  if (row.source !== 'rule' || row.categoryId === null) return null;
+  const id = attributedRuleId(row.normalizedMerchant, row.amountCents, 'category', ctx, row.categoryId);
+  if (id === null) return null;
+  const rule = ctx.rules.find((r) => r.id === id);
+  return rule && rule.categoryId === row.categoryId ? rule : null;
+}
+
 /**
  * 2026-09-13 (migration 0024). Does this rule list contain anything whose verdict can depend on
  * the amount? Computed ONCE per context by the callers below and used to decide how much they

@@ -31,7 +31,7 @@ vi.mock('@/app/(app)/budgets/actions', () => ({
 }));
 
 vi.mock('@/app/(app)/budgets/category-transactions-action', () => ({
-  categoryTransactionsAction: vi.fn(async () => ({ rows: [] })),
+  categoryTransactionsAction: vi.fn(async () => ({ rows: [], splits: {} })),
 }));
 
 // F-06 (2026-09-02 review): same defensive reasoning as category-transactions-action.ts above --

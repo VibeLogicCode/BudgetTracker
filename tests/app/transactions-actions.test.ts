@@ -2848,3 +2848,43 @@ describe('teaching paths on an Always ask row', () => {
     expect(await setCategoryAction({}, formData({ transactionId: String(id), categoryId: String(categoryIdByName(db, 'Groceries')) }))).toEqual({ message: 'Category updated.' });
   });
 });
+
+/** Spec 2026-10-21 (fix from Budgets) §2.5: a card-row fix changes the figures Budgets, Dashboard and Reports show. */
+describe('card-row fixes revalidate every page whose figures they change', () => {
+  const FIGURE_PAGES = ['/budgets', '/transactions', '/dashboard', '/reports'];
+  const revalidated = () => vi.mocked(revalidatePath).mock.calls.map((call) => call[0]);
+
+  it('a plain category change', async () => {
+    const { db, addTxn } = setup();
+    const txnId = addTxn('MAPLE GROCER', -4217);
+    vi.mocked(revalidatePath).mockClear();
+    await setCategoryAction({}, formData({ transactionId: String(txnId), categoryId: String(categoryIdByName(db, 'Groceries')) }));
+    expect(revalidated()).toEqual(expect.arrayContaining(FIGURE_PAGES));
+  });
+
+  it('a category change that teaches the merchant', async () => {
+    const { db, addTxn } = setup();
+    const txnId = addTxn('MAPLE GROCER', -4217);
+    vi.mocked(revalidatePath).mockClear();
+    await setCategoryAction({}, formData({ transactionId: String(txnId), categoryId: String(categoryIdByName(db, 'Groceries')), teach: '1' }));
+    expect(revalidated()).toEqual(expect.arrayContaining(FIGURE_PAGES));
+  });
+
+  it('saving an Always ask rule', async () => {
+    setup();
+    vi.mocked(revalidatePath).mockClear();
+    const result = await setAlwaysAskAction({}, formData({ pattern: 'GIFTS R US', matchType: 'contains' }));
+    expect('error' in result).toBe(false);
+    expect(revalidated()).toEqual(expect.arrayContaining(FIGURE_PAGES));
+  });
+
+  it('sending rows back to review', async () => {
+    const { userId } = setup();
+    const saved = setAlwaysAskRule({ pattern: 'GIFTS R US', matchType: 'contains', userId, actorRole: 'admin' });
+    if (!saved.ok) throw new Error('refused');
+    vi.mocked(revalidatePath).mockClear();
+    const result = await sendBackToReviewAction({}, formData({ ruleId: String(saved.ruleId) }));
+    expect('error' in result).toBe(false);
+    expect(revalidated()).toEqual(expect.arrayContaining(FIGURE_PAGES));
+  });
+});

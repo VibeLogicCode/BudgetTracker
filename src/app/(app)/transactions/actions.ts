@@ -297,6 +297,10 @@ export async function setCategoryAction(_prev: ActionState, formData: FormData):
 
   revalidatePath('/transactions');
   revalidatePath('/review');
+  // Spec 2026-10-21 (fix from Budgets) §2.5: a card-row fix changes the figures Budgets, Dashboard and Reports show.
+  revalidatePath('/budgets');
+  revalidatePath('/dashboard');
+  revalidatePath('/reports');
   const taught = raw !== '' && formData.get('teach') === '1';
   return {
     message: `Category updated.${raw === '' ? '' : archivedNoRuleNote(Number(raw), taught)}${alwaysAskNoRuleNote([pickedRow.normalizedMerchant], taught)}`,
@@ -1295,6 +1299,10 @@ export async function saveSplitsAction(_prev: ActionState, formData: FormData): 
 
   revalidatePath('/transactions');
   revalidatePath('/review');
+  // Spec 2026-10-21 (fix from Budgets) §2.5: a card-row fix changes the figures Budgets, Dashboard and Reports show.
+  revalidatePath('/budgets');
+  revalidatePath('/dashboard');
+  revalidatePath('/reports');
   return { message: parts.length === 0 ? 'Split removed.' : 'Split saved.' };
 }
 
@@ -1535,6 +1543,10 @@ export async function setAlwaysAskAction(_prev: AlwaysAskState, formData: FormDa
 
   revalidatePath('/transactions');
   revalidatePath('/settings/merchant-rules');
+  // Spec 2026-10-21 (fix from Budgets) §2.5: a card-row fix changes the figures Budgets, Dashboard and Reports show.
+  revalidatePath('/budgets');
+  revalidatePath('/dashboard');
+  revalidatePath('/reports');
   return {
     message: `Rows matching "${pattern.toUpperCase()}" will always be asked about.`,
     ruleId: result.ruleId,
@@ -1560,8 +1572,10 @@ export async function sendBackToReviewAction(_prev: ActionState, formData: FormD
 
   const { sent } = sendAlwaysAskRowsToReview({ ruleId: rule.id });
   revalidatePath('/transactions');
+  // Spec 2026-10-21 (fix from Budgets) §2.5: a card-row fix changes the figures Budgets, Dashboard and Reports show.
   revalidatePath('/budgets');
   revalidatePath('/dashboard');
+  revalidatePath('/reports');
   // v1.56.1: the Rules page offers this too, and its count goes down to what is left.
   revalidatePath('/settings/merchant-rules');
   return { message: `Sent ${sent} ${rowWord(sent, 'transaction')} back to review.` };

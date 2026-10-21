@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useEffect, useRef, useState } from 'react';
+import { createContext, useActionState, useEffect, useRef, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { AutoSaveCheckbox, AutoSaveTextInput, useAutoSave } from '@/components/ui/AutoSave';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
@@ -19,6 +19,7 @@ import { monthEnd, monthLabel, monthStart } from '@/lib/dates';
 import { formatCents } from '@/lib/money';
 import type { SinkingFund } from '@/lib/bills';
 import type { BudgetRow, BudgetScope, CategoryTransactionRow, UncategorizedSpend } from '@/lib/budgets';
+import type { CategoryLike } from '@/lib/category-order';
 import { transactionsHref } from '@/lib/transaction-links';
 import { UncategorizedSpendCard } from '@/components/UncategorizedSpendCard';
 import { MIN_HISTORY_MONTHS } from '@/lib/predict/constants';
@@ -1416,6 +1417,17 @@ function PersonalCard({
   );
 }
 
+/**
+ * Spec 2026-10-21 (fix from Budgets) §2.3. What a card's row panel needs to offer a fix: the
+ * category list for the picker, and who may author rules or administer. Provided by BudgetsClient
+ * around the whole page; the panel reads it.
+ */
+const BudgetsPageContext = createContext<{ categories: CategoryLike[]; canAuthorRules: boolean; isAdmin: boolean }>({
+  categories: [],
+  canAuthorRules: false,
+  isAdmin: false,
+});
+
 export function BudgetsClient({
   month,
   currentUserId,
@@ -1429,6 +1441,7 @@ export function BudgetsClient({
   predictions = null,
   householdSinkingFunds = {},
   savingsProgress = null,
+  categories = [],
 }: {
   month: string;
   currentUserId: number;
@@ -1481,6 +1494,8 @@ export function BudgetsClient({
    *  viewer has no household scope to set a target for at all -- same pairing as
    *  householdTotals above). */
   savingsProgress?: SavingsProgress | null;
+  /** Spec 2026-10-21 (fix from Budgets) §2.3: live categories, for a row's category picker. */
+  categories?: CategoryLike[];
 }) {
   const [copyState, dispatchCopy] = useActionState(copyPreviousMonthAction, initial);
   const [applyState, dispatchApply] = useActionState(applySuggestionAction, initial);
@@ -1562,6 +1577,7 @@ export function BudgetsClient({
   const personalGridVisible = (userId: number): boolean => household === null || selectedPersonId === userId;
 
   return (
+    <BudgetsPageContext.Provider value={{ categories, canAuthorRules: household !== null, isAdmin: currentUserIsAdmin }}>
     <div className="flex flex-col gap-4 sm:gap-5">
       {/* Ruling U1 (v1.18.0): no eyebrow. MonthNav in `actions` already names the month, in the
           control that changes it -- an eyebrow beside it made the header state one fact twice,
@@ -1797,5 +1813,6 @@ export function BudgetsClient({
         change them again.
       </p>
     </div>
+    </BudgetsPageContext.Provider>
   );
 }

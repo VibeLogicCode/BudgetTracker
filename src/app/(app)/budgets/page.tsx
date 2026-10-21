@@ -3,6 +3,7 @@ import { isSelfScoped } from '@/lib/auth/viewer';
 import { listAttributablePeople } from '@/lib/auth/users';
 import { sinkingFundsFor } from '@/lib/bills';
 import { budgetProgress, budgetTotals, rolloverStartMonth, uncategorizedSpend, type BudgetRow, type BudgetScope } from '@/lib/budgets';
+import { listCategories } from '@/lib/categories';
 import { currentMonth, isMonthKey, monthEnd, todayIso } from '@/lib/dates';
 import { readEnv } from '@/lib/env';
 import { flattenBudgetRows } from '@/lib/notify/evaluate/pace';
@@ -196,6 +197,7 @@ export default async function BudgetsPage({
       // is serialized to a plain object keyed by category id, per the comment above.
       householdSinkingFunds={householdSinkingFunds}
       savingsProgress={savings}
+      categories={listCategories()}
     />
   );
 }

@@ -3,6 +3,9 @@ import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 import { budgetProgress, resolveBudget, rolloverStartMonth, setRollover, upsertBudget } from '@/lib/budgets';
 import { nowIso } from '@/lib/clock';
+import { runEngine } from '@/lib/categorize/engine';
+import { setAlwaysAskRule, upsertRuleFromCorrection } from '@/lib/categorize/rules';
+import { setTransactionSplits } from '@/lib/splits';
 import { setUserVisibility } from '@/lib/auth/users';
 
 let currentUser: {
@@ -78,11 +81,13 @@ function setup() {
 function seedWithTransactions() {
   const base = setup();
   const joint = insertTestAccount(base.db, { name: 'Joint Chequing' });
-  const spend = (over: { attributedUserId: number | null; amountCents: number; merchant: string }) => {
-    base.db.run(sql`
+  const spend = (over: { attributedUserId: number | null; amountCents: number; merchant: string; categoryId?: number | null; source?: string }) => {
+    const categoryId = over.categoryId === undefined ? base.groceries : over.categoryId;
+    return base.db.get<{ id: number }>(sql`
       insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, category_id, categorization_source, is_transfer, attributed_user_id, created_by, created_at, updated_at)
-      values (${joint}, '2026-03-10', ${over.merchant}, ${over.merchant}, ${over.amountCents}, ${base.groceries}, 'manual', 0, ${over.attributedUserId}, ${base.alice}, ${nowIso()}, ${nowIso()})
-    `);
+      values (${joint}, '2026-03-10', ${over.merchant}, ${over.merchant}, ${over.amountCents}, ${categoryId}, ${over.source ?? 'manual'}, 0, ${over.attributedUserId}, ${base.alice}, ${nowIso()}, ${nowIso()})
+      returning id
+    `).id;
   };
   return { ...base, joint, spend };
 }
@@ -512,6 +517,26 @@ describe('categoryTransactionsAction — task-3 (S-01): a self-scoped member cou
     const household = await categoryTransactionsAction({ scope: 'household', userId: null, month: '2026-03', categoryId: groceries });
     if (!('rows' in household)) throw new Error(`expected rows, got error: ${household.error}`);
     expect(household.rows.map((r) => r.merchant)).toEqual(['BOB ELECTRONICS']);
+  });
+
+  /** Spec 2026-10-21 (fix from Budgets) §2.3. */
+  it("names the rule that filed a row, flags an Always ask merchant, and returns a split row's parts", async () => {
+    const { db, alice, groceries, spend } = seedWithTransactions();
+    const ruled = spend({ attributedUserId: null, amountCents: -4217, merchant: 'PHONEMART 884', categoryId: null, source: 'none' });
+    const asked = spend({ attributedUserId: null, amountCents: -1500, merchant: 'GIFTS R US 12' });
+    const split = spend({ attributedUserId: null, amountCents: -10000, merchant: 'MAPLE GROCER' });
+    const rule = upsertRuleFromCorrection({ pattern: 'PHONEMART', matchType: 'contains', ruleKind: 'category', categoryId: groceries, createdBy: alice, actorRole: 'admin' });
+    if (!rule.ok) throw new Error('unexpected refusal');
+    runEngine([ruled]);
+    setAlwaysAskRule({ pattern: 'GIFTS R US', matchType: 'contains', userId: alice, actorRole: 'admin' });
+    setTransactionSplits({ txnId: split, parts: [{ categoryId: groceries, amountCents: -6000 }, { categoryId: categoryIdByName(db, 'Coffee'), amountCents: -4000 }], userId: alice });
+    const result = await categoryTransactionsAction({ scope: 'household', userId: null, month: '2026-03', categoryId: groceries });
+    if ('error' in result) throw new Error(result.error);
+    const byId = new Map(result.rows.map((row) => [row.id, row]));
+    expect(byId.get(ruled)?.filedBy).toEqual({ ruleId: rule.ruleId, pattern: 'PHONEMART', matchType: 'contains' });
+    expect(byId.get(asked)).toMatchObject({ filedBy: null, alwaysAsked: true });
+    expect(byId.get(split)).toMatchObject({ filedBy: null, splitId: expect.any(Number), parentAmountCents: -10000 });
+    expect(result.splits[split]?.map((part) => part.amountCents)).toEqual([-6000, -4000]);
   });
 });
 

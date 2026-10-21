@@ -25,6 +25,7 @@ vi.mock('next/cache', () => ({
   revalidatePath: vi.fn(),
 }));
 
+import { revalidatePath } from 'next/cache';
 import { CROSS_ORIGIN_ERROR } from '@/lib/auth/csrf';
 import { saveSplitsAction } from '@/app/(app)/transactions/actions';
 
@@ -93,6 +94,27 @@ describe('saveSplitsAction', () => {
       source: string;
     };
     expect(parent.source).toBe('manual');
+  });
+
+  /** Spec 2026-10-21 (fix from Budgets) §2.5: a card-row fix changes the figures Budgets, Dashboard and Reports show. */
+  it('revalidates every page whose figures a split changes', async () => {
+    const { db } = setup();
+    const id = addTxn(addAccount(null), -5000);
+    vi.mocked(revalidatePath).mockClear();
+    const result = await saveSplitsAction(
+      {},
+      formData({
+        txnId: String(id),
+        parts: JSON.stringify([
+          { categoryId: categoryIdByName(db, 'Groceries'), amountCents: -3000 },
+          { categoryId: categoryIdByName(db, 'Coffee'), amountCents: -2000 },
+        ]),
+      }),
+    );
+    expect(result.error).toBeUndefined();
+    expect(vi.mocked(revalidatePath).mock.calls.map((call) => call[0])).toEqual(
+      expect.arrayContaining(['/budgets', '/transactions', '/dashboard', '/reports']),
+    );
   });
 
   it('an empty parts array clears an existing split', async () => {

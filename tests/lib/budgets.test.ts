@@ -267,6 +267,24 @@ describe('categoryTransactions — the Lane 1 breakdown drill-down', () => {
     expect(categoryTransactions('2026-03', groceries, {}, HOUSEHOLD_VIEWER).map((r) => r.amountCents)).toEqual([-6000]);
     expect(categoryTransactions('2026-03', restaurants, {}, HOUSEHOLD_VIEWER).map((r) => r.amountCents)).toEqual([-4000]);
   });
+
+  /** Spec 2026-10-21 (fix from Budgets) §2.3: what the card needs to offer a fix and name the rule. */
+  it('carries the merchant text, the source, the whole transaction amount and the split part id', () => {
+    const { db, alice, spend } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const coffee = categoryIdByName(db, 'Coffee');
+    const plain = spend({ categoryId: groceries, amountCents: -4217, date: '2026-03-12' });
+    const split = spend({ categoryId: groceries, amountCents: -10000, date: '2026-03-05' });
+    // spend() stamps 'manual'; a rule-filed row is what the card calls out.
+    db.run(sql`update transactions set categorization_source = 'rule' where id = ${plain}`);
+    setTransactionSplits({ txnId: split, parts: [{ categoryId: groceries, amountCents: -6000 }, { categoryId: coffee, amountCents: -4000 }], userId: alice });
+    const rows = categoryTransactions('2026-03', groceries, {}, HOUSEHOLD_VIEWER);
+    expect(rows.map((r) => [r.id, r.amountCents, r.parentAmountCents, r.source, r.splitId === null])).toEqual([
+      [plain, -4217, -4217, 'rule', true],
+      [split, -6000, -10000, 'manual', false],
+    ]);
+    expect(rows[0].normalizedMerchant).toBe('X');
+  });
 });
 
 /** Spec 2026-10-21 §2.2. What Budgets says is not categorized yet: money out with no category. */

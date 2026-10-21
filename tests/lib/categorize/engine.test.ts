@@ -9,6 +9,7 @@ import {
   applyRenameRules,
   applyRuleNow,
   buildContext,
+  categoryRuleThatFiled,
   categorizeTransaction,
   clearCategory,
   clearRuleFromTransactions,
@@ -42,6 +43,7 @@ import { deleteRule, exactRuleOwner, listRules, matchRule, upsertRuleFromCorrect
 import { classify, train } from '@/lib/categorize/bayes';
 import { normalizeMerchant, tokenize } from '@/lib/categorize/normalize';
 import { nowIso } from '@/lib/clock';
+import { archiveCategory } from '@/lib/categories';
 import { assignTransactionToLoan, unassignTransactionFromLoan } from '@/lib/loans';
 import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
@@ -2371,5 +2373,60 @@ describe('E5: the rename pass resolves each merchant once', () => {
 
   it('still resolves every distinct merchant', () => {
     expect(ruleListReads(200, 40)).toBe(40);
+  });
+});
+
+describe('categoryRuleThatFiled (spec 2026-10-21, fix from Budgets §2.3)', () => {
+  const asRow = (sqlite: TestDb['sqlite'], id: number) => {
+    const r = readTxn(sqlite, id);
+    return { normalizedMerchant: r.normalized_merchant, amountCents: -4217, categoryId: r.category_id, source: r.categorization_source as 'rule' | 'bayes' | 'manual' | 'none' };
+  };
+
+  it('names the contains rule that filed the row, and the exact rule when that is the winner', () => {
+    const { db, sqlite, userId, add } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const groceries = categoryIdByName(db, 'Groceries');
+    const id = add('PHONEMART 884', -4217);
+    const contains = upsertRuleFromCorrection({ pattern: 'PHONEMART', matchType: 'contains', ruleKind: 'category', categoryId: coffee, createdBy: userId, actorRole: 'admin' });
+    if (!contains.ok) throw new Error('unexpected refusal');
+    runEngine([id]);
+    expect(categoryRuleThatFiled(asRow(sqlite, id))?.id).toBe(contains.ruleId);
+
+    const merchant = readTxn(sqlite, id).normalized_merchant;
+    const exact = upsertRuleFromCorrection({ pattern: merchant, matchType: 'exact', ruleKind: 'category', categoryId: groceries, createdBy: userId, actorRole: 'admin' });
+    if (!exact.ok) throw new Error('unexpected refusal');
+    expect(categoryRuleThatFiled({ ...asRow(sqlite, id), categoryId: groceries })?.id).toBe(exact.ruleId);
+  });
+
+  it('says nothing for a guess, a hand pick, or a rule-filed row whose rule has since changed', () => {
+    const { db, sqlite, userId, add } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const groceries = categoryIdByName(db, 'Groceries');
+    const id = add('PHONEMART 884', -4217);
+    const rule = upsertRuleFromCorrection({ pattern: 'PHONEMART', matchType: 'contains', ruleKind: 'category', categoryId: coffee, createdBy: userId, actorRole: 'admin' });
+    if (!rule.ok) throw new Error('unexpected refusal');
+    runEngine([id]);
+    const filed = asRow(sqlite, id);
+    expect(categoryRuleThatFiled(filed)?.id).toBe(rule.ruleId);
+    expect(categoryRuleThatFiled({ ...filed, source: 'bayes' })).toBeNull();
+    expect(categoryRuleThatFiled({ ...filed, source: 'manual' })).toBeNull();
+
+    const retarget = upsertRuleFromCorrection({ pattern: 'PHONEMART', matchType: 'contains', ruleKind: 'category', categoryId: groceries, createdBy: userId, actorRole: 'admin' });
+    if (!retarget.ok) throw new Error('unexpected refusal');
+    expect(categoryRuleThatFiled(filed)).toBeNull();
+
+    deleteRule(retarget.ruleId);
+    expect(categoryRuleThatFiled(filed)).toBeNull();
+  });
+
+  it('credits a rule whose category was archived after it filed the row', () => {
+    const { db, sqlite, userId, add } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const id = add('PHONEMART 884', -4217);
+    const rule = upsertRuleFromCorrection({ pattern: 'PHONEMART', matchType: 'contains', ruleKind: 'category', categoryId: coffee, createdBy: userId, actorRole: 'admin' });
+    if (!rule.ok) throw new Error('unexpected refusal');
+    runEngine([id]);
+    archiveCategory(coffee, true);
+    expect(categoryRuleThatFiled(asRow(sqlite, id))?.id).toBe(rule.ruleId);
   });
 });

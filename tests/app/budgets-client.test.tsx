@@ -25,7 +25,7 @@ vi.mock('@/app/(app)/budgets/actions', () => ({
 // and the real database the moment a test DID click through -- mocked here so a future test that
 // does can rely on a predictable, empty result rather than a real query.
 vi.mock('@/app/(app)/budgets/category-transactions-action', () => ({
-  categoryTransactionsAction: vi.fn(async () => ({ rows: [] })),
+  categoryTransactionsAction: vi.fn(async () => ({ rows: [], splits: {} })),
 }));
 
 // F-06 (2026-09-02 review): the six-month history strip's own fetch-on-open module, mocked the

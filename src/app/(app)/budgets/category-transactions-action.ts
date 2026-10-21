@@ -4,7 +4,19 @@ import { headers } from 'next/headers';
 import { isSameOrigin, CROSS_ORIGIN_ERROR } from '@/lib/auth/csrf';
 import { requireUser } from '@/lib/auth/session';
 import { categoryTransactions, type BudgetScope, type CategoryTransactionRow } from '@/lib/budgets';
+import { buildContext, categoryRuleThatFiled } from '@/lib/categorize/engine';
+import { alwaysAskRuleFor, listRules, type MatchType } from '@/lib/categorize/rules';
 import { isMonthKey } from '@/lib/dates';
+import { splitsForTransactions, type SplitRow } from '@/lib/splits';
+
+export interface FiledByRule { ruleId: number; pattern: string; matchType: MatchType }
+export interface CategoryPanelRow extends CategoryTransactionRow {
+  /** Spec 2026-10-21 (fix from Budgets) §2.3. The category rule that filed the row, when one still stands behind it. */
+  filedBy: FiledByRule | null;
+  /** An enabled Always ask rule already covers the merchant (alwaysAskRuleFor). */
+  alwaysAsked: boolean;
+}
+export interface CategoryPanelResult { rows: CategoryPanelRow[]; splits: Record<number, SplitRow[]> }
 
 /**
  * Backs the Lane 1 (2026-08-30 plan) "View breakdown" drill-down: a card names a category's
@@ -39,7 +51,7 @@ export async function categoryTransactionsAction(input: {
   userId: number | null;
   month: string;
   categoryId: number;
-}): Promise<{ rows: CategoryTransactionRow[] } | { error: string }> {
+}): Promise<CategoryPanelResult | { error: string }> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
   const user = await requireUser();
 
@@ -57,5 +69,19 @@ export async function categoryTransactionsAction(input: {
     },
     user,
   );
-  return { rows };
+  const ctx = buildContext();
+  const askRules = listRules('always_ask');
+  const panelRows: CategoryPanelRow[] = rows.map((row) => {
+    const rule = categoryRuleThatFiled(
+      { normalizedMerchant: row.normalizedMerchant, amountCents: row.parentAmountCents, categoryId: input.categoryId, source: row.source },
+      ctx,
+    );
+    return {
+      ...row,
+      filedBy: rule ? { ruleId: rule.id, pattern: rule.pattern, matchType: rule.matchType } : null,
+      alwaysAsked: alwaysAskRuleFor(row.normalizedMerchant, askRules) !== null,
+    };
+  });
+  const splitIds = rows.filter((row) => row.splitId !== null).map((row) => row.id);
+  return { rows: panelRows, splits: Object.fromEntries(splitsForTransactions(splitIds)) };
 }

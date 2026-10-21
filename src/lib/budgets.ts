@@ -217,6 +217,14 @@ export interface CategoryTransactionRow {
   date: string;
   merchant: string;
   amountCents: number;
+  /** The text rules match on: names the filing rule and prefills Always ask. */
+  normalizedMerchant: string;
+  /** The transaction's own source; 'rule' is what the card calls out. A split part's parent is always 'manual'. */
+  source: 'rule' | 'bayes' | 'manual' | 'none';
+  /** transaction_splits.id for a part, null for an unsplit row. A part's parts are its categorization: the card offers Edit split, not Change category. */
+  splitId: number | null;
+  /** The whole transaction's amount, what a split divides. Equals amountCents on an unsplit row. */
+  parentAmountCents: number;
 }
 
 /**
@@ -279,6 +287,10 @@ export function categoryTransactions(
       date: transactions.date,
       merchant: sql<string>`coalesce(${transactions.displayDescription}, ${transactions.rawDescription})`,
       amountCents: EFFECTIVE_AMOUNT,
+      normalizedMerchant: transactions.normalizedMerchant,
+      source: transactions.categorizationSource,
+      splitId: transactionSplits.id,
+      parentAmountCents: transactions.amountCents,
     })
     .from(transactions)
     .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
