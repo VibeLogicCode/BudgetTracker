@@ -35,8 +35,21 @@ export interface PdfTextItem {
  */
 export function linesFromItems(items: readonly PdfTextItem[]): string[] {
   // seq is the content-stream index, taken before anything is dropped or reordered.
-  const kept = items.map((item, seq) => ({ ...item, seq })).filter((item) => item.str.trim().length > 0);
+  const all = items.map((item, seq) => ({ ...item, seq }));
+  const kept = all.filter((item) => item.str.trim().length > 0);
   if (kept.length === 0) return [];
+  // An end-of-line mark on any item, blank or not, ends the line before the next non-blank item in stream order.
+  const breakBefore = new Set<number>();
+  let nextKeptSeq: number | undefined;
+  for (let i = all.length - 1; i >= 0; i -= 1) {
+    if (all[i].hasEOL && nextKeptSeq !== undefined) breakBefore.add(nextKeptSeq);
+    if (all[i].str.trim().length > 0) nextKeptSeq = all[i].seq;
+  }
+  // Stream predecessor among kept items, so the break only applies where the assembly keeps that order.
+  const keptPredecessor = new Map<number, number>();
+  kept.forEach((item, index) => {
+    if (index > 0) keptPredecessor.set(item.seq, kept[index - 1].seq);
+  });
   const heights = kept.map((item) => item.height).filter((h) => h > 0).sort((a, b) => a - b);
   const medianHeight = heights.length === 0 ? 10 : heights[Math.floor(heights.length / 2)];
   const tolerance = medianHeight * PDF_LINE_TOLERANCE_RATIO;
@@ -47,7 +60,7 @@ export function linesFromItems(items: readonly PdfTextItem[]): string[] {
   for (const item of ordered) {
     const current = lines[lines.length - 1];
     // pdfjs sets hasEOL in stream order, so it ends a line only before the item the stream wrote next.
-    const forceBreak = prev !== undefined && prev.hasEOL && item.seq === prev.seq + 1;
+    const forceBreak = prev !== undefined && breakBefore.has(item.seq) && keptPredecessor.get(item.seq) === prev.seq;
     if (!forceBreak && current !== undefined && Math.abs(item.y - current.y) <= tolerance) current.items.push(item);
     else lines.push({ y: item.y, items: [item] });
     prev = item;

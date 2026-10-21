@@ -153,6 +153,27 @@ describe('linesFromItems (pure)', () => {
     ).toEqual(['A', 'B']);
   });
 
+  it('ends the line at an empty item with hasEOL, in stream order', () => {
+    expect(linesFromItems([
+      { str: 'A', x: 0, y: 100, height: 10, hasEOL: false },
+      { str: '', x: 10, y: 100, height: 10, hasEOL: true },
+      { str: 'B', x: 50, y: 100, height: 10, hasEOL: false },
+    ])).toEqual(['A', 'B']);
+  });
+  it('an empty item without hasEOL does not split a line', () => {
+    expect(linesFromItems([
+      { str: 'A', x: 0, y: 100, height: 10, hasEOL: false },
+      { str: '', x: 10, y: 100, height: 10, hasEOL: false },
+      { str: 'B', x: 50, y: 100, height: 10, hasEOL: false },
+    ])).toEqual(['A B']);
+  });
+  it('an empty end-of-line item at the end adds no blank line', () => {
+    expect(linesFromItems([
+      { str: 'A', x: 0, y: 100, height: 10, hasEOL: false },
+      { str: '', x: 10, y: 100, height: 10, hasEOL: true },
+    ])).toEqual(['A']);
+  });
+
   /** Baselines that drift by less than the tolerance each step must not make the result depend on input order. */
   it('gives the same lines whatever order drifting items arrive in', () => {
     const a = { str: 'A', x: 0, y: 100, height: 10, hasEOL: false };

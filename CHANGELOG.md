@@ -46,6 +46,7 @@ All notable changes to Budget Tracker are recorded here.
 - **Recurring amounts follow a price rise.** Coming up's Expected amount, the recurring charges page and the Insights summary use the new price once a rise is found, otherwise the median of the last three charges.
 - **An item only tracks a merchant whose name contains its words.** An item named Phone no longer claims a shop called PHONEMART; Riverside Water still matches RIVERSIDE WATER UTIL.
 - **Mark recurring on a selection skips merchants already marked.** A member no longer gets a refusal because another member had already marked one of the merchants, and the message counts only the merchants that changed.
+- **An e-bill PDF keeps its line breaks** where the file marks the end of a line with an empty piece of text.
 
 ## [1.55.4] - 2026-10-20
 
