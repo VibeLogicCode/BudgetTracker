@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, isNull, lt, lte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, isNull, lte, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { budgetRollover, budgets, transactions, transactionSplits } from '@/db/schema';
 import { ownerScope, type Viewer } from '@/lib/auth/viewer';
@@ -8,7 +8,7 @@ import { nowIso } from '@/lib/clock';
 import { addMonths, isMonthKey, monthEnd, monthRange, monthStart } from '@/lib/dates';
 import { netSpentCents, pctOf } from '@/lib/money';
 import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY } from '@/lib/splits';
-import { SPEND_ROW_WHERE } from '@/lib/spend-where';
+import { SPEND_ROW_WHERE, SPENDING_OUT_WHERE } from '@/lib/spend-where';
 
 export type BudgetScope = 'household' | 'personal';
 
@@ -300,7 +300,14 @@ export interface UncategorizedSpend {
  *
  * Money OUT only (decision 9): with no category, a refund cannot be told from income, so counting
  * money in would net a deposit against real spending. Everything else that is not spending
- * (transfers, loan principal) is left out by SPEND_ROW_WHERE, as in categorySpend.
+ * (transfers, loan principal) is left out by SPEND_ROW_WHERE, as in categorySpend; SPENDING_OUT_WHERE
+ * is the two together.
+ *
+ * v1.56.1: a repayment on a loan the household owes stays counted even though the review queue
+ * hides every loan-linked row (REVIEW_WHERE). It is spending (MUST-13.2), and with no category it is
+ * in no category's figure, so leaving it out would hide real money from the page. The Categorize
+ * link therefore opens Transactions with this same filter (`category=uncategorized&spending=1`),
+ * not the queue, so the count and the rows it opens are one set.
  *
  * `opts` answers "whose card is this" and `viewer` answers "who is asking"; the viewer's owner
  * scope is appended after the person clause for the reason categoryTransactions gives. One query
@@ -318,9 +325,8 @@ export function uncategorizedSpend(
   const clauses = [
     gte(transactions.date, monthStart(month)),
     lte(transactions.date, monthEnd(month)),
-    ...SPEND_ROW_WHERE,
+    ...SPENDING_OUT_WHERE,
     UNCATEGORIZED_WHERE,
-    lt(transactions.amountCents, 0),
   ];
   if (opts.scope !== 'household' && opts.attributedUserId !== null) {
     clauses.push(eq(transactions.attributedUserId, opts.attributedUserId));

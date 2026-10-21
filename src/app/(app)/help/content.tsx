@@ -340,9 +340,9 @@ export const HELP_SECTIONS: HelpSection[] = [
         <P>
           Spending with no category is in no category&rsquo;s figure, so a month with rows still to sort can
           look further under budget than it is. When there is some, the first card, <B>Not categorized
-          yet</B>, says how much was spent and on how many transactions, and <B>Categorize</B> opens them in
-          review for that month. The household line at the top says the same amount. Money coming in with no
-          category is not counted there.
+          yet</B>, says how much was spent and on how many transactions, and <B>Categorize</B> lists exactly
+          those transactions for that month, including a loan payment that still has no category. The household
+          line at the top says the same amount. Money coming in with no category is not counted there.
         </P>
         <P>
           Once there are three full calendar months of history, each category can also show a

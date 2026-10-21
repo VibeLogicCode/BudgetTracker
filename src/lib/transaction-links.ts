@@ -85,11 +85,13 @@ export type TransactionsLinkTarget =
    */
   | { kind: 'import'; importId: number }
   /**
-   * Spec 2026-10-21 §2.2: Budgets' Categorize link. The review queue's Uncategorized tab for a
-   * household viewer; and, because the transactions page ignores `review=1` for a self-scoped
-   * viewer, the plain list narrowed to uncategorized non-transfer rows for one.
+   * Spec 2026-10-21 §2.2: Budgets' Categorize link. v1.56.1: the transactions list narrowed to
+   * uncategorized money-out spending (`category=uncategorized&spending=1`), which is the set the Not
+   * categorized yet card counts. Not the review queue: REVIEW_WHERE hides every loan-linked row, and
+   * a repayment on a loan the household owes is spending the card rightly counts (uncategorizedSpend's
+   * docblock, src/lib/budgets.ts). The same for every viewer, so a self viewer is no special case.
    */
-  | { kind: 'uncategorized-queue' };
+  | { kind: 'uncategorized-spending' };
 
 /** rangeParams() for a preset (one definition of "a range as query parameters", MUST-11.8), and
  *  the same `custom` shape it produces for a card carrying its own two dates. */
@@ -119,11 +121,9 @@ export function transactionsHref(scope: TransactionsLinkScope, target: Transacti
     if (target.exact) params.set('exact', '1');
   } else if (target.kind === 'merchant') {
     params.set('q', target.merchant);
-  } else if (target.kind === 'uncategorized-queue') {
-    params.set('review', '1');
-    params.set('queue', 'uncategorized');
+  } else if (target.kind === 'uncategorized-spending') {
     params.set('category', 'uncategorized');
-    params.set('transfers', '0');
+    params.set('spending', '1');
   } else {
     params.set('import', String(target.importId));
   }

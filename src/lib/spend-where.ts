@@ -1,4 +1,4 @@
-import { eq, sql, type SQL } from 'drizzle-orm';
+import { eq, lt, sql, type SQL } from 'drizzle-orm';
 import { loanPayments, transactionSplits, transactions, warrantyItems } from '@/db/schema';
 
 /**
@@ -96,3 +96,11 @@ export const NOT_SPLIT_PARENT: SQL = sql`not exists (select 1 from ${transaction
 
 /** Both, for the callers that want the whole rule. Spread into an existing `clauses` array. */
 export const SPEND_ROW_WHERE: SQL[] = [NOT_TRANSFER, NOT_PRINCIPAL_MOVEMENT];
+
+/**
+ * Money OUT that counts as spend. With UNCATEGORIZED_WHERE it is what Budgets' Not categorized yet
+ * card sums (uncategorizedSpend) and what its Categorize link lists (`?spending=1` on Transactions),
+ * so the two cannot disagree. Money in is left out: with no category a refund cannot be told from
+ * income (spec 2026-10-21, decision 9). A repayment on a loan the household owes stays in, as above.
+ */
+export const SPENDING_OUT_WHERE: SQL[] = [...SPEND_ROW_WHERE, lt(transactions.amountCents, 0)];

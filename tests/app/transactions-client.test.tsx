@@ -2549,6 +2549,26 @@ describe('Task 3c: rows fold below sm only when their own filter is at default',
     expect(chipsRow().className).toContain('hidden');
   });
 
+  // v1.56.1: Budgets' Categorize link lands here with ?spending=1, so the page says so and offers a way out.
+  it('?spending=1 shows a chip that clears only itself, and a submit keeps it', () => {
+    const { container } = render(
+      <TransactionsClient
+        page={pageWithRow()}
+        accounts={[]}
+        categories={categories}
+        people={[]}
+        today="2026-03-02"
+        currentQuery="range=custom&from=2026-03-01&to=2026-03-31&category=uncategorized&spending=1"
+      />,
+    );
+    const chip = screen.getByRole('link', { name: 'Spending only — clear' });
+    const href = chip.getAttribute('href') ?? '';
+    expect(href).not.toContain('spending=');
+    expect(href).toContain('category=uncategorized');
+    expect(href).toContain('from=2026-03-01');
+    expect(container.querySelector('form[method="get"] input[type="hidden"][name="spending"]')?.getAttribute('value')).toBe('1');
+  });
+
   it('the funnel badge counts a filter hidden behind a folded row (?group=category)', () => {
     window.history.pushState({}, '', '/transactions?group=category');
     render(

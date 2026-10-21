@@ -771,6 +771,8 @@ export function TransactionsClient({
         ? params.get('sort')
         : null,
       params.get('queue') === 'suggested' || params.get('queue') === 'uncategorized' ? params.get('queue') : null,
+      // v1.56.1: Budgets' Categorize link narrows to spending (TransactionFilter.spendingOnly).
+      params.get('spending') === '1' ? '1' : null,
     ].filter((value) => value !== null && value !== '').length;
     if (count > 0) {
       setActiveFilterCount(count);
@@ -947,6 +949,9 @@ export function TransactionsClient({
    *  it server-side. */
   const importParam = new URLSearchParams(currentQuery).get('import');
   const activeImportId = importParam !== null && /^\d+$/.test(importParam) ? importParam : null;
+  /** v1.56.1. `?spending=1`, which Budgets' Categorize link sets: a clearing chip like the import
+   *  batch's, for the same reason -- a person arrives inside it without clicking a control here. */
+  const spendingOnly = new URLSearchParams(currentQuery).get('spending') === '1';
 
   // Fix round (reported, phone screenshot): six stacked control rows sat above the data at
   // every width, because ruling S7's disclosure (`filtersOpen`, above) only ever gated the four
@@ -3401,6 +3406,7 @@ export function TransactionsClient({
             {activeSort !== '' ? <input type="hidden" name="dir" value={activeDirection} /> : null}
             {activeSource !== '' ? <input type="hidden" name="source" value={activeSource} /> : null}
             {activeImportId !== null ? <input type="hidden" name="import" value={activeImportId} /> : null}
+            {spendingOnly ? <input type="hidden" name="spending" value="1" /> : null}
             {/* Fix round (asked for): one row, at every width, replaces the old "Filters (N)"
                 text button that only showed below `sm` plus a field block that was simply always
                 visible at `sm` and up -- two different shapes for the same fields depending on
@@ -3657,6 +3663,15 @@ export function TransactionsClient({
                   className="badge badge--accent min-h-11 items-center px-3 sm:min-h-0"
                 >
                   {`Import #${activeImportId} — clear`}
+                </Link>
+              ) : null}
+              {spendingOnly ? (
+                <Link
+                  href={filterHref(currentQuery, 'spending', null)}
+                  className="badge badge--accent min-h-11 items-center px-3 sm:min-h-0"
+                  title="Money out that counts as spending: no transfers, no money lent out"
+                >
+                  Spending only — clear
                 </Link>
               ) : null}
             </div>

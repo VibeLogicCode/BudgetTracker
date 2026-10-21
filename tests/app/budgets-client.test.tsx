@@ -1271,13 +1271,13 @@ describe('BudgetsClient — Not categorized yet', () => {
   });
   const queryOf = (href: string) => Object.fromEntries(new URLSearchParams(href.slice(href.indexOf('?') + 1)));
 
-  it('puts the card first in the household grid, linking to the review queue for the month', () => {
+  it('puts the card first in the household grid, linking to the month’s uncategorized spending on Transactions', () => {
     const { container } = render(<BudgetsClient {...props({ householdUncategorized: { totalCents: 5750, count: 2 } })} />);
     const cards = container.querySelectorAll('article');
     expect(cards[0]!.textContent).toContain('Not categorized yet');
     expect(cards[1]!.textContent).toContain('Groceries');
     expect(queryOf(screen.getByRole('link', { name: 'Categorize' }).getAttribute('href')!)).toEqual({
-      range: 'custom', from: '2026-03-01', to: '2026-03-31', review: '1', queue: 'uncategorized', category: 'uncategorized', transfers: '0',
+      range: 'custom', from: '2026-03-01', to: '2026-03-31', category: 'uncategorized', spending: '1',
     });
   });
 

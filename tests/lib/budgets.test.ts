@@ -6,6 +6,10 @@ import { archiveCategory } from '@/lib/categories';
 import { nowIso } from '@/lib/clock';
 import { assignTransactionToLoan } from '@/lib/loans';
 import type { Viewer } from '@/lib/auth/viewer';
+import { filterFromQuery } from '@/app/(app)/transactions/filter-params';
+import { monthEnd, monthStart } from '@/lib/dates';
+import { transactionsHref } from '@/lib/transaction-links';
+import { listTransactions } from '@/lib/transactions';
 // Lane 1 (2026-08-30 plan): categoryTransactions is split-aware, the same way categorySpend
 // (immediately below) already is -- one test proves it by actually splitting a transaction,
 // rather than trusting that reusing EFFECTIVE_CATEGORY/EFFECTIVE_AMOUNT was enough.
@@ -318,6 +322,64 @@ describe('uncategorizedSpend', () => {
   it('a personal scope needs a person', () => {
     setup();
     expect(() => uncategorizedSpend('2026-03', { scope: 'personal', attributedUserId: null }, HOUSEHOLD_VIEWER)).toThrow();
+  });
+});
+
+/**
+ * v1.56.1. The card's count and the rows its Categorize link opens are one set. A repayment on a loan
+ * the household owes is spending (MUST-13.2) and with no category it is in no category's figure, so
+ * the card counts it; the review queue hides every loan-linked row, so the link must not land there.
+ * The link is read back through the transactions page's own parser and listTransactions.
+ */
+describe('the Not categorized yet card and its Categorize link list the same rows', () => {
+  const MONTH = '2026-03';
+  function destination(person: number | null, viewer: Viewer) {
+    const href = transactionsHref({ range: { from: monthStart(MONTH), to: monthEnd(MONTH) }, person }, { kind: 'uncategorized-spending' });
+    const filter = filterFromQuery(href.slice(href.indexOf('?') + 1), viewer);
+    return listTransactions({ ...filter, pageSize: 200 }, viewer);
+  }
+
+  function fixture() {
+    const { db, spend, alice, bob } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const repayment = spend({ categoryId: null, amountCents: -31500, attributedUserId: alice });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: repayment, itemId: seedLoanItem(alice, 'owed') });
+    const payout = spend({ categoryId: null, amountCents: -42000, attributedUserId: alice });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: payout, itemId: seedLoanItem(alice, 'lent') });
+    spend({ categoryId: null, amountCents: -1875, attributedUserId: alice });
+    spend({ categoryId: null, amountCents: -2640, attributedUserId: bob });
+    spend({ categoryId: null, amountCents: -990 });
+    spend({ categoryId: null, amountCents: 183000, attributedUserId: alice });
+    spend({ categoryId: null, amountCents: -7700, isTransfer: true });
+    spend({ categoryId: groceries, amountCents: -4325, attributedUserId: alice });
+    spend({ categoryId: null, amountCents: -5150, date: '2026-04-02', attributedUserId: alice });
+    const splitRow = spend({ categoryId: null, amountCents: -6000, attributedUserId: alice });
+    current!.sqlite
+      .prepare('insert into transaction_splits (txn_id, category_id, amount_cents, created_at) values (?, ?, ?, ?)')
+      .run(splitRow, groceries, -6000, nowIso());
+    return { alice, bob, repayment };
+  }
+
+  it('household: the count equals the rows listed, the loan repayment among them', () => {
+    const { repayment } = fixture();
+    const card = uncategorizedSpend(MONTH, { scope: 'household', attributedUserId: null }, HOUSEHOLD_VIEWER);
+    const listed = destination(null, HOUSEHOLD_VIEWER);
+    expect(card).toEqual({ totalCents: 31500 + 1875 + 2640 + 990, count: 4 });
+    expect(listed.total).toBe(card.count);
+    expect(-listed.outCents).toBe(card.totalCents);
+    expect(listed.rows.map((row) => row.id)).toContain(repayment);
+  });
+
+  it('one person: the count equals the rows listed, for a household viewer and for that person seeing only their own', () => {
+    const { alice, repayment } = fixture();
+    const card = uncategorizedSpend(MONTH, { scope: 'personal', attributedUserId: alice }, HOUSEHOLD_VIEWER);
+    expect(card).toEqual({ totalCents: 31500 + 1875, count: 2 });
+    const listed = destination(alice, HOUSEHOLD_VIEWER);
+    expect(listed.total).toBe(card.count);
+    expect(listed.rows.map((row) => row.id)).toContain(repayment);
+
+    const self: Viewer = { id: alice, role: 'member', visibility: 'self' };
+    expect(uncategorizedSpend(MONTH, { scope: 'personal', attributedUserId: alice }, self).count).toBe(destination(alice, self).total);
   });
 });
 

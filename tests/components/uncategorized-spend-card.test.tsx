@@ -7,7 +7,7 @@ afterEach(() => cleanup());
 
 /** Spec 2026-10-21 §2.2. Budgets' first card: needs attention, never colour alone, gone at zero. */
 describe('UncategorizedSpendCard', () => {
-  const HREF = '/transactions?range=custom&from=2026-03-01&to=2026-03-31&review=1&queue=uncategorized&category=uncategorized&transfers=0';
+  const HREF = '/transactions?range=custom&from=2026-03-01&to=2026-03-31&category=uncategorized&spending=1';
 
   it('shows the amount, the count and Categorize, with the attention icon and the Needs attention label', () => {
     const { container } = render(<UncategorizedSpendCard spend={{ totalCents: 5750, count: 2 }} href={HREF} />);

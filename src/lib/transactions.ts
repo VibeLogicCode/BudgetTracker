@@ -32,6 +32,7 @@ import { transactionImports } from '@/db/schema';
 // feature needs -- the split editor already proved this parser handles a person's typed amount.
 import { parseAmountToCents } from '@/lib/money';
 import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY, transactionHasSplits } from '@/lib/splits';
+import { SPENDING_OUT_WHERE } from '@/lib/spend-where';
 
 /**
  * v1.13.0 ruling R4 (item I4). Thrown by createManualTransaction when the row's own category
@@ -73,6 +74,13 @@ export interface TransactionFilter {
   to?: string | null;
   search?: string | null;
   uncategorizedOnly?: boolean;
+  /**
+   * v1.56.1. `?spending=1`: money out that counts as spend, SPENDING_OUT_WHERE (src/lib/spend-where.ts)
+   * imported, never restated -- no transfers, no money lent out, no money in. Budgets' Categorize
+   * link sends it with `category=uncategorized`, which is exactly the set its Not categorized yet
+   * card counts (uncategorizedSpend, src/lib/budgets.ts), loan repayments with no category included.
+   */
+  spendingOnly?: boolean;
   /**
    * v1.24.0 Lane A item 2 (reported: once a transfer is applied it is hard to find
    * that data again). Three states, not a boolean -- a mis-tagged transfer needs a way BACK.
@@ -429,6 +437,7 @@ function buildWhere(filter: TransactionFilter, viewer: Viewer): SQL | undefined 
   }
 
   if (filter.uncategorizedOnly) clauses.push(UNCATEGORIZED_WHERE);
+  if (filter.spendingOnly) clauses.push(...SPENDING_OUT_WHERE);
   // v1.24.0 Lane A item 2: see TransactionFilter.transferView's own doc comment for why 'only'
   // exists at all -- it is the recovery path for a transfer REVIEW_WHERE (below) can never show.
   if (filter.transferView === 'none') clauses.push(eq(transactions.isTransfer, false));
