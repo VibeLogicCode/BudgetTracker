@@ -101,19 +101,22 @@ export type RecurringRowAction =
 /**
  * Spec §2.2, row actions by state. Looks or Forming: Mark recurring, Not recurring, and Track when
  * nothing covers it. Known by a mark: Unmark, and Track when nothing covers it. Known by tracking
- * only: Mark recurring (so it stays listed if the record goes) and the way to the item.
+ * only: Mark recurring (so it stays listed if the record goes), Not recurring (the item and its bills
+ * are untouched), and the way to the item.
  */
 export function recurringRowActions(row: RecurringChargeRow): RecurringRowAction[] {
   const mark: RecurringRowAction = { kind: 'mark', mark: 'recurring', label: 'Mark recurring', ariaLabel: `Mark ${row.merchant} as recurring` };
+  const notRecurring: RecurringRowAction = {
+    kind: 'mark',
+    mark: 'not_recurring',
+    label: 'Not recurring',
+    ariaLabel: `Mark ${row.merchant} as not recurring and take it off these lists`,
+  };
   const track: RecurringRowAction[] =
     row.tracked === null ? [{ kind: 'link', href: `/warranties/new?transactionId=${row.transactionId}`, label: 'Track' }] : [];
-  if (row.tier !== 'known') {
-    return [
-      mark,
-      { kind: 'mark', mark: 'not_recurring', label: 'Not recurring', ariaLabel: `Mark ${row.merchant} as not recurring and take it off these lists` },
-      ...track,
-    ];
-  }
+  if (row.tier !== 'known') return [mark, notRecurring, ...track];
   if (row.knownBy === 'mark') return [{ kind: 'mark', mark: 'clear', label: 'Unmark', ariaLabel: `Unmark ${row.merchant}` }, ...track];
-  return row.tracked === null ? [mark] : [mark, { kind: 'link', href: `/warranties/${row.tracked.itemId}`, label: `Open ${row.tracked.itemName}` }];
+  return row.tracked === null
+    ? [mark, notRecurring]
+    : [mark, notRecurring, { kind: 'link', href: `/warranties/${row.tracked.itemId}`, label: `Open ${row.tracked.itemName}` }];
 }

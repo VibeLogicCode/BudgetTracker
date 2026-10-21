@@ -5,6 +5,7 @@ import { createUser } from '@/lib/auth/users';
 import type { Viewer } from '@/lib/auth/viewer';
 import { nowIso } from '@/lib/clock';
 import { addDaysIso } from '@/lib/dates';
+import { upcomingBills } from '@/lib/bills';
 import { assignTransactionToLoan, saveLoanRule } from '@/lib/loans';
 import { listRules, setRecurringMarks, setRuleDisabledFlag } from '@/lib/categorize/rules';
 import { RECURRING_LATE_GRACE_DAYS } from '@/lib/predict/constants';
@@ -296,6 +297,16 @@ describe('recurringCharges: the tracked badge names what covers the merchant', (
     // A rule wins the tie deliberately: it says what the app will do with the next charge,
     // where a name match only says two strings resemble each other.
     expect(rows[0].tracked).toEqual({ kind: 'rule', itemId: loanId, itemName: 'Car loan' });
+  });
+
+  it('a not_recurring mark removes a tracked merchant from every tier, and leaves the item alone', async () => {
+    const ctx = await setup();
+    ctx.cadence({ merchant: 'HARBOUR INSURANCE', cents: 13400 });
+    const itemId = ctx.item({ name: 'Harbour Insurance', typeId: ctx.itemType('Subscription', 'subscription'), billingCycle: 'monthly', billingAmountCents: 13400 });
+    expect(read(ctx).known.map((r) => [r.merchant, r.knownBy])).toEqual([['HARBOUR INSURANCE', 'tracked']]);
+    ctx.mark('HARBOUR INSURANCE', 'not_recurring');
+    expect(rowsOf(read(ctx))).toEqual([]);
+    expect(upcomingBills({ today: TODAY, days: 40, viewer: household(ctx.adultId) }).map((b) => b.itemId)).toContain(itemId);
   });
 
   it('a DISABLED rule does not: it would never match the charge either', async () => {

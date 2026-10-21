@@ -609,7 +609,7 @@ export const HELP_SECTIONS: HelpSection[] = [
         </P>
         <P>
           <B>Mark recurring</B> moves a merchant to Known recurring, and <B>Unmark</B> takes the mark off;{' '}
-          <B>Not recurring</B> takes it off every list and keeps it off. All three are on the full list. On Transactions, a row&rsquo;s menu offers <B>Mark recurring</B>, or{' '}
+          <B>Not recurring</B> takes it off every list and keeps it off. It works on a merchant a bill or a loan rule covers too, and leaves that item and its bills as they are. All three are on the full list. On Transactions, a row&rsquo;s menu offers <B>Mark recurring</B>, or{' '}
           <B>Unmark recurring</B> once marked, and <B>Mark recurring</B> is in the bar that appears when you select rows
           (transfer rows are skipped). A merchant marked Not recurring shows <B>Clear &ldquo;not recurring&rdquo;</B> in
           its row menu instead; an admin also sees every mark under <B>Settings → Merchant rules</B>.

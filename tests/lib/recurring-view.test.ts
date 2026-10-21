@@ -137,10 +137,20 @@ describe('recurringRowActions', () => {
     expect(recurringRowActions(phone)[0]).toMatchObject({ kind: 'mark', mark: 'clear' });
   });
 
-  it('Known by tracking only: Mark recurring, and the way to the item', () => {
+  it('Known by tracking only: Mark recurring, Not recurring, and the way to the item', () => {
     expect(recurringRowActions(domain)).toEqual([
       { kind: 'mark', mark: 'recurring', label: 'Mark recurring', ariaLabel: 'Mark LAKESIDE DOMAIN as recurring' },
+      {
+        kind: 'mark',
+        mark: 'not_recurring',
+        label: 'Not recurring',
+        ariaLabel: 'Mark LAKESIDE DOMAIN as not recurring and take it off these lists',
+      },
       { kind: 'link', href: '/warranties/9', label: 'Open Lakeside Domain' },
     ]);
+  });
+
+  it('offers Not recurring on a tracked-only row in the same words as a Looks row', () => {
+    expect(labels(domain)).toEqual(['Mark recurring', 'Not recurring', 'Open Lakeside Domain']);
   });
 });
