@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterAll, afterEach, vi } from 'vitest';
 import { render, cleanup, screen } from '@testing-library/react';
 import { createAccount } from '@/lib/accounts';
 import { createUser } from '@/lib/auth/users';
@@ -42,6 +42,10 @@ vi.mock('@/lib/auth/session', () => ({
 }));
 
 afterEach(cleanup);
+
+// Pin Date (only) so a run that crosses local midnight or a month end cannot disagree with itself.
+vi.useFakeTimers({ now: new Date('2026-03-18T16:00:00.000Z'), toFake: ['Date'] });
+afterAll(() => vi.useRealTimers());
 
 describe('ReportsPage (ruling R2)', () => {
   let t: TestDb | null = null;

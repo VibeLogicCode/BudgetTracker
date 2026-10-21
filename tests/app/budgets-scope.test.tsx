@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterAll, afterEach, vi } from 'vitest';
 import { render } from '@testing-library/react';
 import { currentMonth } from '@/lib/dates';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
@@ -45,6 +45,10 @@ vi.mock('@/lib/auth/session', () => ({
 afterEach(() => {
   capturedProps.selectedPersonId = undefined;
 });
+
+// Pin Date (only) so a run that crosses local midnight or a month end cannot disagree with itself.
+vi.useFakeTimers({ now: new Date('2026-03-18T16:00:00.000Z'), toFake: ['Date'] });
+afterAll(() => vi.useRealTimers());
 
 describe('BudgetsPage — v1.21.0 item 1: reading and validating `?person=`', () => {
   let t: TestDb | null = null;

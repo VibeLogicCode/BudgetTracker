@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, afterAll, vi, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 import { clearBudget, effectiveBudget, resolveBudget, setRollover, upsertBudget } from '@/lib/budgets';
@@ -50,6 +50,10 @@ function formData(fields: Record<string, string>): FormData {
   for (const [key, value] of Object.entries(fields)) fd.set(key, value);
   return fd;
 }
+
+// Pin Date (only) so a run that crosses local midnight or a month end cannot disagree with itself.
+vi.useFakeTimers({ now: new Date('2026-03-18T16:00:00.000Z'), toFake: ['Date'] });
+afterAll(() => vi.useRealTimers());
 
 /**
  * Six flat months of spend for a category, ending the month before TARGET.

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterAll, afterEach, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { render, cleanup, screen } from '@testing-library/react';
 import type { Db } from '@/db/client';
@@ -51,6 +51,10 @@ function insertBillItem(db: Db, over: { ownerUserId: number; typeId: number; nam
     returning id`);
   return row.id;
 }
+
+// Pin Date (only) so a run that crosses local midnight or a month end cannot disagree with itself.
+vi.useFakeTimers({ now: new Date('2026-03-18T16:00:00.000Z'), toFake: ['Date'] });
+afterAll(() => vi.useRealTimers());
 
 describe('BudgetsPage (rulings R2, R11 / M9)', () => {
   let t: TestDb | null = null;
