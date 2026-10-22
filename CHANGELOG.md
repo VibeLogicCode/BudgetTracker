@@ -21,6 +21,8 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.58.0] - 2026-10-21
+
 ### Changed
 
 - Budgets: View transactions opens a card's rows in a panel instead of under the card, so the page
