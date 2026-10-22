@@ -103,6 +103,14 @@ describe('Sheet', () => {
     expect(document.activeElement).toBe(link);
   });
 
+  it('Shift+Tab from the focused panel wraps to the last stop instead of leaving it', () => {
+    render(<SheetView />);
+    const dialog = screen.getByRole('dialog');
+    expect(document.activeElement).toBe(dialog);
+    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(screen.getByText('Open in Transactions'));
+  });
+
   it('a click on the backdrop closes it, a click inside does not, and Close closes it', () => {
     const onClose = vi.fn();
     render(<SheetView onClose={onClose} />);

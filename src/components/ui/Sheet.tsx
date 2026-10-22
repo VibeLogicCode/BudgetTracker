@@ -48,7 +48,7 @@ export function Sheet({ sheetId, title, description, onClose, children, footer }
         // A click anywhere inside must not reach the backdrop above, which closes the sheet.
         onClick={(event) => event.stopPropagation()}
         onKeyDown={onKeyDown}
-        className="sheet-panel flex h-full w-full flex-col bg-surface shadow-pop outline-none sm:w-[30rem] sm:max-w-[calc(100%-3rem)] sm:border-l sm:border-line"
+        className="sheet-panel flex h-full w-full flex-col bg-surface shadow-pop outline-none pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] sm:pl-0 sm:w-[30rem] sm:max-w-[calc(100%-3rem)] sm:border-l sm:border-line"
       >
         <div className="flex items-start gap-3 border-b border-line px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] sm:px-5">
           <div className="min-w-0 flex-1">

@@ -680,7 +680,7 @@ function CategoryTransactionsSheet({ target, onClose }: { target: CardSheetTarge
     >
       {target.history ? (
         <div className="pt-3">
-          <CategoryHistoryStrip scope={scope} userId={userId} month={month} categoryId={categoryId} categoryName={categoryName} narrow />
+          <CategoryHistoryStrip key={spentCents} scope={scope} userId={userId} month={month} categoryId={categoryId} categoryName={categoryName} narrow />
         </div>
       ) : null}
       {list}

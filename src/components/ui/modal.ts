@@ -25,10 +25,12 @@ export function trapDialogTab(container: HTMLElement, event: ReactKeyboardEvent<
   if (focusable.length === 0) return;
   const first = focusable[0];
   const last = focusable[focusable.length - 1];
-  if (event.shiftKey && document.activeElement === first) {
+  const active = document.activeElement;
+  // The container itself counts as "before the first": a sheet's panel holds focus on open.
+  if (event.shiftKey && (active === first || active === container)) {
     event.preventDefault();
     last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
+  } else if (!event.shiftKey && active === last) {
     event.preventDefault();
     first.focus();
   }

@@ -105,6 +105,34 @@ describe('RowMenu', () => {
   });
 });
 
+describe('v1.58.0: scroll or resize closing the menu', () => {
+  it('hands focus back to the trigger when the menu held it', () => {
+    const trigger = renderMenu();
+    fireEvent.click(trigger);
+    expect(document.activeElement).toBe(screen.getAllByRole('menuitem')[0]);
+    fireEvent.scroll(window);
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('leaves focus alone when it was somewhere outside the menu', () => {
+    render(
+      <>
+        <button>Elsewhere</button>
+        <RowMenu label="Actions for Card A payment">
+          <RowMenuButton onSelect={() => {}}>Rename…</RowMenuButton>
+        </RowMenu>
+      </>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Card A payment' }));
+    const outside = screen.getByText('Elsewhere');
+    outside.focus();
+    fireEvent.scroll(window);
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(document.activeElement).toBe(outside);
+  });
+});
+
 describe('v1.12.1: focus comes back to the trigger (item AW / UX-8)', () => {
   it('refocuses the trigger after a menu button is activated', async () => {
     render(

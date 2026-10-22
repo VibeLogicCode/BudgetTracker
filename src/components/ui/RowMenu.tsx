@@ -132,7 +132,11 @@ export function RowMenu({
       if (menu.current?.contains(target) === true || trigger.current?.contains(target) === true) return;
       close(false);
     };
-    const onMove = () => close(false);
+    const onMove = () => {
+      const held = menu.current?.contains(document.activeElement) === true;
+      close(false);
+      if (held) trigger.current?.focus({ preventScroll: true });
+    };
     document.addEventListener('mousedown', onPointerDown);
     // Capture, because the scroll that matters is the TableWrap's own, not the window's.
     window.addEventListener('scroll', onMove, true);
@@ -184,7 +188,8 @@ export function RowMenu({
     // document.body, so a keyboard or screen-reader user who deactivated a member was dumped at
     // the top of the document with no announcement and a long tab back. The outside-click and
     // scroll/resize paths below deliberately KEEP close(false): stealing focus back from wherever
-    // somebody just clicked is its own defect. The success/error Notice banners are already live
+    // somebody just clicked is its own defect. Scroll and resize return focus to the trigger only
+    // when the menu itself held it, because nobody clicked elsewhere. The success/error Notice banners are already live
     // regions, so the announcement follows for free.
     <RowMenuContext.Provider value={{ close: () => close(true) }}>
       <span className={row ? 'flex' : 'inline-flex'}>

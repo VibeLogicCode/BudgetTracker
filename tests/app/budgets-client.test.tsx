@@ -1712,6 +1712,17 @@ describe('BudgetsClient — the transactions sheet (v1.58.0)', () => {
     expect(categoryTransactionsAction).toHaveBeenCalledTimes(1);
   });
 
+  it("a leaf sheet's six-month strip refetches when the sheet's figure changes", async () => {
+    const { categoryHistoryAction } = await import('@/app/(app)/budgets/category-history-action');
+    vi.mocked(categoryHistoryAction).mockClear();
+    const { rerender } = render(<BudgetsClient {...pageProps} household={[makeRow()]} />);
+    fireEvent.click(screen.getByRole('button', { name: 'View transactions' }));
+    await waitFor(() => expect(categoryHistoryAction).toHaveBeenCalled());
+    const before = vi.mocked(categoryHistoryAction).mock.calls.length;
+    rerender(<BudgetsClient {...pageProps} household={[makeRow({ spentCents: 750, remainingCents: 19250, pct: 4 })]} />);
+    await waitFor(() => expect(categoryHistoryAction).toHaveBeenCalledTimes(before + 1));
+  });
+
   it('Escape, Close and the backdrop each close the sheet, and focus goes back to View transactions', async () => {
     render(<BudgetsClient {...pageProps} household={[makeRow()]} />);
     const button = screen.getByRole('button', { name: 'View transactions' });
