@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
+import { useModal } from '@/components/ui/modal';
 
 /**
  * Unify-the-editors task (2026-08-30). Every "edit one thing about this row" control on
@@ -34,17 +35,10 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card';
  * A caller switching which ROW this dialog acts on without an intervening close must pass a `key`
  * that changes with the row id, forcing a remount rather than re-using one instance across two
  * different rows -- see transactions-client.tsx's own call sites.
- */
-
-/**
- * Reported (item 1): nothing native (no <dialog>.showModal() here -- this app hand-rolls its
- * own overlays rather than take on a dialog library) keeps Tab cycling inside a dialog on its
- * own. `input[type="hidden"]` is excluded even though the plain tag-name selectors below would
- * otherwise match it: a hidden field can never actually receive focus in a real browser, and
- * counting it as a focus stop just breaks the wrap-around math by one at both ends. The element
- * list is read fresh on every Tab press (not cached once at open) because a dialog's own
- * "Add a part"/"Remove part"-style buttons can change how many focusable controls exist while it
- * stays open.
+ *
+ * v1.58.0: the modal behaviour itself (opener capture, focus, Tab trap, Escape, scroll lock) lives in
+ * modal.ts as `useModal`, shared with Sheet; the "opener capture runs at render" note above is kept
+ * with that code there.
  */
 
 /**
@@ -98,23 +92,6 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card';
  * READOUT that asks for no decision at all still belongs outside one, exactly as the pack's
  * status line does. See RunRulesDialog in merchant-rules-client.tsx for the conversion.
  */
-const DIALOG_FOCUSABLE_SELECTOR =
-  'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-
-function trapDialogTab(container: HTMLElement, event: ReactKeyboardEvent<HTMLDivElement>): void {
-  if (event.key !== 'Tab') return;
-  const focusable = Array.from(container.querySelectorAll<HTMLElement>(DIALOG_FOCUSABLE_SELECTOR));
-  if (focusable.length === 0) return;
-  const first = focusable[0];
-  const last = focusable[focusable.length - 1];
-  if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault();
-    last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first.focus();
-  }
-}
 
 export interface RowDialogProps {
   /**
@@ -153,61 +130,7 @@ export function RowDialog({
   maxWidthClassName = 'max-w-2xl',
   backdropTestId,
 }: RowDialogProps) {
-  const dialogRef = useRef<HTMLDivElement | null>(null);
-  // Who had focus right before this dialog opened, so closing it (Escape, the backdrop, Cancel,
-  // or a real submit) puts focus back exactly where it was -- ported from the split editor's own
-  // `splitOpenerRef`. Captured during RENDER, not inside the effect below, and that is load-
-  // bearing now that rename/assign-to-loan bring an `autoFocus` input into this shell: React's
-  // own handling of `autoFocus` runs synchronously in the COMMIT phase (a real `.focus()` call,
-  // not reliance on the native HTML attribute), which happens before ANY `useEffect` -- including
-  // this component's own -- gets a chance to run. Reading `document.activeElement` from an effect
-  // would therefore capture the just-autofocused INPUT as "the opener", not the row-menu item or
-  // note-indicator button that was actually clicked to get here. The render phase runs strictly
-  // before commit, so this is the last point at which `document.activeElement` still reliably
-  // names the real trigger. `useRef`'s lazy-init pattern (checked, not passed as the initial
-  // value) keeps this a one-time read on the FIRST render rather than on every one.
-  const openerRef = useRef<HTMLElement | null | undefined>(undefined);
-  if (openerRef.current === undefined) {
-    openerRef.current = document.activeElement as HTMLElement | null;
-  }
-
-  /**
-   * The three behaviours a real modal owes a keyboard/screen-reader user, ported from the split
-   * editor's own effect (previously keyed on `splitting?.id ?? null`; here it is simply
-   * mount/unmount, see this file's own top-of-file docblock for why that is equivalent):
-   *   - focus moves INTO the dialog on open -- but only when nothing inside it has already
-   *     claimed focus. The split editor has no one obvious "first field" (there is no
-   *     `autoFocus` anywhere in its parts table), so the dialog shell itself takes focus, same as
-   *     before; the rename and assign-to-loan editors DO carry their own `autoFocus` input (a
-   *     more specific, better default than the shell), and that already-focused element must be
-   *     left alone rather than overridden a moment later;
-   *   - the page behind stops scrolling while it is open, or a touch/wheel scroll would move a
-   *     page the person can no longer see behind the dimmed backdrop;
-   *   - focus returns to whatever had it before the dialog opened when it closes.
-   */
-  useEffect(() => {
-    if (!dialogRef.current?.contains(document.activeElement)) {
-      dialogRef.current?.focus();
-    }
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      openerRef.current?.focus();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  /** Escape closes the dialog from anywhere inside it; every other key falls through to the
-   *  focus trap so Tab still cycles within the dialog while it is open. */
-  function onDialogKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      onClose();
-      return;
-    }
-    if (dialogRef.current) trapDialogTab(dialogRef.current, event);
-  }
+  const { ref: dialogRef, onKeyDown: onDialogKeyDown } = useModal(onClose);
 
   const headingId = `${dialogId}-heading`;
   const descriptionId = `${dialogId}-description`;
