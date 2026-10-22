@@ -1378,6 +1378,10 @@ async function renderWithRows(rows: CategoryPanelRow[], splits: Record<number, S
   fireEvent.click(screen.getByRole('button', { name: 'View transactions' }));
 }
 
+/** A Sheet's description text, read through the dialog's own aria-describedby. */
+const described = (name: string) =>
+  document.getElementById(screen.getByRole('dialog', { name }).getAttribute('aria-describedby')!)!.textContent;
+
 /** Spec 2026-10-21 (fix from Budgets) §2.1, §2.2, §2.5: the two frequent fixes, where the row was found. */
 describe('BudgetsClient — fixing a row from the card', () => {
   it('offers Change category and Split on a row, and changes the category through the Transactions action, then refetches and reports', async () => {
@@ -1387,7 +1391,7 @@ describe('BudgetsClient — fixing a row from the card', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
     expect(screen.getByRole('menuitem', { name: 'Split…' })).toBeTruthy();
     fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
-    const input = within(screen.getByRole('dialog')).getByRole('combobox');
+    const input = within(screen.getByRole('dialog', { name: /^Category for/ })).getByRole('combobox');
     fireEvent.focus(input);
     fireEvent.change(input, { target: { value: 'Pho' } });
     fireEvent.mouseDown(screen.getByRole('option', { name: 'Phone' }));
@@ -1410,7 +1414,7 @@ describe('BudgetsClient — fixing a row from the card', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit split…' }));
     expect(screen.getByRole('dialog', { name: /^Split Phonemart/ }).textContent).toContain('-$42.17');
     // Scoped to the dialog: the page itself has a native select (a combobox role) of its own.
-    expect(within(screen.getByRole('dialog')).getAllByRole('combobox')).toHaveLength(2);
+    expect(within(screen.getByRole('dialog', { name: /^Split Phonemart/ })).getAllByRole('combobox')).toHaveLength(2);
     fireEvent.click(screen.getByRole('button', { name: 'Save split' }));
     await waitFor(() => expect(saveSplitsAction).toHaveBeenCalled());
     expect((vi.mocked(saveSplitsAction).mock.calls.at(-1)![1] as FormData).get('txnId')).toBe('77');
@@ -1432,11 +1436,11 @@ describe('BudgetsClient — fixing a row from the card', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
-    const input = within(screen.getByRole('dialog')).getByRole('combobox') as HTMLInputElement;
+    const input = within(screen.getByRole('dialog', { name: /^Category for/ })).getByRole('combobox') as HTMLInputElement;
     expect(input.value).toBe('Lanterns (archived)');
     fireEvent.focus(input);
     expect(archivedOptions()).toEqual([['Lanterns (archived)', 'true']]);
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: /^Category for/ })).getByRole('button', { name: 'Cancel' }));
 
   });
 
@@ -1454,7 +1458,7 @@ describe('BudgetsClient — fixing a row from the card', () => {
     );
     fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit split…' }));
-    const part = within(screen.getByRole('dialog')).getAllByRole('combobox')[0] as HTMLInputElement;
+    const part = within(screen.getByRole('dialog', { name: /^Split Phonemart/ })).getAllByRole('combobox')[0] as HTMLInputElement;
     expect(part.value).toBe('Lanterns (archived)');
     fireEvent.focus(part);
     expect(
@@ -1604,43 +1608,188 @@ describe('BudgetsClient — fixing a row from the card', () => {
     fireEvent.click(screen.getByLabelText(/Always ask about PHONEMART 884/));
     fireEvent.click(screen.getByRole('button', { name: 'Save category' }));
     expect(await screen.findByRole('dialog', { name: /^Always ask for rows like this/ })).toBeTruthy();
+    expect(described('Groceries')).toBe('March 2026 · spent $42.17');
     // The move revalidates Budgets: the archived card, now with no spend and no limit, leaves the page.
     rerender(<BudgetsClient {...props} household={[phone]} />);
     expect(document.getElementById('budget-card-household-h-1')).toBeNull();
+    expect(screen.getByRole('dialog', { name: 'Groceries' })).toBeTruthy();
+    expect(described('Groceries')).toBe('March 2026 · spent $0.00');
     const dialog = screen.getByRole('dialog', { name: /^Always ask for rows like this/ });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByRole('dialog', { name: /^Always ask for rows like this/ })).toBeNull();
   });
 
-  it('a card named by the URL hash opens itself on mount', async () => {
-    window.location.hash = '#budget-card-household-h-1';
-    const { categoryTransactionsAction } = await import('@/app/(app)/budgets/category-transactions-action');
-    vi.mocked(categoryTransactionsAction).mockClear();
-    renderBudgets(null);
-    expect(document.getElementById('budget-card-household-h-1')).toBeTruthy();
-    await waitFor(() => expect(categoryTransactionsAction).toHaveBeenCalled());
-    expect(screen.getByRole('button', { name: 'Hide transactions' })).toBeTruthy();
-    window.location.hash = '';
-  });
-
-  /** v1.57.1: the hash is acted on once, so a card the person closed stays closed. */
-  it('clears the hash after opening the card from it, keeping the path and query, and a remount does not reopen it', async () => {
+  /** v1.58.0 (design §6): a leaf has nothing inline left to open, so the hash only lands the page on it. */
+  it('a leaf card named by the URL hash is where the page lands; its sheet does not open and the hash is cleared', async () => {
     window.history.replaceState(null, '', '/budgets?month=2026-03#budget-card-household-h-1');
     const { categoryTransactionsAction } = await import('@/app/(app)/budgets/category-transactions-action');
     vi.mocked(categoryTransactionsAction).mockClear();
     renderBudgets(null);
-    await waitFor(() => expect(categoryTransactionsAction).toHaveBeenCalled());
-    expect(screen.getByRole('button', { name: 'Hide transactions' })).toBeTruthy();
-    expect({ path: window.location.pathname, query: window.location.search, hash: window.location.hash }).toEqual({
-      path: '/budgets',
-      query: '?month=2026-03',
-      hash: '',
-    });
-    cleanup();
-    vi.mocked(categoryTransactionsAction).mockClear();
-    renderBudgets(null);
-    expect(screen.getByRole('button', { name: 'View transactions' })).toBeTruthy();
+    await waitFor(() => expect(window.location.hash).toBe(''));
+    expect({ path: window.location.pathname, query: window.location.search }).toEqual({ path: '/budgets', query: '?month=2026-03' });
+    expect(screen.queryByRole('dialog')).toBeNull();
     expect(categoryTransactionsAction).not.toHaveBeenCalled();
     window.history.replaceState(null, '', '/');
+  });
+
+  it('a parent card named by the URL hash opens its breakdown once, and a remount leaves it closed', async () => {
+    window.history.replaceState(null, '', '/budgets?month=2026-03#budget-card-household-h-10');
+    const props = {
+      month: '2026-03',
+      currentUserId: 1,
+      household: [housingGroupRow()],
+      householdTotals: { budgetedLimitCents: 200000, budgetedSpentCents: 150000, totalSpentCents: 150000 },
+      personal: [],
+      predictions: null,
+      savingsProgress: null,
+      categories: CATEGORIES,
+    };
+    render(<BudgetsClient {...props} />);
+    await waitFor(() => expect(window.location.hash).toBe(''));
+    expect(screen.getByRole('button', { name: 'Hide breakdown' })).toBeTruthy();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    cleanup();
+    render(<BudgetsClient {...props} />);
+    expect(screen.getByRole('button', { name: 'View breakdown' })).toBeTruthy();
+    window.history.replaceState(null, '', '/');
+  });
+
+});
+
+/** v1.58.0 (design §1, §2, §5, §7): View transactions opens a Sheet; the page behind keeps its shape. */
+describe('BudgetsClient — the transactions sheet (v1.58.0)', () => {
+  const pageProps = {
+    month: '2026-03',
+    currentUserId: 1,
+    householdTotals: { budgetedLimitCents: 20000, budgetedSpentCents: 5000, totalSpentCents: 5000 },
+    personal: [],
+    predictions: null,
+    savingsProgress: null,
+    categories: CATEGORIES,
+  };
+
+  it('View transactions on a leaf card opens a sheet named for the category, with the month and the spend against the limit, and the card keeps its shape', async () => {
+    await renderWithRows([panelRow()]);
+    const sheet = screen.getByRole('dialog', { name: 'Groceries' });
+    expect(sheet.getAttribute('aria-modal')).toBe('true');
+    expect(described('Groceries')).toBe('March 2026 · spent $50.00 of $200.00');
+    const button = screen.getByRole('button', { name: 'View transactions' });
+    expect(button.getAttribute('aria-haspopup')).toBe('dialog');
+    expect(button.hasAttribute('aria-expanded')).toBe(false);
+    expect(document.getElementById('budget-card-household-h-1')!.className).not.toContain('lg:col-span-3');
+    expect(await within(sheet).findByText('Phonemart')).toBeTruthy();
+    expect(within(sheet).getByRole('link', { name: 'Open in Transactions' })).toBeTruthy();
+  });
+
+  it("a sub-category row's sheet names its parent and reads the sub-category's own figure; Not in a sub-category reads spend with no limit", async () => {
+    const { categoryTransactionsAction } = await import('@/app/(app)/budgets/category-transactions-action');
+    vi.mocked(categoryTransactionsAction).mockClear();
+    const housing = housingGroupRow();
+    housing.directSpentCents = 30000;
+    housing.spentCents = 180000;
+    render(<BudgetsClient {...pageProps} household={[housing]} />);
+    fireEvent.click(screen.getByRole('button', { name: 'View breakdown' }));
+    const buttons = () => screen.getAllByRole('button', { name: 'View transactions' });
+    fireEvent.click(buttons()[0]);
+    expect(described('Housing › Rent')).toBe('March 2026 · spent $1,000.00 of $1,000.00');
+    await waitFor(() => expect(vi.mocked(categoryTransactionsAction).mock.calls.at(-1)![0]).toMatchObject({ categoryId: 11 }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Housing › Rent' })).getByRole('button', { name: 'Close' }));
+    fireEvent.click(buttons().at(-1)!);
+    expect(described('Housing › Not in a sub-category')).toBe('March 2026 · spent $300.00');
+    await waitFor(() => expect(vi.mocked(categoryTransactionsAction).mock.calls.at(-1)![0]).toMatchObject({ categoryId: 10 }));
+    expect(await screen.findByText('No transactions in Not in a sub-category this month.')).toBeTruthy();
+  });
+
+  it('the header figure follows the card when a fix revalidates the page, and the sheet stays open', async () => {
+    const { categoryTransactionsAction } = await import('@/app/(app)/budgets/category-transactions-action');
+    vi.mocked(categoryTransactionsAction).mockClear();
+    vi.mocked(categoryTransactionsAction).mockResolvedValueOnce({ rows: [panelRow()], splits: {} });
+    const { rerender } = render(<BudgetsClient {...pageProps} household={[makeRow()]} />);
+    fireEvent.click(screen.getByRole('button', { name: 'View transactions' }));
+    expect(described('Groceries')).toBe('March 2026 · spent $50.00 of $200.00');
+    rerender(<BudgetsClient {...pageProps} household={[makeRow({ spentCents: 750, remainingCents: 19250, pct: 4 })]} />);
+    expect(described('Groceries')).toBe('March 2026 · spent $7.50 of $200.00');
+    expect(categoryTransactionsAction).toHaveBeenCalledTimes(1);
+  });
+
+  it('Escape, Close and the backdrop each close the sheet, and focus goes back to View transactions', async () => {
+    render(<BudgetsClient {...pageProps} household={[makeRow()]} />);
+    const button = screen.getByRole('button', { name: 'View transactions' });
+    const closers = [
+      () => fireEvent.keyDown(screen.getByRole('dialog', { name: 'Groceries' }), { key: 'Escape' }),
+      () => fireEvent.click(within(screen.getByRole('dialog', { name: 'Groceries' })).getByRole('button', { name: 'Close' })),
+      () => fireEvent.click(screen.getByTestId('card-transactions-backdrop')),
+    ];
+    for (const [index, close] of closers.entries()) {
+      // A real click focuses the button first; fireEvent.click does not.
+      button.focus();
+      fireEvent.click(button);
+      expect(screen.getByRole('dialog', { name: 'Groceries' })).toBeTruthy();
+      close();
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(document.activeElement).toBe(button);
+    }
+  });
+
+  it('a dialog opened from a sheet row sits above the sheet, not inside it, and Cancel leaves the sheet open with focus on the row', async () => {
+    await renderWithRows([panelRow()]);
+    const sheet = screen.getByRole('dialog', { name: 'Groceries' });
+    const trigger = await screen.findByRole('button', { name: /Actions for Phonemart/ });
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
+    const recat = screen.getByRole('dialog', { name: /^Category for/ });
+    expect(sheet.contains(recat)).toBe(false);
+    expect(sheet.compareDocumentPosition(recat) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(within(recat).getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('dialog', { name: 'Groceries' })).toBeTruthy();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  /** Review Focus 2. */
+  it('after the Always ask dialog that follows a category change closes, focus is back in the sheet', async () => {
+    await renderWithRows([panelRow()]);
+    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
+    fireEvent.click(screen.getByLabelText(/Always ask about PHONEMART 884/));
+    fireEvent.click(screen.getByRole('button', { name: 'Save category' }));
+    const asking = await screen.findByRole('dialog', { name: /^Always ask for rows like this/ });
+    fireEvent.click(within(asking).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog', { name: /^Always ask for rows like this/ })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole('dialog', { name: 'Groceries' }));
+  });
+
+  /** Review Focus 2. */
+  it('a fix that takes the focused row off the list keeps focus in the sheet', async () => {
+    const { categoryTransactionsAction } = await import('@/app/(app)/budgets/category-transactions-action');
+    await renderWithRows([panelRow()]);
+    vi.mocked(categoryTransactionsAction).mockResolvedValueOnce({ rows: [], splits: {} });
+    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
+    const input = within(screen.getByRole('dialog', { name: /^Category for/ })).getByRole('combobox');
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'Pho' } });
+    fireEvent.mouseDown(screen.getByRole('option', { name: 'Phone' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save category' }));
+    expect(await screen.findByText('No transactions in Groceries this month.')).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByRole('dialog', { name: 'Groceries' }));
+  });
+
+  /** Review Focus 4. Fails first, and again if RowFixHost's dialogs ever render inside the Sheet's panel. */
+  it('a category picker in a dialog opened from the sheet stays open when the page scrolls, whatever clips the sheet', async () => {
+    await renderWithRows([panelRow()]);
+    const sheet = screen.getByRole('dialog', { name: 'Groceries' });
+    // What a browser computes for a clipping, fixed-holding Sheet away from the centred dialog (jsdom computes no classes).
+    sheet.style.transform = 'translateX(0px)';
+    const body = screen.getByTestId('card-transactions-body');
+    body.style.overflowY = 'auto';
+    vi.spyOn(body, 'getBoundingClientRect').mockReturnValue({ top: 0, bottom: 800, left: 900, right: 1280, width: 380, height: 800, x: 900, y: 0, toJSON: () => ({}) });
+    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
+    const input = within(screen.getByRole('dialog', { name: /^Category for/ })).getByRole('combobox');
+    vi.spyOn(input, 'getBoundingClientRect').mockReturnValue({ top: 300, bottom: 330, left: 300, right: 600, width: 300, height: 30, x: 300, y: 300, toJSON: () => ({}) });
+    fireEvent.focus(input);
+    expect(screen.getByRole('listbox')).toBeTruthy();
+    fireEvent.scroll(window);
+    expect(screen.getByRole('listbox')).toBeTruthy();
   });
 });

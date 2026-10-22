@@ -52,6 +52,7 @@ import { categoryTransactionsAction } from './category-transactions-action';
 import { categoryHistoryAction, type CategoryHistoryMonth } from './category-history-action';
 import { buttonClass } from '@/components/ui/Button';
 import { RowMenu, RowMenuButton, RowMenuLink } from '@/components/ui/RowMenu';
+import { Sheet } from '@/components/ui/Sheet';
 import { RecategorizeDialog, type RecategorizeRow } from '@/components/transactions/RecategorizeDialog';
 import { AlwaysAskDialog } from '@/components/transactions/AlwaysAskDialog';
 import { SplitDialog, type SplitTarget } from '@/components/transactions/SplitDialog';
@@ -343,7 +344,7 @@ function shortMonthLabel(month: string): string {
  * F-06 (2026-09-02 review): "is Groceries always over, or was August a one-off" -- six months,
  * spent against limit, an over/under mark, no chart. Fetched on demand the moment the card's own
  * breakdown/transactions region opens, the identical "smallest query that works" reasoning
- * CategoryTransactionsPanel documents -- a household that opens one card out of a dozen never
+ * CategoryTransactionsSheet documents -- a household that opens one card out of a dozen never
  * fetches the other eleven months' worth of history.
  *
  * Deliberately its own small list, not folded into ChildBreakdownRow or the MetricCard's `bar`
@@ -358,12 +359,15 @@ function CategoryHistoryStrip({
   month,
   categoryId,
   categoryName,
+  narrow = false,
 }: {
   scope: BudgetScope;
   userId: number | null;
   month: string;
   categoryId: number;
   categoryName: string;
+  /** v1.58.0 (design §2): three columns at every width, for a drawer narrower than `sm:` assumes. */
+  narrow?: boolean;
 }) {
   type StripState =
     | { status: 'loading' }
@@ -406,7 +410,7 @@ function CategoryHistoryStrip({
   return (
     <ul
       aria-label={`${categoryName} spent versus limit, the last six months`}
-      className="grid grid-cols-3 gap-2 px-4 pb-3 sm:grid-cols-6 sm:px-5"
+      className={`grid grid-cols-3 gap-2 px-4 pb-3 sm:px-5${narrow ? '' : ' sm:grid-cols-6'}`}
     >
       {state.months.map((entry) => {
         const hasLimit = entry.limitCents !== null;
@@ -428,6 +432,34 @@ function CategoryHistoryStrip({
   );
 }
 
+/** v1.58.0 (design §2). What a card's Sheet lists, and the figure it heads with. */
+interface CardSheetTarget {
+  scope: BudgetScope;
+  userId: number | null;
+  month: string;
+  /** Whose rows: the category's own id; the parent's for Not in a sub-category. */
+  categoryId: number;
+  /** 'Groceries', 'Housing › Rent', 'Housing › Not in a sub-category'. */
+  title: string;
+  /** The empty line's name: 'No transactions in Rent this month.' */
+  categoryName: string;
+  /** 'direct' heads with the parent row's directSpentCents and no limit. */
+  figure: 'category' | 'direct';
+  /** A leaf card's own six months at the top. */
+  history: boolean;
+}
+
+/** Opens the card Sheet in CardSheetHost. */
+const CardSheetContext = createContext<(target: CardSheetTarget) => void>(() => {});
+
+/** Pure. A row that has left the page reads as nothing spent and no limit (a card leaves the page only once nothing is left on it). */
+function sheetFigure(target: CardSheetTarget, row: BudgetRow | null): { spentCents: number; limitCents: number | null } {
+  if (row === null) return { spentCents: 0, limitCents: null };
+  return target.figure === 'direct'
+    ? { spentCents: row.directSpentCents, limitCents: null }
+    : { spentCents: row.spentCents, limitCents: row.limitCents };
+}
+
 /**
  * A category's own transactions for one month (Lane 1 / ruling: "a child expands to its own
  * transactions"). Fetched on demand, the moment a breakdown row is opened -- not pre-loaded for
@@ -439,20 +471,14 @@ function CategoryHistoryStrip({
  * Spec 2026-10-21 (fix from Budgets) §2.1, §2.2, §2.5: each row has a menu to change its category
  * or split it, through the Transactions actions. The list is fetched again after a change and the
  * outcome is reported above it. The dialogs themselves live in RowFixHost, above the card list.
+ *
+ * v1.58.0 (design §2): the rows open in a Sheet, not under the card. The Sheet's header reads the
+ * card's live figure through BudgetsPageContext, so it follows each fix.
  */
-function CategoryTransactionsPanel({
-  scope,
-  userId,
-  month,
-  categoryId,
-  categoryName,
-}: {
-  scope: BudgetScope;
-  userId: number | null;
-  month: string;
-  categoryId: number;
-  categoryName: string;
-}) {
+function CategoryTransactionsSheet({ target, onClose }: { target: CardSheetTarget; onClose: () => void }) {
+  const { scope, userId, month, categoryId, categoryName } = target;
+  const { rowOf } = useContext(BudgetsPageContext);
+  const { spentCents, limitCents } = sheetFigure(target, rowOf(scope, userId, categoryId));
   type PanelState =
     | { status: 'loading' }
     | { status: 'error'; message: string }
@@ -499,17 +525,14 @@ function CategoryTransactionsPanel({
     };
   }, [scope, userId, month, categoryId, version]);
 
-  if (state.status === 'loading') {
-    return <p className="px-4 py-3 text-xs text-muted sm:px-5">Loading transactions…</p>;
-  }
-  if (state.status === 'error') {
-    return (
+  const list =
+    state.status === 'loading' ? (
+      <p className="px-4 py-3 text-xs text-muted sm:px-5">Loading transactions…</p>
+    ) : state.status === 'error' ? (
       <p role="alert" className="px-4 py-3 text-xs font-medium text-negative-soft-fg sm:px-5">
         {state.message}
       </p>
-    );
-  }
-  return (
+    ) : (
     <>
       {notice?.error ? (
         <p role="alert" className="px-4 py-3 text-xs font-medium text-negative-soft-fg sm:px-5">
@@ -584,22 +607,67 @@ function CategoryTransactionsPanel({
           ))}
         </ul>
       )}
-      {/* Spec 2026-10-21 (fix from Budgets) §2.6. Exactly the rows this list sums: this category
-          alone (exact), spend only, this month, this person. Absent when the list is empty. */}
-      {state.rows.length > 0 ? (
-        <div className="px-4 py-2 sm:px-5">
+    </>
+    );
+
+  return (
+    <Sheet
+      sheetId="card-transactions"
+      title={target.title}
+      description={
+        <>
+          <span>{monthLabel(month)}</span> ·{' '}
+          <span className="font-semibold text-ink">
+            spent {formatCents(spentCents)}
+            {limitCents !== null ? ` of ${formatCents(limitCents)}` : ''}
+          </span>
+        </>
+      }
+      footer={
+        // Spec 2026-10-21 (fix from Budgets) §2.6, moved here in v1.58.0. Exactly the rows this list
+        // sums: this category alone (exact), spend only, this month, this person. Absent when empty.
+        state.status === 'loaded' && state.rows.length > 0 ? (
           <Link
             href={transactionsHref(
               { range: { from: monthStart(month), to: monthEnd(month) }, person: scope === 'personal' ? userId : null },
               { kind: 'budget-category', categoryId },
             )}
-            className={buttonClass('ghost', 'sm', 'w-fit px-0 text-xs')}
+            className={buttonClass('secondary', 'sm', 'min-h-11 sm:min-h-0')}
           >
             Open in Transactions
           </Link>
+        ) : undefined
+      }
+      onClose={onClose}
+    >
+      {target.history ? (
+        <div className="pt-3">
+          <CategoryHistoryStrip scope={scope} userId={userId} month={month} categoryId={categoryId} categoryName={categoryName} narrow />
         </div>
       ) : null}
-    </>
+      {list}
+    </Sheet>
+  );
+}
+
+/**
+ * v1.58.0 (design §2). Holds the one open Sheet above the card list, a sibling after the page and
+ * before RowFixHost's dialogs, so a dialog opened from a row paints above the Sheet and is never
+ * inside it. Keyed by what it lists, so a different card starts from Loading.
+ */
+function CardSheetHost({ children }: { children: ReactNode }) {
+  const [target, setTarget] = useState<CardSheetTarget | null>(null);
+  return (
+    <CardSheetContext.Provider value={setTarget}>
+      {children}
+      {target ? (
+        <CategoryTransactionsSheet
+          key={`${target.scope}:${target.userId}:${target.categoryId}:${target.figure}`}
+          target={target}
+          onClose={() => setTarget(null)}
+        />
+      ) : null}
+    </CardSheetContext.Provider>
   );
 }
 
@@ -626,6 +694,7 @@ const RowFixContext = createContext<RowFixes>({ recategorize: () => {}, split: (
  * last row moves out, and a parent's "Not in a sub-category" row goes once its direct spend is zero.
  * The dialog a person is still using stays until they close it. Each outcome goes to the panel that
  * posted it; once that panel is gone the outcome is dropped, and the dialog is unaffected.
+ * v1.58.0 (design §2): the panel is the card's Sheet, which CardSheetHost holds just inside this host.
  */
 function RowFixHost({ children }: { children: ReactNode }) {
   const { categories, canAuthorRules, isAdmin } = useContext(BudgetsPageContext);
@@ -705,16 +774,19 @@ function RowFixHost({ children }: { children: ReactNode }) {
  * own small bar underneath, since ListRow itself has no bar slot to give it (that gap is reported
  * here rather than forked into a second ListRow variant: the bar is a SIBLING <li> using the
  * shared ProgressBar, not a change to ListRow). A trailing button expands this one child's own
- * transactions below it -- "a child expands to its own transactions".
+ * transactions below it -- "a child expands to its own transactions". v1.58.0 (design §2): they
+ * open in the card Sheet, titled with the parent's name.
  */
 function ChildBreakdownRow({
   child,
+  parentName,
   scope,
   userId,
   month,
   sinkingFund,
 }: {
   child: BudgetRow;
+  parentName: string;
   scope: BudgetScope;
   userId: number | null;
   month: string;
@@ -725,7 +797,7 @@ function ChildBreakdownRow({
    *  than unmounted" applies to the View-mode breakdown exactly as it always did to the table. */
   sinkingFund: SinkingFund | null;
 }) {
-  const [txOpen, setTxOpen] = useState(false);
+  const openSheet = useContext(CardSheetContext);
   const hasLimit = child.limitCents !== null;
   const pct = child.pct ?? 0;
   const Icon = categoryIcon(child.categoryName);
@@ -747,10 +819,21 @@ function ChildBreakdownRow({
           <button
             type="button"
             className={buttonClass('ghost', 'sm', 'px-2 text-xs')}
-            aria-expanded={txOpen}
-            onClick={() => setTxOpen((open) => !open)}
+            aria-haspopup="dialog"
+            onClick={() =>
+              openSheet({
+                scope,
+                userId,
+                month,
+                categoryId: child.categoryId,
+                title: `${parentName} › ${child.categoryName}`,
+                categoryName: child.categoryName,
+                figure: 'category',
+                history: false,
+              })
+            }
           >
-            {txOpen ? 'Hide transactions' : 'View transactions'}
+            View transactions
           </button>
         }
       />
@@ -765,17 +848,6 @@ function ChildBreakdownRow({
               reports what the carry already is -- it neither sets a target nor changes the limit. */}
           Accumulating for {sinkingFund.itemName} — {formatCents(sinkingFund.carriedCents)} of{' '}
           {formatCents(sinkingFund.targetCents)} by {sinkingFund.dueDate}
-        </li>
-      ) : null}
-      {txOpen ? (
-        <li className="bg-surface-2">
-          <CategoryTransactionsPanel
-            scope={scope}
-            userId={userId}
-            month={month}
-            categoryId={child.categoryId}
-            categoryName={child.categoryName}
-          />
         </li>
       ) : null}
     </>
@@ -793,6 +865,7 @@ function ChildBreakdownRow({
  * "View transactions" needs no query change -- `categoryId={row.categoryId}` is the PARENT's own
  * id, and categoryTransactions (src/lib/budgets.ts) already filters EFFECTIVE_CATEGORY =
  * categoryId exactly (no rollup), so it returns precisely this bucket's rows for free.
+ * v1.58.0 (design §2): they open in the card Sheet, headed with the parent's direct spend.
  */
 function DirectSpendRow({
   row,
@@ -805,39 +878,37 @@ function DirectSpendRow({
   userId: number | null;
   month: string;
 }) {
-  const [txOpen, setTxOpen] = useState(false);
+  const openSheet = useContext(CardSheetContext);
   const Icon = categoryIcon(row.categoryName);
 
   return (
-    <>
-      <ListRow
-        icon={<Icon className="h-4 w-4" />}
-        title="Not in a sub-category"
-        meta="No limit set"
-        amount={<Money cents={row.directSpentCents} plain />}
-        trailing={
-          <button
-            type="button"
-            className={buttonClass('ghost', 'sm', 'px-2 text-xs')}
-            aria-expanded={txOpen}
-            onClick={() => setTxOpen((open) => !open)}
-          >
-            {txOpen ? 'Hide transactions' : 'View transactions'}
-          </button>
-        }
-      />
-      {txOpen ? (
-        <li className="bg-surface-2">
-          <CategoryTransactionsPanel
-            scope={scope}
-            userId={userId}
-            month={month}
-            categoryId={row.categoryId}
-            categoryName="Not in a sub-category"
-          />
-        </li>
-      ) : null}
-    </>
+    <ListRow
+      icon={<Icon className="h-4 w-4" />}
+      title="Not in a sub-category"
+      meta="No limit set"
+      amount={<Money cents={row.directSpentCents} plain />}
+      trailing={
+        <button
+          type="button"
+          className={buttonClass('ghost', 'sm', 'px-2 text-xs')}
+          aria-haspopup="dialog"
+          onClick={() =>
+            openSheet({
+              scope,
+              userId,
+              month,
+              categoryId: row.categoryId,
+              title: `${row.categoryName} › Not in a sub-category`,
+              categoryName: 'Not in a sub-category',
+              figure: 'direct',
+              history: false,
+            })
+          }
+        >
+          View transactions
+        </button>
+      }
+    />
   );
 }
 
@@ -846,9 +917,9 @@ function DirectSpendRow({
  * MetricCard verbatim (ruling D1): icon from categoryIcon, a subtitle that says something real, a
  * percentage Pill, spent as the hero with "of $X" beside it, a ProgressBar, and the remaining/over
  * sentence as status. The footer action is "View breakdown" for a category with children (which
- * expands them as ChildBreakdownRows) or "View transactions" for a leaf category (which expands
- * this category's own transactions directly) -- either way the card spans the full grid row while
- * open, so the breakdown is never squeezed into a third of the width.
+ * expands them as ChildBreakdownRows, the card spanning the full grid row while open) or "View
+ * transactions" for a leaf category. v1.58.0 (design §2): a leaf's transactions open in the card
+ * Sheet, so a leaf card never changes shape.
  */
 function BudgetCategoryCard({
   row,
@@ -863,18 +934,16 @@ function BudgetCategoryCard({
   scope: BudgetScope;
   userId: number | null;
   month: string;
-  /** Only consulted when row.children.length > 0. A leaf card's "View transactions" is a local,
-   *  unpersisted peek (ruling U5 scopes localStorage to GROUP disclosure, not to a single leaf's
-   *  transaction list), so it keeps its own useState below instead. */
+  /** Only consulted when row.children.length > 0. */
   groupState: GroupOpenState;
   predict: RowPredictions | null;
   /** v1.13.0 ruling R11 / micro-ruling M9, keyed by category id -- looked up for this row's OWN
    *  category and passed through so every ChildBreakdownRow can look up its own entry too. */
   sinkingFunds: Record<number, SinkingFund>;
 }) {
-  const [leafTxOpen, setLeafTxOpen] = useState(false);
+  const openSheet = useContext(CardSheetContext);
   const hasChildren = row.children.length > 0;
-  const isOpen = hasChildren ? groupState.isOpen(row.categoryId) : leafTxOpen;
+  const isOpen = hasChildren && groupState.isOpen(row.categoryId);
   const hasLimit = row.limitCents !== null;
   const pct = row.pct ?? 0;
   const Icon = categoryIcon(row.categoryName);
@@ -884,12 +953,11 @@ function BudgetCategoryCard({
   const cardId = budgetCardId(scope, userId, row.categoryId);
 
   // Spec 2026-10-21 (fix from Budgets) §2.6. Back to Budgets lands here with this card's id in the
-  // URL hash: open it once after mount, a leaf's transactions or a parent's breakdown. Only this
-  // top-level card reopens; a child row's own panel stays closed (owner decision).
+  // URL hash: open a parent's breakdown once after mount. v1.58.0 (design §6): a leaf has nothing
+  // inline left to open, so the hash only lands the page on it and is cleared; the Sheet never opens.
   useEffect(() => {
     if (window.location.hash !== `#${cardId}`) return;
     if (row.children.length > 0) groupState.open(row.categoryId);
-    else setLeafTxOpen(true);
     // One-shot: the hash names where the person came from, not a state to keep in sync. Cleared once
     // acted on, or a card they closed would reopen on its next mount (leaving Edit limits, say). A
     // null state lets the Next router keep its own history entry and take the new URL.
@@ -952,16 +1020,30 @@ function BudgetCategoryCard({
         <button
           type="button"
           className={buttonClass('ghost', 'sm', 'w-fit px-0 text-xs')}
-          aria-expanded={isOpen}
-          onClick={() => (hasChildren ? groupState.toggle(row.categoryId) : setLeafTxOpen((open) => !open))}
+          {...(hasChildren
+            ? { 'aria-expanded': isOpen, onClick: () => groupState.toggle(row.categoryId) }
+            : {
+                'aria-haspopup': 'dialog' as const,
+                onClick: () =>
+                  openSheet({
+                    scope,
+                    userId,
+                    month,
+                    categoryId: row.categoryId,
+                    title: row.categoryName,
+                    categoryName: row.categoryName,
+                    figure: 'category',
+                    history: true,
+                  }),
+              })}
         >
-          {hasChildren ? (isOpen ? 'Hide breakdown' : 'View breakdown') : isOpen ? 'Hide transactions' : 'View transactions'}
+          {hasChildren ? (isOpen ? 'Hide breakdown' : 'View breakdown') : 'View transactions'}
         </button>
       }
     >
-      {/* F-06: the six-month strip lives INSIDE the region "View breakdown"/"View transactions"
-          already opens, never a row every collapsed card renders (controller note) -- gated on
-          isOpen alone, same as CategoryTransactionsPanel below, so a closed card fetches nothing. */}
+      {/* F-06: a parent's six-month strip lives INSIDE the breakdown "View breakdown" opens, never a
+          row every collapsed card renders -- gated on isOpen, so a closed card fetches nothing. A
+          leaf's strip is at the top of its Sheet (v1.58.0, design §2). */}
       {isOpen ? (
         <CategoryHistoryStrip scope={scope} userId={userId} month={month} categoryId={row.categoryId} categoryName={row.categoryName} />
       ) : null}
@@ -978,6 +1060,7 @@ function BudgetCategoryCard({
             <ChildBreakdownRow
               key={child.categoryId}
               child={child}
+              parentName={row.categoryName}
               scope={scope}
               userId={userId}
               month={month}
@@ -991,21 +1074,6 @@ function BudgetCategoryCard({
             <DirectSpendRow row={row} scope={scope} userId={userId} month={month} />
           ) : null}
         </ul>
-      ) : isOpen ? (
-        // A leaf's transactions are NOT pre-fetched data -- see CategoryTransactionsPanel's own
-        // doc comment ("fetched on demand") -- so this one stays conditionally mounted rather
-        // than always-present-but-hidden: keeping it mounted-but-hidden would fire a server
-        // action for every leaf category on every page load, which is the opposite of "the
-        // smallest query that works".
-        <div className="-mx-4 mt-1 sm:-mx-5">
-          <CategoryTransactionsPanel
-            scope={scope}
-            userId={userId}
-            month={month}
-            categoryId={row.categoryId}
-            categoryName={row.categoryName}
-          />
-        </div>
       ) : null}
     </MetricCard>
   );
@@ -1654,12 +1722,19 @@ function PersonalCard({
 /**
  * Spec 2026-10-21 (fix from Budgets) §2.3. What a card's row panel needs to offer a fix: the
  * category list for the picker, and who may author rules or administer. Provided by BudgetsClient
- * around the whole page; the panel reads it.
+ * around the whole page; the panel reads it. `rowOf` (v1.58.0, design §2) is this render's row for a
+ * card, so the Sheet's header figure follows a revalidation.
  */
-const BudgetsPageContext = createContext<{ categories: CategoryLike[]; canAuthorRules: boolean; isAdmin: boolean }>({
+const BudgetsPageContext = createContext<{
+  categories: CategoryLike[];
+  canAuthorRules: boolean;
+  isAdmin: boolean;
+  rowOf: (scope: BudgetScope, userId: number | null, categoryId: number) => BudgetRow | null;
+}>({
   categories: [],
   canAuthorRules: false,
   isAdmin: false,
+  rowOf: () => null,
 });
 
 export function BudgetsClient({
@@ -1813,9 +1888,24 @@ export function BudgetsClient({
   // on the page, so it always shows rather than waiting on a selection nothing ever sets it to.
   const personalGridVisible = (userId: number): boolean => household === null || selectedPersonId === userId;
 
+  // v1.58.0 (design §2): every row on this render, children included, so a card's Sheet reads its
+  // live figure; a card that has left the page finds nothing.
+  const rowIndex = new Map<string, BudgetRow>();
+  const indexRows = (scope: BudgetScope, rowUserId: number | null, rows: BudgetRow[]) => {
+    for (const entry of rows) {
+      rowIndex.set(`${scope}:${rowUserId ?? 'h'}:${entry.categoryId}`, entry);
+      indexRows(scope, rowUserId, entry.children);
+    }
+  };
+  indexRows('household', null, household ?? []);
+  for (const person of personal) indexRows('personal', person.userId, person.rows);
+  const rowOf = (scope: BudgetScope, rowUserId: number | null, categoryId: number): BudgetRow | null =>
+    rowIndex.get(`${scope}:${rowUserId ?? 'h'}:${categoryId}`) ?? null;
+
   return (
-    <BudgetsPageContext.Provider value={{ categories, canAuthorRules: household !== null, isAdmin: currentUserIsAdmin }}>
+    <BudgetsPageContext.Provider value={{ categories, canAuthorRules: household !== null, isAdmin: currentUserIsAdmin, rowOf }}>
     <RowFixHost>
+    <CardSheetHost>
     <div className="flex flex-col gap-4 sm:gap-5">
       {/* Ruling U1 (v1.18.0): no eyebrow. MonthNav in `actions` already names the month, in the
           control that changes it -- an eyebrow beside it made the header state one fact twice,
@@ -2051,6 +2141,7 @@ export function BudgetsClient({
         change them again.
       </p>
     </div>
+    </CardSheetHost>
     </RowFixHost>
     </BudgetsPageContext.Provider>
   );
