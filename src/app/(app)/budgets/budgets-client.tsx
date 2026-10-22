@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { createContext, useActionState, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, useActionState, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { FormError } from '@/components/FormError';
 import { AutoSaveCheckbox, AutoSaveTextInput, useAutoSave } from '@/components/ui/AutoSave';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
@@ -460,6 +460,100 @@ function sheetFigure(target: CardSheetTarget, row: BudgetRow | null): { spentCen
     : { spentCents: row.spentCents, limitCents: row.limitCents };
 }
 
+/** v1.58.0 (design §4). The tag on a row a rule or a guess filed; null for a hand-set row. */
+function filedTag(row: CategoryPanelRow): string | null {
+  return row.source === 'rule'
+    ? row.filedBy
+      ? `Set by rule: ${row.filedBy.pattern} (${row.filedBy.matchType})`
+      : 'Set by a rule'
+    : row.source === 'bayes'
+      ? 'Set by guess'
+      : null;
+}
+
+/** v1.58.0 (design §3). One row of a card's Sheet: the whole row opens Change category, Split and More in Transactions. */
+function FixRow({
+  row,
+  categoryId,
+  splits,
+  owner,
+}: {
+  row: CategoryPanelRow;
+  categoryId: number;
+  splits: CategoryPanelResult['splits'];
+  owner: RowFixOwner;
+}) {
+  const fixes = useContext(RowFixContext);
+  const tagId = useId();
+  const tag = filedTag(row);
+  return (
+    <li className="border-b border-line last:border-b-0">
+      <RowMenu
+        label={`Fix ${row.merchant}, ${row.date}, ${formatCents(row.amountCents)}`}
+        row={{
+          content: (
+            <>
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="truncate text-sm font-semibold text-ink">{row.merchant}</span>
+                <span className="truncate text-xs text-subtle">{row.date}</span>
+                {tag ? (
+                  <Pill tone="neutral" className="mt-0.5 max-w-full self-start">
+                    <span id={tagId} className="min-w-0 truncate">
+                      {tag}
+                    </span>
+                  </Pill>
+                ) : null}
+              </span>
+              <span className="money shrink-0 text-sm font-semibold text-ink">
+                <Money cents={row.amountCents} />
+              </span>
+              <ExpandIcon aria-hidden="true" className="h-5 w-5 shrink-0 text-muted" />
+            </>
+          ),
+          describedBy: tag ? tagId : undefined,
+        }}
+      >
+        {row.splitId === null ? (
+          <RowMenuButton
+            onSelect={() =>
+              fixes.recategorize(
+                {
+                  id: row.id,
+                  merchant: row.merchant,
+                  normalizedMerchant: row.normalizedMerchant,
+                  date: row.date,
+                  amountCents: row.amountCents,
+                  categoryId,
+                  source: row.source,
+                  filedBy: row.filedBy,
+                  alwaysAsked: row.alwaysAsked,
+                },
+                owner,
+              )
+            }
+          >
+            Change category…
+          </RowMenuButton>
+        ) : null}
+        <RowMenuButton
+          onSelect={() =>
+            fixes.split(
+              { id: row.id, merchant: row.merchant, date: row.date, amountCents: row.parentAmountCents },
+              splits[row.id] ?? [],
+              owner,
+            )
+          }
+        >
+          {row.splitId === null ? 'Split…' : 'Edit split…'}
+        </RowMenuButton>
+        <RowMenuLink href={transactionsHref({ range: null, person: null }, { kind: 'transaction', transactionId: row.id, via: 'budgets' })}>
+          More in Transactions
+        </RowMenuLink>
+      </RowMenu>
+    </li>
+  );
+}
+
 /**
  * A category's own transactions for one month (Lane 1 / ruling: "a child expands to its own
  * transactions"). Fetched on demand, the moment a breakdown row is opened -- not pre-loaded for
@@ -483,7 +577,6 @@ function CategoryTransactionsSheet({ target, onClose }: { target: CardSheetTarge
     | { status: 'loading' }
     | { status: 'error'; message: string }
     | { status: 'loaded'; rows: CategoryPanelRow[]; splits: CategoryPanelResult['splits'] };
-  const fixes = useContext(RowFixContext);
   const [state, setState] = useState<PanelState>({ status: 'loading' });
   /** Bumped after a change posts, so the list is fetched again without flashing back to Loading. */
   const [version, setVersion] = useState(0);
@@ -546,64 +639,9 @@ function CategoryTransactionsSheet({ target, onClose }: { target: CardSheetTarge
       {state.rows.length === 0 ? (
         <p className="px-4 py-3 text-xs text-subtle sm:px-5">No transactions in {categoryName} this month.</p>
       ) : (
-        <ul className="flex flex-col divide-y divide-line">
+        <ul className="flex flex-col">
           {state.rows.map((row) => (
-            <ListRow
-              key={`${row.id}:${row.splitId ?? 0}`}
-              direction={row.amountCents >= 0 ? 'in' : 'out'}
-              title={row.merchant}
-              meta={row.date}
-              detail={
-                row.source === 'rule'
-                  ? row.filedBy
-                    ? `Set by rule: ${row.filedBy.pattern} (${row.filedBy.matchType})`
-                    : 'Set by a rule'
-                  : row.source === 'bayes'
-                    ? 'Set by guess'
-                    : undefined
-              }
-              amount={<Money cents={row.amountCents} />}
-              trailing={
-                <RowMenu label={`Actions for ${row.merchant} on ${row.date}, ${formatCents(row.amountCents)}`}>
-                  {row.splitId === null ? (
-                    <RowMenuButton
-                      onSelect={() =>
-                        fixes.recategorize(
-                          {
-                            id: row.id,
-                            merchant: row.merchant,
-                            normalizedMerchant: row.normalizedMerchant,
-                            date: row.date,
-                            amountCents: row.amountCents,
-                            categoryId,
-                            source: row.source,
-                            filedBy: row.filedBy,
-                            alwaysAsked: row.alwaysAsked,
-                          },
-                          owner,
-                        )
-                      }
-                    >
-                      Change category…
-                    </RowMenuButton>
-                  ) : null}
-                  <RowMenuButton
-                    onSelect={() =>
-                      fixes.split(
-                        { id: row.id, merchant: row.merchant, date: row.date, amountCents: row.parentAmountCents },
-                        state.splits[row.id] ?? [],
-                        owner,
-                      )
-                    }
-                  >
-                    {row.splitId === null ? 'Split…' : 'Edit split…'}
-                  </RowMenuButton>
-                  <RowMenuLink href={transactionsHref({ range: null, person: null }, { kind: 'transaction', transactionId: row.id, via: 'budgets' })}>
-                    More in Transactions
-                  </RowMenuLink>
-                </RowMenu>
-              }
-            />
+            <FixRow key={`${row.id}:${row.splitId ?? 0}`} row={row} categoryId={categoryId} splits={state.splits} owner={owner} />
           ))}
         </ul>
       )}

@@ -63,7 +63,24 @@ function menuItems(root: HTMLElement | null): HTMLElement[] {
   return root === null ? [] : Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]'));
 }
 
-export function RowMenu({ label, children }: { label: string; children: ReactNode }) {
+/** v1.58.0 (design §3): the trigger when the whole row is the button. */
+const ROW_TRIGGER_CLASS =
+  'flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:-outline-offset-2 sm:px-5';
+
+export function RowMenu({
+  label,
+  row,
+  children,
+}: {
+  label: string;
+  /**
+   * v1.58.0 (design §3). The whole row is the button that opens the menu, in place of the ⋯ kebab.
+   * `content` is phrasing content only (spans, an icon): it renders inside the <button>, and the menu renders
+   * beside the button, never inside it. `describedBy` is the id of an element inside `content`, read after the label.
+   */
+  row?: { content: ReactNode; describedBy?: string };
+  children: ReactNode;
+}) {
   const trigger = useRef<HTMLButtonElement | null>(null);
   const menu = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
@@ -170,19 +187,28 @@ export function RowMenu({ label, children }: { label: string; children: ReactNod
     // somebody just clicked is its own defect. The success/error Notice banners are already live
     // regions, so the announcement follows for free.
     <RowMenuContext.Provider value={{ close: () => close(true) }}>
-      <span className="inline-flex">
+      <span className={row ? 'flex' : 'inline-flex'}>
         <button
           ref={trigger}
           type="button"
           aria-haspopup="menu"
           aria-expanded={open}
           aria-label={label}
+          aria-describedby={row?.describedBy}
           onClick={() => (open ? close(false) : show())}
-          className="inline-flex h-11 w-11 items-center justify-center rounded-md text-muted hover:bg-surface-2 hover:text-ink sm:h-8 sm:w-8"
+          className={
+            row
+              ? ROW_TRIGGER_CLASS
+              : 'inline-flex h-11 w-11 items-center justify-center rounded-md text-muted hover:bg-surface-2 hover:text-ink sm:h-8 sm:w-8'
+          }
         >
-          <span aria-hidden="true" className="text-base leading-none">
-            ⋯
-          </span>
+          {row ? (
+            row.content
+          ) : (
+            <span aria-hidden="true" className="text-base leading-none">
+              ⋯
+            </span>
+          )}
         </button>
         {open ? (
           <div

@@ -21,6 +21,18 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+### Changed
+
+- Budgets: View transactions opens a card's rows in a panel instead of under the card, so the page
+  stays where it was. On a phone the panel fills the screen; on a wider screen it sits at the right
+  with the page beside it. Its header names the category, the month and what was spent against the
+  limit, and the figure updates after each fix.
+- Budgets: each row in that panel is one button with an arrow at its end, and tapping it offers
+  Change category, Split and More in Transactions. A row a rule or a guess filed carries a small tag
+  saying so.
+- Budgets: a category with no sub-categories shows its six-month history at the top of that panel;
+  View breakdown still opens a parent's history and sub-categories on the card.
+
 ## [1.57.2] - 2026-10-21
 
 ### Fixed

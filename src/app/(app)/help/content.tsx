@@ -346,11 +346,13 @@ export const HELP_SECTIONS: HelpSection[] = [
           line at the top says the same amount. Money coming in with no category is not counted there.
         </P>
         <P>
-          Open a card&rsquo;s transactions and each row has a menu: <B>Change category&hellip;</B> and{' '}
-          <B>Split&hellip;</B> happen right there, and the card&rsquo;s figure updates. A row a rule filed
-          says which rule, and changing its category offers to change this transaction only, to file that
-          merchant the same way from now on, or to always ask about it. <B>Open in Transactions</B> lists
-          exactly the rows the card adds up, with a way back to the same card.
+          <B>View transactions</B> opens a card&rsquo;s rows in a panel: over the page on a phone, beside it
+          on a wider screen, and the page stays where it was. Its header says what was spent against the
+          limit, and the figure updates as you fix rows. Tap a row for <B>Change category&hellip;</B>,{' '}
+          <B>Split&hellip;</B> or <B>More in Transactions</B>. A row a rule or a guess filed carries a tag
+          saying so, and changing its category offers to change this transaction only, to file that
+          merchant the same way from now on, or to always ask about it. <B>Open in Transactions</B>, at the
+          foot of the panel, lists exactly the rows the card adds up, with a way back to the same card.
         </P>
         <P>
           Once there are three full calendar months of history, each category can also show a

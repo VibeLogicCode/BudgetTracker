@@ -1388,7 +1388,7 @@ describe('BudgetsClient — fixing a row from the card', () => {
     const { categoryTransactionsAction } = await import('@/app/(app)/budgets/category-transactions-action');
     const { setCategoryAction } = await import('@/app/(app)/transactions/actions');
     await renderWithRows([panelRow()]);
-    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Fix Phonemart/ }));
     expect(screen.getByRole('menuitem', { name: 'Split…' })).toBeTruthy();
     fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
     const input = within(screen.getByRole('dialog', { name: /^Category for/ })).getByRole('combobox');
@@ -1409,7 +1409,7 @@ describe('BudgetsClient — fixing a row from the card', () => {
     const { saveSplitsAction } = await import('@/app/(app)/transactions/actions');
     const parts = [{ id: 501, txnId: 77, categoryId: 1, amountCents: -2000, note: null }, { id: 502, txnId: 77, categoryId: 2, amountCents: -2217, note: null }];
     await renderWithRows([panelRow({ amountCents: -2000, parentAmountCents: -4217, source: 'manual', splitId: 501, filedBy: null })], { 77: parts });
-    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Fix Phonemart/ }));
     expect(screen.queryByRole('menuitem', { name: 'Change category…' })).toBeNull();
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit split…' }));
     expect(screen.getByRole('dialog', { name: /^Split Phonemart/ }).textContent).toContain('-$42.17');
@@ -1434,7 +1434,7 @@ describe('BudgetsClient — fixing a row from the card', () => {
         .map((node) => [node.textContent, node.getAttribute('aria-disabled')]);
     await renderWithRows([panelRow()], {}, { household: [makeRow({ categoryId: 3, categoryName: 'Lanterns', isArchived: true })], categories });
 
-    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Fix Phonemart/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
     const input = within(screen.getByRole('dialog', { name: /^Category for/ })).getByRole('combobox') as HTMLInputElement;
     expect(input.value).toBe('Lanterns (archived)');
@@ -1456,7 +1456,7 @@ describe('BudgetsClient — fixing a row from the card', () => {
       { 77: parts },
       { household: [makeRow({ categoryId: 3, categoryName: 'Lanterns', isArchived: true })], categories },
     );
-    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Fix Phonemart/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit split…' }));
     const part = within(screen.getByRole('dialog', { name: /^Split Phonemart/ })).getAllByRole('combobox')[0] as HTMLInputElement;
     expect(part.value).toBe('Lanterns (archived)');
@@ -1473,7 +1473,7 @@ describe('BudgetsClient — fixing a row from the card', () => {
     const { setCategoryAction } = await import('@/app/(app)/transactions/actions');
     vi.mocked(setCategoryAction).mockResolvedValueOnce({ error: 'This transaction is split — clear its split first, then change its category.' });
     await renderWithRows([panelRow()]);
-    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Fix Phonemart/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save category' }));
     expect(await screen.findByText(/clear its split first/)).toBeTruthy();
@@ -1496,7 +1496,7 @@ describe('BudgetsClient — fixing a row from the card', () => {
   it('Always ask saves this transaction only, then opens the Always ask dialog for the merchant', async () => {
     const { setCategoryAction } = await import('@/app/(app)/transactions/actions');
     await renderWithRows([panelRow()]);
-    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Fix Phonemart/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
     fireEvent.click(screen.getByLabelText(/Always ask about PHONEMART 884/));
     fireEvent.click(screen.getByRole('button', { name: 'Save category' }));
@@ -1512,7 +1512,7 @@ describe('BudgetsClient — fixing a row from the card', () => {
     vi.mocked(setAlwaysAskAction).mockResolvedValueOnce({ message: 'Rows matching "PHONEMART 884" will always be asked about.', ruleId: 41, sendBackCount: 2 });
     vi.mocked(sendBackToReviewAction).mockResolvedValueOnce({ message: 'Sent 2 transactions back to review.' });
     await renderWithRows([panelRow()]);
-    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Fix Phonemart/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
     fireEvent.click(screen.getByLabelText(/Always ask about PHONEMART 884/));
     fireEvent.click(screen.getByRole('button', { name: 'Save category' }));
@@ -1533,7 +1533,7 @@ describe('BudgetsClient — fixing a row from the card', () => {
     vi.mocked(categoryTransactionsAction)
       .mockResolvedValueOnce({ rows: [second], splits: {} })
       .mockResolvedValueOnce({ rows: [{ ...second, alwaysAsked: true }], splits: {} });
-    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart on 2026-03-12/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Fix Phonemart, 2026-03-12/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
     fireEvent.click(screen.getByLabelText(/Always ask about PHONEMART 884/));
     fireEvent.click(screen.getByRole('button', { name: 'Save category' }));
@@ -1542,7 +1542,7 @@ describe('BudgetsClient — fixing a row from the card', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Always ask' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Done' }));
     await waitFor(() => expect(categoryTransactionsAction).toHaveBeenCalledTimes(3));
-    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart on 2026-03-19/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Fix Phonemart, 2026-03-19/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
     expect(screen.getByRole('group', { name: 'Future PHONEMART 884 rows' })).toBeTruthy();
     expect(screen.queryByLabelText(/Always ask about PHONEMART 884/)).toBeNull();
@@ -1553,7 +1553,7 @@ describe('BudgetsClient — fixing a row from the card', () => {
     const { setCategoryAction } = await import('@/app/(app)/transactions/actions');
     vi.mocked(setCategoryAction).mockResolvedValueOnce({ error: 'Alex set up this rule. Ask an admin to change it under Settings → Categories & rules.' });
     await renderWithRows([panelRow()]);
-    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Fix Phonemart/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
     fireEvent.click(screen.getByLabelText(/Also file PHONEMART 884/));
     fireEvent.click(screen.getByRole('button', { name: 'Save category' }));
@@ -1565,12 +1565,12 @@ describe('BudgetsClient — fixing a row from the card', () => {
   it('a self viewer sees Change category but no rule choice', async () => {
     // Positive control: the same row, as a household viewer, does get the rule choice.
     await renderWithRows([panelRow()]);
-    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Fix Phonemart/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
     expect(screen.getByRole('group', { name: /Future/ })).toBeTruthy();
     cleanup();
     await renderWithRows([panelRow()], {},{ household: null, householdTotals: null, selectedPersonId: null, personal: [{ userId: 1, name: 'Alex', rows: [makeRow()] }] });
-    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Fix Phonemart/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
     expect(screen.queryByRole('group', { name: /Future/ })).toBeNull();
   });
@@ -1581,7 +1581,7 @@ describe('BudgetsClient — fixing a row from the card', () => {
     expect(Object.fromEntries(new URLSearchParams(open.getAttribute('href')!.split('?')[1]))).toEqual({
       range: 'custom', from: '2026-03-01', to: '2026-03-31', person: '7', category: '1', exact: '1', spend: '1', via: 'budgets',
     });
-    fireEvent.click(screen.getByRole('button', { name: /Actions for Phonemart/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Fix Phonemart/ }));
     expect(screen.getByRole('menuitem', { name: 'More in Transactions' }).getAttribute('href')).toBe('/transactions?id=77&via=budgets');
   });
 
@@ -1603,7 +1603,7 @@ describe('BudgetsClient — fixing a row from the card', () => {
     const phone = makeRow({ categoryId: 2, categoryName: 'Phone', spentCents: 0, remainingCents: 20000, pct: 0 });
     const { rerender } = render(<BudgetsClient {...props} household={[archived, phone]} />);
     fireEvent.click(within(document.getElementById('budget-card-household-h-1')!).getByRole('button', { name: 'View transactions' }));
-    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Fix Phonemart/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
     fireEvent.click(screen.getByLabelText(/Always ask about PHONEMART 884/));
     fireEvent.click(screen.getByRole('button', { name: 'Save category' }));
@@ -1734,7 +1734,7 @@ describe('BudgetsClient — the transactions sheet (v1.58.0)', () => {
   it('a dialog opened from a sheet row sits above the sheet, not inside it, and Cancel leaves the sheet open with focus on the row', async () => {
     await renderWithRows([panelRow()]);
     const sheet = screen.getByRole('dialog', { name: 'Groceries' });
-    const trigger = await screen.findByRole('button', { name: /Actions for Phonemart/ });
+    const trigger = await screen.findByRole('button', { name: /^Fix Phonemart/ });
     fireEvent.click(trigger);
     fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
     const recat = screen.getByRole('dialog', { name: /^Category for/ });
@@ -1748,7 +1748,7 @@ describe('BudgetsClient — the transactions sheet (v1.58.0)', () => {
   /** Review Focus 2. */
   it('after the Always ask dialog that follows a category change closes, focus is back in the sheet', async () => {
     await renderWithRows([panelRow()]);
-    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Fix Phonemart/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
     fireEvent.click(screen.getByLabelText(/Always ask about PHONEMART 884/));
     fireEvent.click(screen.getByRole('button', { name: 'Save category' }));
@@ -1763,7 +1763,7 @@ describe('BudgetsClient — the transactions sheet (v1.58.0)', () => {
     const { categoryTransactionsAction } = await import('@/app/(app)/budgets/category-transactions-action');
     await renderWithRows([panelRow()]);
     vi.mocked(categoryTransactionsAction).mockResolvedValueOnce({ rows: [], splits: {} });
-    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Fix Phonemart/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
     const input = within(screen.getByRole('dialog', { name: /^Category for/ })).getByRole('combobox');
     fireEvent.focus(input);
@@ -1783,7 +1783,7 @@ describe('BudgetsClient — the transactions sheet (v1.58.0)', () => {
     const body = screen.getByTestId('card-transactions-body');
     body.style.overflowY = 'auto';
     vi.spyOn(body, 'getBoundingClientRect').mockReturnValue({ top: 0, bottom: 800, left: 900, right: 1280, width: 380, height: 800, x: 900, y: 0, toJSON: () => ({}) });
-    fireEvent.click(await screen.findByRole('button', { name: /Actions for Phonemart/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Fix Phonemart/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Change category…' }));
     const input = within(screen.getByRole('dialog', { name: /^Category for/ })).getByRole('combobox');
     vi.spyOn(input, 'getBoundingClientRect').mockReturnValue({ top: 300, bottom: 330, left: 300, right: 600, width: 300, height: 30, x: 300, y: 300, toJSON: () => ({}) });
@@ -1791,5 +1791,34 @@ describe('BudgetsClient — the transactions sheet (v1.58.0)', () => {
     expect(screen.getByRole('listbox')).toBeTruthy();
     fireEvent.scroll(window);
     expect(screen.getByRole('listbox')).toBeTruthy();
+  });
+
+  it('each row is one button named for the fix, holding its tag and a chevron and no other control', async () => {
+    await renderWithRows([panelRow()]);
+    const row = await screen.findByRole('button', { name: 'Fix Phonemart, 2026-03-12, -$42.17' });
+    expect(row.getAttribute('aria-haspopup')).toBe('menu');
+    expect(document.getElementById(row.getAttribute('aria-describedby')!)!.textContent).toBe('Set by rule: PHONEMART (contains)');
+    expect(row.querySelectorAll('a, button, input, select, textarea, [tabindex]').length).toBe(0);
+    expect(row.lastElementChild!.tagName.toLowerCase()).toBe('svg');
+    expect(row.lastElementChild!.getAttribute('aria-hidden')).toBe('true');
+    expect(within(screen.getByRole('dialog', { name: 'Groceries' })).queryByText('⋯')).toBeNull();
+  });
+
+  it('a hand-set row carries no tag and no description', async () => {
+    await renderWithRows([panelRow({ source: 'manual', filedBy: null })]);
+    const row = await screen.findByRole('button', { name: /^Fix Phonemart/ });
+    expect(row.hasAttribute('aria-describedby')).toBe(false);
+    expect(screen.queryByText(/^Set by/)).toBeNull();
+  });
+
+  /** Review Focus 3. Fails first, and again if useModal stops ignoring a key already handled inside. */
+  it("Escape on a row's open menu closes the menu and leaves the sheet open", async () => {
+    await renderWithRows([panelRow()]);
+    const row = await screen.findByRole('button', { name: /^Fix Phonemart/ });
+    fireEvent.click(row);
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(screen.getByRole('dialog', { name: 'Groceries' })).toBeTruthy();
+    expect(document.activeElement).toBe(row);
   });
 });

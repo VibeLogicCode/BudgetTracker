@@ -215,3 +215,39 @@ describe('v1.12.1: the kebab is finger-sized on a phone (item AV / UX-7)', () =>
     expect(item.className).toContain('sm:min-h-0');
   });
 });
+
+describe('v1.58.0: the whole row as the trigger', () => {
+  it('is one button holding the row, named by the label, and the menu opens beside it, not inside it', () => {
+    render(
+      <RowMenu label="Fix Phonemart, 2026-03-12, -$42.17" row={{ content: <span>Phonemart</span> }}>
+        <RowMenuButton onSelect={() => {}}>Change category…</RowMenuButton>
+        <RowMenuButton onSelect={() => {}}>Split…</RowMenuButton>
+      </RowMenu>,
+    );
+    const button = screen.getByRole('button', { name: 'Fix Phonemart, 2026-03-12, -$42.17' });
+    expect(button.textContent).toContain('Phonemart');
+    expect(button.textContent).not.toContain('⋯');
+    expect(button.getAttribute('aria-haspopup')).toBe('menu');
+    fireEvent.click(button);
+    const menu = screen.getByRole('menu');
+    expect(button.contains(menu)).toBe(false);
+    expect(menu.style.position).toBe('fixed');
+  });
+
+  it('is described by the part of the row it names, and Escape hands the key back handled with focus on the row', () => {
+    render(
+      <RowMenu
+        label="Fix Phonemart, 2026-03-12, -$42.17"
+        row={{ content: <span id="tag-1">Set by guess</span>, describedBy: 'tag-1' }}
+      >
+        <RowMenuButton onSelect={() => {}}>Split…</RowMenuButton>
+      </RowMenu>,
+    );
+    const button = screen.getByRole('button', { name: 'Fix Phonemart, 2026-03-12, -$42.17' });
+    expect(button.getAttribute('aria-describedby')).toBe('tag-1');
+    fireEvent.click(button);
+    const notPrevented = fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+    expect(notPrevented).toBe(false);
+    expect(document.activeElement).toBe(button);
+  });
+});
