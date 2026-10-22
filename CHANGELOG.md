@@ -33,6 +33,11 @@ All notable changes to Budget Tracker are recorded here.
 - Budgets: a category with no sub-categories shows its six-month history at the top of that panel;
   View breakdown still opens a parent's history and sub-categories on the card.
 
+### Security
+
+- vitest 4.1.12, for two advisories in its mocking module (a development dependency only; nothing
+  in the app or its image changes).
+
 ## [1.57.2] - 2026-10-21
 
 ### Fixed
