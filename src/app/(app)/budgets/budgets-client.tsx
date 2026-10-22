@@ -1581,7 +1581,9 @@ function BudgetSectionBody({
     );
   }
   return (
-    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+    // grid-cols-1, not the implicit auto column: an open breakdown's truncated rows still count at
+    // full width when an auto column sizes itself, which pushed a phone's page sideways.
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
       <UncategorizedSpendCard
         spend={uncategorized}
         href={transactionsHref(

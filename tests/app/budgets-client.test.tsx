@@ -1028,6 +1028,26 @@ describe('v1.21.0 item 2: a parent\'s own direct spend gets its own row', () => 
     expect(getByText('$300.00')).toBeTruthy();
   });
 
+  /**
+   * v1.58.0 visual check: an open breakdown's rows truncate their text, but an implicit auto grid
+   * column still sizes to that text's full width, and on a phone the page scrolled sideways. The
+   * card grid names its one phone column (grid-cols-1, a minmax(0, 1fr) track) so it can shrink.
+   * jsdom does no layout, so this pins the class that carries the fix.
+   */
+  it('the card grid names its phone column, so an open breakdown cannot widen the page', () => {
+    const { container } = render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[housingGroupRow()]}
+        householdTotals={{ budgetedLimitCents: 200000, budgetedSpentCents: 150000, totalSpentCents: 150000 }}
+        personal={[]}
+      />,
+    );
+    const grid = container.querySelector('article')!.parentElement!;
+    expect(grid.className.split(/\s+/)).toContain('grid-cols-1');
+  });
+
   it('renders nothing extra when the parent has no direct spend of its own', () => {
     const { getByRole, queryByText } = render(
       <BudgetsClient
