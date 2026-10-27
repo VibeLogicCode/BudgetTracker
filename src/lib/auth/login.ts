@@ -47,6 +47,8 @@ export async function attemptLogin(input: {
   totpCode?: string;
   recoveryCode?: string;
   ip: string;
+  /** A device id the caller already verified from the known-device cookie, or null/undefined. */
+  deviceId?: string | null;
   userAgent?: string | null;
   at?: Date;
 }): Promise<LoginResult> {
@@ -56,13 +58,14 @@ export async function attemptLogin(input: {
   // Ruling (b): checkLockout MUST run before password verification, and a locked
   // response must never call recordLoginAttempt — recording during an active
   // lockout would itself extend/renew the lockout window on every retry.
-  const lock = checkLockout({ username, ip: input.ip, at });
+  const deviceId = input.deviceId ?? null;
+  const lock = checkLockout({ username, ip: input.ip, deviceId, at });
   if (lock.locked) {
     return { status: 'locked', retryAfterMs: lock.retryAfterMs };
   }
 
   const fail = (): LoginResult => {
-    recordLoginAttempt({ username, ip: input.ip, success: false, at });
+    recordLoginAttempt({ username, ip: input.ip, success: false, at, deviceId });
     return { status: 'invalid' };
   };
 
@@ -86,7 +89,7 @@ export async function attemptLogin(input: {
   // have pushed the failure count over the lockout threshold. Re-check before
   // issuing a session so a login that started just under the limit can't slip
   // through once it's re-evaluated a hash-time later.
-  const lockAfterVerify = checkLockout({ username, ip: input.ip, at });
+  const lockAfterVerify = checkLockout({ username, ip: input.ip, deviceId, at });
   if (lockAfterVerify.locked) {
     return { status: 'locked', retryAfterMs: lockAfterVerify.retryAfterMs };
   }
@@ -127,7 +130,7 @@ export async function attemptLogin(input: {
     }
   }
 
-  recordLoginAttempt({ username, ip: input.ip, success: true, at });
+  recordLoginAttempt({ username, ip: input.ip, success: true, at, deviceId });
   const session = createSession(user.id, { userAgent: input.userAgent ?? null, ip: input.ip, at });
 
   // MUST-14.4: fire-and-forget. The enqueue is a synchronous SQLite insert and the pump

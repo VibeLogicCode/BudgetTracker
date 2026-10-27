@@ -174,7 +174,7 @@ describe('the household target API', () => {
 
 describe('event eligibility is a rule, not a default', () => {
   it('refuses to route an ineligible event at the write path', () => {
-    for (const eventId of ['new_signin', 'password_changed', 'mfa_disabled', 'backup_failed', 'sync_failed']) {
+    for (const eventId of ['new_signin', 'password_changed', 'mfa_disabled', 'mfa_replaced', 'backup_failed', 'sync_failed']) {
       expect(setHouseholdEventPref({ eventId, channel: 'telegram', enabled: true })).toEqual({
         ok: false,
         reason: NOT_HOUSEHOLD_ELIGIBLE,
@@ -510,6 +510,7 @@ describe('the registry classification', () => {
       'new_signin',
       'password_changed',
       'mfa_disabled',
+      'mfa_replaced',
       'backup_failed',
       'restore_outcome',
       'sync_failed',

@@ -44,14 +44,14 @@ describe('MUST-2.1: events.ts is pure and client-safe', () => {
   });
 });
 
-describe('the twenty-nine registered events', () => {
-  it('has exactly twenty-nine entries with unique, well-formed ids', () => {
+describe('the thirty registered events', () => {
+  it('has exactly thirty entries with unique, well-formed ids', () => {
     // Backlog item 17 / Part 4 (preset pack version awareness): pack_update_available brought
     // this from 22 to 23, the same way each addition before it moved the count (see the >=
     // precedent lower down for events whose OWN historical contribution is what is pinned).
-    expect(NOTIFICATION_EVENTS).toHaveLength(29);
+    expect(NOTIFICATION_EVENTS).toHaveLength(30);
     const ids = NOTIFICATION_EVENTS.map((e) => e.id);
-    expect(new Set(ids).size).toBe(29);
+    expect(new Set(ids).size).toBe(30);
     for (const id of ids) expect(id).toMatch(/^[a-z][a-z0-9_]*$/);
   });
 
@@ -67,6 +67,7 @@ describe('the twenty-nine registered events', () => {
       ['new_signin', 'all', 'immediate', true],
       ['password_changed', 'all', 'immediate', true],
       ['mfa_disabled', 'all', 'immediate', true],
+      ['mfa_replaced', 'all', 'immediate', true],
       ['restore_outcome', 'admin', 'immediate', true],
       ['stale_import', 'all', 'daily_slot', false],
       ['update_available', 'admin', 'tick', true],
@@ -104,6 +105,7 @@ describe('the twenty-nine registered events', () => {
       'loan_paid_off',
       'loan_payment_missed',
       'mfa_disabled',
+      'mfa_replaced',
       'new_signin',
       'pack_update_available',
       'password_changed',
@@ -142,8 +144,8 @@ describe('lookup helpers', () => {
     // 'all') widen both counts by three more.
     // pack_update_available (backlog item 17 / Part 4) is audience 'admin' too, so it widens only
     // the admin count, same as backup_failed/restore_outcome/sync_failed above it.
-    expect(eventsFor('member')).toHaveLength(24);
-    expect(eventsFor('admin')).toHaveLength(29);
+    expect(eventsFor('member')).toHaveLength(25);
+    expect(eventsFor('admin')).toHaveLength(30);
   });
 
   it('exposes the two channels', () => {
@@ -283,7 +285,7 @@ describe('Task 16 (v1.7.0): the monthly_digest registry entry', () => {
     // backlog item 17 / Part 4's pack_update_available brings it to 23 -- this assertion tracks
     // the current total, not monthly_digest's own historical contribution (see the >= pattern
     // used above for update_available/sync_failed, which exists for exactly this reason).
-    expect(NOTIFICATION_EVENTS).toHaveLength(29);
+    expect(NOTIFICATION_EVENTS).toHaveLength(30);
     const entry = eventDef('monthly_digest');
     expect(entry).toEqual({
       id: 'monthly_digest',
@@ -384,6 +386,7 @@ describe('v1.28.0: which events may reach a family channel', () => {
     new_signin: false,
     password_changed: false,
     mfa_disabled: false,
+    mfa_replaced: false,
     backup_failed: false,
     restore_outcome: false,
     sync_failed: false,
@@ -410,6 +413,7 @@ describe('v1.28.0: which events may reach a family channel', () => {
       'new_signin',
       'password_changed',
       'mfa_disabled',
+      'mfa_replaced',
       'backup_failed',
       'restore_outcome',
       'sync_failed',

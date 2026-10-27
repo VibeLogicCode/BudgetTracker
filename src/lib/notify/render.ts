@@ -237,6 +237,7 @@ export type RenderInput =
   | { event: 'new_signin'; name: string; atLabel: string; tz: string; ip: string; userAgent: string | null }
   | { event: 'password_changed'; name: string; atLabel: string; tz: string }
   | { event: 'mfa_disabled'; name: string; atLabel: string; tz: string }
+  | { event: 'mfa_replaced'; name: string; atLabel: string; tz: string }
   | {
       event: 'restore_outcome';
       status: 'success' | 'failed';
@@ -1021,6 +1022,15 @@ export function renderEvent(input: RenderInput): { subject: string; body: string
           `Two-factor authentication was turned off on ${truncateText(input.name, NAME_MAX)}'s account at ${input.atLabel} (${input.tz}).`,
           'Every other signed-in session was signed out.',
           'If this was not you, sign in, change your password and turn it back on.',
+        ].join('\n\n'),
+      };
+    case 'mfa_replaced':
+      return {
+        subject: 'Two-factor authentication was replaced',
+        body: [
+          `The authenticator on ${truncateText(input.name, NAME_MAX)}'s account was replaced at ${input.atLabel} (${input.tz}), and new recovery codes were issued.`,
+          'Every other signed-in session was signed out.',
+          'If this was not you, sign in and change your password straight away.',
         ].join('\n\n'),
       };
     case 'restore_outcome': {

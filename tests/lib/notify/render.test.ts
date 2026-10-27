@@ -601,6 +601,7 @@ const SAMPLES_BY_EVENT: Record<string, RenderInput[]> = {
   // v1.12.1 (item AA / SEC-4): the account-security pair sits beside new_signin here too.
   password_changed: [{ event: 'password_changed', name: 'S', atLabel: 'x', tz: 'UTC' }],
   mfa_disabled: [{ event: 'mfa_disabled', name: 'S', atLabel: 'x', tz: 'UTC' }],
+  mfa_replaced: [{ event: 'mfa_replaced', name: 'S', atLabel: 'x', tz: 'UTC' }],
   restore_outcome: [
     { event: 'restore_outcome', status: 'success', sourceName: 's', requestedByUsername: 'u', finishedAt: 'f', receiptsRestored: 0, missingReceiptRows: 0, error: null },
   ],
@@ -1016,6 +1017,13 @@ describe('v1.12.1: the two account-security events (item AA / SEC-4)', () => {
     });
     expect(subject).toBe('Two-factor authentication was switched off');
     expect(body).toContain('turn it back on');
+  });
+
+  it('renders the mfa-replaced body', () => {
+    const { subject, body } = renderEvent({ event: 'mfa_replaced', name: 'Alex', atLabel: '2026-08-27 09:14', tz: 'America/Toronto' });
+    expect(subject).toBe('Two-factor authentication was replaced');
+    expect(body).toContain('Alex');
+    expect(body).toContain('signed out');
   });
 });
 

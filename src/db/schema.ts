@@ -668,10 +668,13 @@ export const loginAttempts = sqliteTable(
     ip: text('ip').notNull(),
     success: integer('success', { mode: 'boolean' }).notNull().default(false),
     createdAt: text('created_at').notNull(),
+    /** v1.58.1: verified known-device id the attempt came from; null when the browser was not recognised. */
+    deviceId: text('device_id'),
   },
   (t) => [
     index('login_attempts_username_idx').on(t.username, t.createdAt),
     index('login_attempts_ip_idx').on(t.ip, t.createdAt),
+    index('login_attempts_device_idx').on(t.username, t.deviceId, t.createdAt),
   ],
 );
 

@@ -23,6 +23,7 @@ import {
   encryptTotpSecret,
   generateRecoveryCodes,
   generateTotpSecret,
+  getTotpSecretForUser,
   storeRecoveryCodes,
   totpKeyUri,
   totpQrDataUri,
@@ -144,6 +145,32 @@ export async function confirmTotpEnrollmentAction(_prev: ProfileFormState, formD
   if (!secret) {
     return { error: 'That enrollment expired. Start over and scan a fresh QR code.' };
   }
+
+  // v1.58.1: replacing an authenticator that is already on needs the current password and a current
+  // code for the EXISTING secret, the same bar turning it off sets. First-time enrollment is unchanged.
+  const record = findUserByUsername(user.username);
+  const replacing = Boolean(record?.totpEnabled);
+  let existingCounter: number | null = null;
+  if (replacing) {
+    const proof = z
+      .object({
+        currentPassword: z.string().min(1, 'Enter your current password.'),
+        currentCode: z.string().trim().regex(/^\d{6,8}$/, 'Enter a current code from your existing authenticator.'),
+      })
+      .safeParse({ currentPassword: formData.get('currentPassword') ?? '', currentCode: formData.get('currentCode') ?? '' });
+    if (!proof.success) return { error: proof.error.issues[0]?.message ?? 'Please check the form.' };
+    if (!record || !(await verifyPassword(record.passwordHash, proof.data.currentPassword))) {
+      return { error: 'Current password is incorrect.' };
+    }
+    let existingSecret: string | null = null;
+    try {
+      existingSecret = getTotpSecretForUser(user.id);
+    } catch {
+      existingSecret = null;
+    }
+    existingCounter = existingSecret ? verifyTotpCounter(existingSecret, proof.data.currentCode) : null;
+    if (existingCounter === null) return { error: 'That current code did not match. Try the next one your app shows.' };
+  }
   // v1.12.1 (item BF / SEC-10), carried into v1.13.0: verify-then-spend, the same pair
   // login's own MFA challenge uses, so the code shown during enrollment cannot be observed
   // (screenshotted, shoulder-surfed) and replayed a second time.
@@ -158,13 +185,27 @@ export async function confirmTotpEnrollmentAction(_prev: ProfileFormState, formD
   if (counter === null) {
     return { error: 'That code did not match. Try the next one your app shows.' };
   }
-  if (!consumeTotpCounter(user.id, counter)) {
+  if (existingCounter !== null) {
+    // Spend the existing secret's code first (replay-checked). The new code may share its time step;
+    // the stored counter then already covers it, so it is not spent a second time.
+    if (!consumeTotpCounter(user.id, existingCounter)) {
+      return { error: 'That current code was already used. Try the next one your app shows.' };
+    }
+    if (counter > existingCounter && !consumeTotpCounter(user.id, counter)) {
+      return { error: 'That code was already used. Try the next one your app shows.' };
+    }
+  } else if (!consumeTotpCounter(user.id, counter)) {
     return { error: 'That code was already used. Try the next one your app shows.' };
   }
   enableTotpForUser(user.id, secret);
   await clearPendingTotpSecret();
   const codes = generateRecoveryCodes();
   storeRecoveryCodes(user.id, codes);
+  if (replacing) {
+    const token = (await cookies()).get(SESSION_COOKIE_NAME)?.value;
+    if (token) destroyOtherSessionsForUser(user.id, token);
+    raiseAccountSecurityEvent({ userId: user.id, event: 'mfa_replaced', at: new Date() });
+  }
   revalidatePath('/settings');
   return { message: 'Two-factor authentication is on. Save these recovery codes now.', recoveryCodes: codes };
 }

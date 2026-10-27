@@ -8,6 +8,7 @@ import { adminUserIds } from '@/lib/notify/config';
 import {
   backupFailedKey,
   mfaDisabledKey,
+  mfaReplacedKey,
   newSigninKey,
   passwordChangedKey,
   restoreOutcomeKey,
@@ -94,7 +95,7 @@ function signinName(userId: number): string {
  */
 export function raiseAccountSecurityEvent(input: {
   userId: number;
-  event: 'password_changed' | 'mfa_disabled';
+  event: 'password_changed' | 'mfa_disabled' | 'mfa_replaced';
   at: Date;
 }): void {
   try {
@@ -117,7 +118,12 @@ export function raiseAccountSecurityEvent(input: {
     const result = enqueue({
       userId: input.userId,
       eventId: input.event,
-      dedupKey: input.event === 'mfa_disabled' ? mfaDisabledKey(atIso) : passwordChangedKey(atIso),
+      dedupKey:
+        input.event === 'mfa_disabled'
+          ? mfaDisabledKey(atIso)
+          : input.event === 'mfa_replaced'
+            ? mfaReplacedKey(atIso)
+            : passwordChangedKey(atIso),
       subject,
       body,
       at: input.at,

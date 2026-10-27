@@ -581,6 +581,22 @@ function runStep(step: RestoreStep, now: Date): number {
 }
 
 /**
+ * v1.58.1: a restore installs the backup's users, passwords and two-factor settings wholesale, so a
+ * session row carried inside the backup (or minted against the database it replaced) must not keep
+ * working. Deletes every session row from the restored database; idempotent, so a replayed commit is
+ * safe. A failure propagates and the commit is retried, never reported as a finished restore.
+ */
+function purgeSessions(databasePath: string): void {
+  const db = new Database(databasePath);
+  try {
+    const table = db.prepare("select name from sqlite_master where type = 'table' and name = 'sessions'").get();
+    if (table) db.prepare('delete from sessions').run();
+  } finally {
+    db.close();
+  }
+}
+
+/**
  * Replays plan.steps in order. Every step is individually idempotent (see runStep), so
  * calling this twice on the same plan — or once after a previous call was interrupted
  * partway through — converges to the same final state. This is the half of the crash-safety
@@ -597,6 +613,7 @@ export function commitRestore(plan: RestorePlan, opts: { dataDir: string; now?: 
   }
   const dbPath = path.join(dataDir, 'budget.db');
   const receiptsPath = path.join(dataDir, 'receipts');
+  purgeSessions(dbPath);
   return {
     kind: plan.kind,
     databaseRestored: true,

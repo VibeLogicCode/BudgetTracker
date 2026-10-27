@@ -17,14 +17,14 @@ const columns = (table: string): string[] =>
  * backfill: NULL means "the household default", which is what every existing row meant already.
  */
 describe('0028: the migration records itself', () => {
-  it('sits immediately after 0027 in the journal, and is the newest', () => {
+  it('sits immediately after 0027 in the journal', () => {
     const journal = JSON.parse(
       fs.readFileSync(path.join(process.cwd(), 'drizzle/meta/_journal.json'), 'utf8'),
     ) as { entries: { idx: number; tag: string }[] };
     expect(journal.entries.find((row) => row.tag === '0028_account_import_cadence')).toMatchObject({ idx: 28 });
     const idxs = journal.entries.map((entry) => entry.idx).sort((a, b) => a - b);
     expect(idxs.indexOf(28)).toBe(idxs.indexOf(27) + 1);
-    expect(Math.max(...idxs)).toBe(28);
+    expect(Math.max(...idxs)).toBeGreaterThanOrEqual(28);
   });
 });
 

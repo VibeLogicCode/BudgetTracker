@@ -16,7 +16,10 @@ export const USERNAME_HISTORY_MS = 24 * 60 * 60 * 1000;
 
 export const ATTEMPT_RETENTION_DAYS = 30;
 
-export type LockoutReason = 'none' | 'user_ip' | 'username';
+/** v1.58.1: the address a request carries when no trustworthy one exists; it never gets a per-address bucket. */
+export const UNKNOWN_IP = 'unknown';
+
+export type LockoutReason = 'none' | 'user_ip' | 'username' | 'device';
 
 export interface LockoutStatus {
   locked: boolean;
@@ -30,7 +33,13 @@ function normalizeUsername(username: string): string {
   return username.trim().toLowerCase();
 }
 
-export function recordLoginAttempt(input: { username: string; ip: string; success: boolean; at?: Date }): void {
+export function recordLoginAttempt(input: {
+  username: string;
+  ip: string;
+  success: boolean;
+  at?: Date;
+  deviceId?: string | null;
+}): void {
   getDb()
     .insert(loginAttempts)
     .values({
@@ -38,6 +47,7 @@ export function recordLoginAttempt(input: { username: string; ip: string; succes
       ip: input.ip,
       success: input.success,
       createdAt: nowIso(input.at),
+      deviceId: input.deviceId ?? null,
     })
     .run();
 }
@@ -52,9 +62,10 @@ function lastSuccessIso(username: string): string | null {
 }
 
 /** Failure timestamps (ms, newest first) since the given floor. */
-function failuresSince(username: string, ip: string | null, floorIso: string): number[] {
+function failuresSince(username: string, ip: string | null, floorIso: string, deviceId: string | null = null): number[] {
   const conditions = [eq(loginAttempts.username, username), eq(loginAttempts.success, false), sql`${loginAttempts.createdAt} > ${floorIso}`];
   if (ip !== null) conditions.push(eq(loginAttempts.ip, ip));
+  if (deviceId !== null) conditions.push(eq(loginAttempts.deviceId, deviceId));
   const rows = getDb()
     .select({ createdAt: loginAttempts.createdAt })
     .from(loginAttempts)
@@ -69,16 +80,12 @@ function laterIso(a: string | null, b: string): string {
   return a > b ? a : b;
 }
 
-// CALLER CONTRACT: callers must not call recordLoginAttempt() while checkLockout()
-// still reports locked — the login flow rejects the attempt before verifying the
-// password or recording anything. Both layers below anchor a candidate lockout on
-// whichever qualifying 5-/10-failure window yields the LATEST expiry, which makes
-// the lockout monotonic against attempts recorded *after* an active lockout began.
-// That guard only covers attempts recorded *before* checkLockout is (correctly)
-// consulted; it does not by itself stop a determined caller who ignores the
-// reported lock state and records anyway. Layer B's mandated algorithm (brief's
-// "Exact Layer B algorithm") anchors only on the single newest failure and has the
-// same theoretical hole in isolation — it is protected in practice by the same
+// CALLER CONTRACT: callers must not call recordLoginAttempt() while checkLockout() (same username,
+// address and device) still reports locked: the login flow rejects the attempt before verifying the
+// password or recording anything. Layer A anchors a candidate lockout on whichever qualifying
+// 5-failure window yields the LATEST expiry, which makes it monotonic against attempts recorded
+// *after* an active lockout began. The username and device buckets anchor only on the single newest
+// failure and have the same theoretical hole in isolation; they are protected in practice by this
 // caller contract, not by independent logic in this module.
 
 /** Latest lockout expiry (ms) implied by any qualifying 5-in-a-row window, or null if none. */
@@ -95,39 +102,50 @@ function layerACandidateUntil(failuresDesc: number[]): number | null {
   return candidate;
 }
 
-export function checkLockout(input: { username: string; ip: string; at?: Date }): LockoutStatus {
+/**
+ * Backoff for a failure list: 10 failures in a 15-minute burst lock for 15 minutes, doubling per further
+ * ten failures up to 24 hours. Shared by the username-wide bucket and the per-device bucket.
+ */
+function backoffUntil(failuresDesc: number[]): number | null {
+  if (failuresDesc.length < USERNAME_MAX_FAILURES) return null;
+  const newest = failuresDesc[0];
+  const tenthNewest = failuresDesc[USERNAME_MAX_FAILURES - 1];
+  if (newest - tenthNewest > USERNAME_WINDOW_MS) return null;
+  const rounds = Math.floor(failuresDesc.length / USERNAME_MAX_FAILURES);
+  const lockoutMs = Math.min(USERNAME_BASE_LOCKOUT_MS * 2 ** (rounds - 1), USERNAME_MAX_LOCKOUT_MS);
+  return newest + lockoutMs;
+}
+
+export function checkLockout(input: { username: string; ip: string; deviceId?: string | null; at?: Date }): LockoutStatus {
   const username = normalizeUsername(input.username);
   const now = (input.at ?? new Date()).getTime();
   const success = lastSuccessIso(username);
+  const historyFloor = laterIso(success, new Date(now - USERNAME_HISTORY_MS).toISOString());
 
-  // ---- Layer A: (username, ip), 5 failures / 15 min -> 15 min lockout ----
+  // ---- Device bucket: a recognised browser (deviceId already verified by the caller) is judged only
+  // on its own failures, with the username-wide thresholds. ----
+  if (input.deviceId) {
+    const until = backoffUntil(failuresSince(username, null, historyFloor, input.deviceId));
+    if (until !== null && now < until) return { locked: true, reason: 'device', retryAfterMs: until - now };
+    return UNLOCKED;
+  }
+
+  // ---- Layer A: (username, ip), 5 failures / 15 min -> 15 min lockout. Real addresses only. ----
   // Floor is bounded to now-(WINDOW+LOCKOUT): any failure old enough that even its
   // own 15-min lockout would already have expired can never contribute to a still-
   // active or newly-forming lockout, so it's safe (and keeps the query bounded for
   // never-successful usernames) to exclude it up front.
-  const layerAFloor = laterIso(success, new Date(now - (USER_IP_WINDOW_MS + USER_IP_LOCKOUT_MS)).toISOString());
-  const layerA = failuresSince(username, input.ip, layerAFloor);
-  const layerACandidate = layerACandidateUntil(layerA);
-  if (layerACandidate !== null && now < layerACandidate) {
-    return { locked: true, reason: 'user_ip', retryAfterMs: layerACandidate - now };
-  }
-
-  // ---- Layer B: username only, 10 failures / 15 min burst -> exponential backoff ----
-  const layerBFloor = laterIso(success, new Date(now - USERNAME_HISTORY_MS).toISOString());
-  const layerB = failuresSince(username, null, layerBFloor);
-  if (layerB.length >= USERNAME_MAX_FAILURES) {
-    const newest = layerB[0];
-    const tenthNewest = layerB[USERNAME_MAX_FAILURES - 1];
-    const isBurst = newest - tenthNewest <= USERNAME_WINDOW_MS;
-    if (isBurst) {
-      const rounds = Math.floor(layerB.length / USERNAME_MAX_FAILURES);
-      const lockoutMs = Math.min(USERNAME_BASE_LOCKOUT_MS * 2 ** (rounds - 1), USERNAME_MAX_LOCKOUT_MS);
-      const until = newest + lockoutMs;
-      if (now < until) {
-        return { locked: true, reason: 'username', retryAfterMs: until - now };
-      }
+  if (input.ip !== UNKNOWN_IP) {
+    const layerAFloor = laterIso(success, new Date(now - (USER_IP_WINDOW_MS + USER_IP_LOCKOUT_MS)).toISOString());
+    const layerACandidate = layerACandidateUntil(failuresSince(username, input.ip, layerAFloor));
+    if (layerACandidate !== null && now < layerACandidate) {
+      return { locked: true, reason: 'user_ip', retryAfterMs: layerACandidate - now };
     }
   }
+
+  // ---- Layer B: username only (every failure, device rows included), 10 failures / 15 min burst ----
+  const until = backoffUntil(failuresSince(username, null, historyFloor));
+  if (until !== null && now < until) return { locked: true, reason: 'username', retryAfterMs: until - now };
 
   return UNLOCKED;
 }
@@ -194,7 +212,7 @@ export function clientIpFromHeaders(headers: Headers, socketIp: string | null, e
     if (fromReal !== null) return fromReal;
   }
   const fromSocket = socketIp === null ? null : validIp(socketIp);
-  return fromSocket ?? 'unknown';
+  return fromSocket ?? UNKNOWN_IP;
 }
 
 export function purgeOldLoginAttempts(at: Date = new Date(), olderThanDays: number = ATTEMPT_RETENTION_DAYS): number {

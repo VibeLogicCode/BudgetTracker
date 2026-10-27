@@ -89,6 +89,29 @@ function itemNames(dbPath: string): string[] {
 }
 
 describe('gui-restore-flow (spec §20.15)', () => {
+  it('v1.58.1: a restore applied on boot leaves no session rows in the restored database', () => {
+    const userId = insertTestUser(current!.db, { name: 'Alice', username: 'alice' });
+    current!.sqlite
+      .prepare(
+        `insert into sessions (token_hash, user_id, created_at, expires_at, last_seen_at)
+         values ('hash-one', ?, '2026-08-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z')`,
+      )
+      .run(userId);
+    vacuumIntoLiveDb();
+    const backup = runNightlyBackup(new Date('2026-08-16T06:00:00.000Z'));
+    stageRestore({ backupName: backup.name, userId, username: 'alice' });
+    applyStagedRestoreOnBoot(new Date('2026-08-16T21:04:53.000Z'));
+
+    expect(readRestoreState().result?.status).toBe('success');
+    const restored = new Database(path.join(dataDir, 'budget.db'), { readonly: true });
+    try {
+      expect((restored.prepare('select count(*) as n from sessions').get() as { n: number }).n).toBe(0);
+      expect((restored.prepare('select count(*) as n from users').get() as { n: number }).n).toBe(1);
+    } finally {
+      restored.close();
+    }
+  });
+
   it('archive restore: restores items and receipts, banks the mutated data as a safety copy', () => {
     const userId = insertTestUser(current!.db, { name: 'Alice', username: 'alice' });
     const itemId1 = insertWarrantyItem(current!.sqlite, 'Fridge', userId, '2026-08-01T00:00:00.000Z');

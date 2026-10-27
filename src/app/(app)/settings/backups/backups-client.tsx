@@ -51,6 +51,11 @@ function RestorePanel({
         Restore <strong className="font-semibold">{backup.name}</strong>? This replaces all data currently in the app with the contents of
         that backup. The current database is kept as <code className="rounded bg-surface px-1 font-mono text-xs">data/budget.pre-restore-&lt;timestamp&gt;.db</code>.
       </p>
+      <p className="text-ink">
+        Users, passwords, two-factor settings and deactivations return to the backup&apos;s state, and everyone signs in again.
+        Two-factor sign-in and saved connection secrets need this install&apos;s <code className="font-mono">secret.key</code> to
+        match the one the backup was made with.
+      </p>
       <p className="text-xs text-muted">
         The app restarts to apply this. If your container has no restart policy (this install&apos;s{' '}
         <code className="font-mono">docker-compose.yml</code> ships <code className="font-mono">restart: unless-stopped</code>), the restore still takes effect
@@ -95,6 +100,7 @@ function ResultBanner({ result }: { result: RestoreOutcome }) {
             nothing was replaced, contradicting the banner it sits in. Omit the clause instead. */}
         {result.safetyCopy ? <> The previous database was kept as {result.safetyCopy}.</> : null}
       </p>
+      <p>Users, passwords, two-factor settings and deactivations are as they were in that backup, and everyone signs in again.</p>
     </Notice>
   );
 }

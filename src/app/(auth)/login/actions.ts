@@ -1,10 +1,16 @@
 'use server';
 
-import { headers } from 'next/headers';
+import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { GENERIC_LOGIN_ERROR, attemptLogin } from '@/lib/auth/login';
+import {
+  KNOWN_DEVICE_COOKIE_NAME,
+  KNOWN_DEVICE_MAX_AGE_SECONDS,
+  knownDeviceFor,
+  withKnownDevice,
+} from '@/lib/auth/known-device';
 import { clientIpFromHeaders } from '@/lib/auth/ratelimit';
 import { setSessionCookie, shouldUseSecureCookie } from '@/lib/auth/session';
 
@@ -48,18 +54,22 @@ export async function loginAction(prevState: LoginFormState, formData: FormData)
     return { error: GENERIC_LOGIN_ERROR, needsTotp: prevState?.needsTotp ?? false, username: prevState?.username };
   }
 
-  // v1.12.1 (item AB / SEC-5): null, not `x-real-ip`. A Server Action has no socket, so there is
-  // no trusted address to pass; clientIpFromHeaders reads the proxy headers itself when
-  // TRUST_PROXY says it may, and falls back to 'unknown' when it may not. Handing a
-  // client-controlled header in as the "trusted" argument was how the per-(username, IP) lockout
-  // layer became attacker-partitioned.
+  // v1.58.1: null, not `x-real-ip`. A Server Action has no socket, and Next fills x-forwarded-for from
+  // the socket only when the client sent none, so no header is trustworthy without TRUST_PROXY.
+  // clientIpFromHeaders reads the proxy headers itself when TRUST_PROXY says it may and returns
+  // UNKNOWN_IP otherwise; that value never gets a per-address lockout bucket.
   const ip = clientIpFromHeaders(requestHeaders, null);
+  // v1.58.1: a signed cookie from an earlier full sign-in only selects the lockout bucket.
+  const cookieStore = await cookies();
+  const deviceCookie = cookieStore.get(KNOWN_DEVICE_COOKIE_NAME)?.value;
+  const deviceId = knownDeviceFor(deviceCookie, parsed.data.username);
   const result = await attemptLogin({
     username: parsed.data.username,
     password: parsed.data.password,
     totpCode: parsed.data.totpCode,
     recoveryCode: parsed.data.recoveryCode,
     ip,
+    deviceId,
     userAgent: requestHeaders.get('user-agent'),
   });
 
@@ -94,6 +104,14 @@ export async function loginAction(prevState: LoginFormState, formData: FormData)
   // Net effect: a direct-HTTPS-without-a-reverse-proxy deployment of this app
   // will not get a Secure cookie — the documented path for HTTPS is TRUST_PROXY
   // behind a reverse proxy (see Task 19 / README), not Next terminating TLS itself.
-  await setSessionCookie(result.token, result.expiresAt, shouldUseSecureCookie('http:', requestHeaders));
+  const secure = shouldUseSecureCookie('http:', requestHeaders);
+  await setSessionCookie(result.token, result.expiresAt, secure);
+  cookieStore.set(KNOWN_DEVICE_COOKIE_NAME, withKnownDevice(deviceCookie, parsed.data.username), {
+    httpOnly: true,
+    sameSite: 'lax',
+    path: '/',
+    secure,
+    maxAge: KNOWN_DEVICE_MAX_AGE_SECONDS,
+  });
   redirect('/dashboard');
 }

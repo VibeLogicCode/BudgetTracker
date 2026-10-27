@@ -6,12 +6,13 @@ import { createUser } from '@/lib/auth/users';
 // AsyncLocalStorage, which only exists inside a real Next.js request. Outside of
 // that (as here, importing the action function directly), both must be mocked.
 function createFakeCookieStore() {
-  const store = new Map<string, { value: string }>();
+  const store = new Map<string, { value: string; options?: Record<string, unknown> }>();
   return {
     get: (name: string) => store.get(name),
-    set: (name: string, value: string) => {
-      store.set(name, { value });
+    set: (name: string, value: string, options?: Record<string, unknown>) => {
+      store.set(name, { value, options });
     },
+    clear: () => store.clear(),
     delete: (name: string) => {
       store.delete(name);
     },
@@ -45,6 +46,7 @@ let current: TestDb | null = null;
 afterEach(() => {
   current?.cleanup();
   current = null;
+  fakeCookies.clear();
   vi.mocked(shouldUseSecureCookie).mockClear();
 });
 
@@ -86,44 +88,98 @@ describe('loginAction — finding 4: secure-cookie protocol arg', () => {
   });
 });
 
-describe('loginAction — v1.12.1 (item AB / SEC-5): a forged x-real-ip must not partition the lockout', () => {
-  it('locks the 6th attempt even though every failed attempt carried a different forged x-real-ip, with TRUST_PROXY off', async () => {
-    // This is the actual vulnerability site: clientIpFromHeaders() called DIRECTLY with
-    // socketIp: null never reproduces the pre-fix bug, because the bug was this file (the
-    // caller) handing requestHeaders.get('x-real-ip') in AS the socketIp argument. Only a test
-    // that drives the real loginAction, with a real forged header on each request, exercises
-    // that call site. Under the pre-fix `const ip = clientIpFromHeaders(requestHeaders,
-    // requestHeaders.get('x-real-ip'))`, each attempt below gets its own IP bucket (since the
-    // header varies every time and TRUST_PROXY off meant the OLD code still echoed socketIp
-    // verbatim), so layer A's 5-in-15-minutes counter never accumulates and the 6th attempt
-    // never locks. Fixed code passes null as socketIp, so every attempt collapses onto the
-    // same 'unknown' bucket and the 6th attempt (any header, or none) is locked.
-    const originalTrustProxy = process.env.TRUST_PROXY;
+describe('loginAction — v1.58.1: sign-in lockout with no trustworthy address', () => {
+  const headersWithForgedIp = (i: number) =>
+    new Headers({ origin: 'http://nas.local:3000', host: 'nas.local:3000', 'x-real-ip': `203.0.113.${i}`, 'x-forwarded-for': `203.0.113.${i}` });
+
+  async function failTimes(n: number) {
+    for (let i = 0; i < n; i += 1) {
+      mockHeaders = headersWithForgedIp(i);
+      const result = await loginAction({}, formData({ username: 'alex', password: 'wrong password' }));
+      expect(result.error).toBe(GENERIC_LOGIN_ERROR);
+    }
+  }
+
+  async function withoutTrustProxy(fn: () => Promise<void>) {
+    const original = process.env.TRUST_PROXY;
     delete process.env.TRUST_PROXY;
     try {
-      current = createTestDb();
-      await createUser({ name: 'Alice', username: 'alice', password: PASSWORD, role: 'admin' });
+      await fn();
+    } finally {
+      if (original === undefined) delete process.env.TRUST_PROXY;
+      else process.env.TRUST_PROXY = original;
+    }
+  }
 
-      for (let i = 0; i < 5; i += 1) {
-        mockHeaders = new Headers({
-          origin: 'http://nas.local:3000',
-          host: 'nas.local:3000',
-          'x-real-ip': `203.0.113.${i}`, // a different forged address on every failed attempt
-        });
-        const result = await loginAction({}, formData({ username: 'alice', password: 'wrong password' }));
-        expect(result.error).toBe(GENERIC_LOGIN_ERROR);
+  it('does not lock on 5 failures with TRUST_PROXY off, and locks an unrecognised browser after 10', async () => {
+    await withoutTrustProxy(async () => {
+      current = createTestDb();
+      await createUser({ name: 'Alex', username: 'alex', password: PASSWORD, role: 'admin' });
+      await failTimes(5);
+      mockHeaders = headersWithForgedIp(50);
+      const sixth = await loginAction({}, formData({ username: 'alex', password: 'wrong password' }));
+      expect(sixth.error).toBe(GENERIC_LOGIN_ERROR);
+      await failTimes(4);
+      const eleventh = await loginAction({}, formData({ username: 'alex', password: PASSWORD }));
+      expect(eleventh.error).toMatch(/Too many attempts\. Try again in \d+ minutes?\./);
+    });
+  });
+
+  it('sets the known-device cookie on a full sign-in, not on a failure', async () => {
+    await withoutTrustProxy(async () => {
+      current = createTestDb();
+      await createUser({ name: 'Alex', username: 'alex', password: PASSWORD, role: 'admin' });
+      mockHeaders = SAME_ORIGIN_HEADERS;
+      await loginAction({}, formData({ username: 'alex', password: 'wrong password' }));
+      expect(fakeCookies.get('bt_device')).toBeUndefined();
+      await expect(loginAction({}, formData({ username: 'alex', password: PASSWORD }))).rejects.toThrow(/NEXT_REDIRECT/);
+      const cookie = fakeCookies.get('bt_device');
+      expect(cookie?.value).toBeTruthy();
+      expect(cookie?.options).toMatchObject({ httpOnly: true, sameSite: 'lax', path: '/', maxAge: 180 * 24 * 60 * 60 });
+    });
+  });
+
+  it('lets a recognised browser sign in while an unrecognised one is backed off, and locks that device after its own 10 failures', async () => {
+    await withoutTrustProxy(async () => {
+      current = createTestDb();
+      await createUser({ name: 'Alex', username: 'alex', password: PASSWORD, role: 'admin' });
+      mockHeaders = SAME_ORIGIN_HEADERS;
+      await expect(loginAction({}, formData({ username: 'alex', password: PASSWORD }))).rejects.toThrow(/NEXT_REDIRECT/);
+      const known = fakeCookies.get('bt_device')!.value;
+
+      // another browser (no cookie) is guessing
+      fakeCookies.clear();
+      await failTimes(10);
+      const guesser = await loginAction({}, formData({ username: 'alex', password: PASSWORD }));
+      expect(guesser.error).toMatch(/Too many attempts/);
+
+      // a cookie minted for someone else, a tampered one and garbage are all unrecognised
+      await createUser({ name: 'Sam', username: 'sam', password: PASSWORD, role: 'member' });
+      mockHeaders = SAME_ORIGIN_HEADERS;
+      await expect(loginAction({}, formData({ username: 'sam', password: PASSWORD }))).rejects.toThrow(/NEXT_REDIRECT/);
+      const samCookie = fakeCookies.get('bt_device')!.value;
+      const tampered = `${known.slice(0, -1)}${known.endsWith('A') ? 'B' : 'A'}`;
+      for (const bad of [samCookie, tampered, 'garbage']) {
+        fakeCookies.clear();
+        fakeCookies.set('bt_device', bad);
+        const refused = await loginAction({}, formData({ username: 'alex', password: PASSWORD }));
+        expect(refused.error).toMatch(/Too many attempts/);
       }
 
-      mockHeaders = new Headers({
-        origin: 'http://nas.local:3000',
-        host: 'nas.local:3000',
-        'x-real-ip': '203.0.113.99', // yet another forged value on the 6th attempt
-      });
-      const sixth = await loginAction({}, formData({ username: 'alice', password: 'wrong password' }));
-      expect(sixth.error).toMatch(/Too many attempts/i);
-    } finally {
-      if (originalTrustProxy === undefined) delete process.env.TRUST_PROXY;
-      else process.env.TRUST_PROXY = originalTrustProxy;
-    }
+      // the recognised browser still signs in
+      fakeCookies.clear();
+      fakeCookies.set('bt_device', known);
+      await expect(loginAction({}, formData({ username: 'alex', password: PASSWORD }))).rejects.toThrow(/NEXT_REDIRECT/);
+
+      // and its own failures lock only that device
+      for (let i = 0; i < 10; i += 1) {
+        fakeCookies.set('bt_device', known);
+        const r = await loginAction({}, formData({ username: 'alex', password: 'wrong password' }));
+        expect(r.error).toBe(GENERIC_LOGIN_ERROR);
+      }
+      fakeCookies.set('bt_device', known);
+      const locked = await loginAction({}, formData({ username: 'alex', password: PASSWORD }));
+      expect(locked.error).toMatch(/Too many attempts/);
+    });
   });
 });

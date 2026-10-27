@@ -35,6 +35,12 @@ vi.mock('next/navigation', () => ({
   },
 }));
 
+vi.mock('@/lib/notify/raise', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/notify/raise')>();
+  return { ...actual, raiseAccountSecurityEvent: vi.fn() };
+});
+
+import { raiseAccountSecurityEvent } from '@/lib/notify/raise';
 import {
   beginTotpEnrollmentAction,
   changePasswordAction,
@@ -50,6 +56,7 @@ import {
   currentTotpToken,
   enableTotpForUser,
   generateTotpSecret,
+  storeRecoveryCodes,
   verifyTotpCounter,
 } from '@/lib/auth/totp';
 
@@ -63,6 +70,7 @@ afterEach(() => {
   current?.cleanup();
   current = null;
   cookieJar.clear();
+  vi.mocked(raiseAccountSecurityEvent).mockClear();
 });
 
 function formData(fields: Record<string, string>): FormData {
@@ -152,6 +160,62 @@ describe('confirmTotpEnrollmentAction — v1.12.1 SEC-10 verify-then-spend, carr
     // happen on a refusal.
     expect(findUserById(userId)?.totpEnabled).toBe(false);
     expect(countUnusedRecoveryCodes(userId)).toBe(0);
+  });
+});
+
+describe('v1.58.1: replacing two-factor sign-in costs the password and a current code', () => {
+  /** TOTP on with a known secret, one other session, and a pending replacement secret in the cookie jar. */
+  async function setupReplace() {
+    const { db, userId, myToken } = await setupWithTwoSessions();
+    const oldSecret = generateTotpSecret();
+    enableTotpForUser(userId, oldSecret);
+    storeRecoveryCodes(userId, ['AAAAAAAAAA', 'BBBBBBBBBB']);
+    const begin = await withSession(myToken, () => beginTotpEnrollmentAction());
+    const newSecret = begin.enrollment!.secret;
+    const stored = () => db.get<{ s: string }>(sql`select totp_secret_encrypted as s from users where id = ${userId}`).s;
+    const before = stored();
+    const hashes = () => db.all<{ h: string }>(sql`select code_hash as h from totp_recovery_codes where user_id = ${userId} order by id`).map((r) => r.h);
+    return { db, userId, myToken, oldSecret, newSecret, stored, before, recoveryBefore: hashes(), hashes };
+  }
+
+  it('refuses without a password, with a wrong password, and without or with a wrong current code; nothing changes', async () => {
+    const t = await setupReplace();
+    const newCode = currentTotpToken(t.newSecret);
+    const oldCode = currentTotpToken(t.oldSecret);
+    const wrongCode = oldCode === '000000' ? '000001' : '000000';
+    const attempts: Record<string, string>[] = [
+      { code: newCode },
+      { code: newCode, currentCode: oldCode },
+      { code: newCode, currentPassword: 'nope', currentCode: oldCode },
+      { code: newCode, currentPassword: PASSWORD },
+      { code: newCode, currentPassword: PASSWORD, currentCode: wrongCode },
+    ];
+    for (const fields of attempts) {
+      const result = await withSession(t.myToken, () => confirmTotpEnrollmentAction({}, formData(fields)));
+      expect(result.error).toBeTruthy();
+      expect(result.recoveryCodes).toBeUndefined();
+    }
+    expect(raiseAccountSecurityEvent).not.toHaveBeenCalled();
+    expect(t.stored()).toBe(t.before);
+    expect(t.hashes()).toEqual(t.recoveryBefore);
+    expect(t.db.get<{ n: number }>(sql`select count(*) as n from sessions where user_id = ${t.userId}`).n).toBe(2);
+  });
+
+  it('replaces the secret with both correct, signs out other sessions, keeps this one and records the event', async () => {
+    const t = await setupReplace();
+    const result = await withSession(t.myToken, () =>
+      confirmTotpEnrollmentAction(
+        {},
+        formData({ code: currentTotpToken(t.newSecret), currentPassword: PASSWORD, currentCode: currentTotpToken(t.oldSecret) }),
+      ),
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.recoveryCodes?.length).toBeGreaterThan(0);
+    expect(t.stored()).not.toBe(t.before);
+    expect(t.hashes()).not.toEqual(t.recoveryBefore);
+    expect(t.db.get<{ n: number }>(sql`select count(*) as n from sessions where user_id = ${t.userId}`).n).toBe(1);
+    expect(validateSession(t.myToken)).not.toBeNull();
+    expect(raiseAccountSecurityEvent).toHaveBeenCalledWith(expect.objectContaining({ userId: t.userId, event: 'mfa_replaced' }));
   });
 });
 

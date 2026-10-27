@@ -174,6 +174,16 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     householdEligible: false,
   },
   {
+    id: 'mfa_replaced',
+    group: 'account',
+    label: 'Two-factor was replaced',
+    blurb: 'The authenticator on your account was replaced.',
+    audience: 'all',
+    trigger: 'immediate',
+    defaultEnabled: true,
+    householdEligible: false,
+  },
+  {
     id: 'restore_outcome',
     group: 'account',
     label: 'A restore finished',
@@ -563,6 +573,10 @@ export function passwordChangedKey(atIso: string): string {
 
 export function mfaDisabledKey(atIso: string): string {
   return `mfa_disabled:${atIso}`;
+}
+
+export function mfaReplacedKey(atIso: string): string {
+  return `mfa_replaced:${atIso}`;
 }
 
 export function restoreOutcomeKey(finishedAt: string): string {

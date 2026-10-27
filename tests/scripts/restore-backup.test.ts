@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { createHash } from 'node:crypto';
+import Database from 'better-sqlite3';
 import { createSeededTestDb, insertTestUser, type TestDb } from '../helpers/db';
 import { buildArchive } from '@/lib/backup/archive';
 import { receiptsDir, writeReceiptFile } from '@/lib/warranty/receipts';
@@ -123,6 +124,29 @@ describe('detectArtifactKind (MUST-12.5) — magic bytes, never the extension', 
 });
 
 describe('archive restore (MUST-12.7, MUST-12.8)', () => {
+  it('v1.58.1: the restored database has no session rows', () => {
+    const userId = insertTestUser(current!.db, { name: 'Alice', username: 'alice' });
+    current!.sqlite
+      .prepare(
+        `insert into sessions (token_hash, user_id, created_at, expires_at, last_seen_at)
+         values ('hash-one', ?, '2026-08-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z')`,
+      )
+      .run(userId);
+    const artifact = path.join(dataDir, 'backup-sessions.tar.gz');
+    buildArchive(artifact);
+
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-restore-target-'));
+    restoreFromArtifact(artifact, { dataDir: target });
+    const restored = new Database(path.join(target, 'budget.db'), { readonly: true });
+    try {
+      expect((restored.prepare('select count(*) as n from sessions').get() as { n: number }).n).toBe(0);
+      expect((restored.prepare('select count(*) as n from users').get() as { n: number }).n).toBe(1);
+    } finally {
+      restored.close();
+      fs.rmSync(target, { recursive: true, force: true });
+    }
+  });
+
   it('restores the database and every receipt byte-for-byte into an empty data dir', () => {
     insertTestUser(current!.db, { name: 'Alice', username: 'alice' });
     const a = writeReceiptFile(JPEG, 'image/jpeg');

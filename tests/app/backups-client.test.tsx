@@ -38,6 +38,8 @@ describe('MUST-20.35: the confirm step', () => {
     expect(panel.getByText(/budget\.pre-restore-/)).toBeTruthy();
     expect(panel.getByText(/restarts to apply this/i)).toBeTruthy();
     expect(panel.getByText(/no restart policy/i)).toBeTruthy();
+    expect(panel.getByText(/two-factor settings and deactivations return to the backup/i)).toBeTruthy();
+    expect(panel.getByText(/everyone signs in again/i)).toBeTruthy();
 
     const submit = panel.getByRole('button', { name: /restore and restart/i }) as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
@@ -131,6 +133,7 @@ describe('MUST-20.35: the result banner', () => {
     expect(screen.getByText(/Restored budget-2026-08-16\.tar\.gz/)).toBeTruthy();
     expect(screen.getByText(/128 receipt files/)).toBeTruthy();
     expect(screen.getByText(/budget\.pre-restore-2026-08-16T21-04-49-772Z\.db/)).toBeTruthy();
+    expect(screen.getByText(/are as they were in that backup, and everyone signs in again/i)).toBeTruthy();
   });
 
   it('renders a failure outcome verbatim', () => {
