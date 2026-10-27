@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { render, cleanup, screen } from '@testing-library/react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { createTestDb } from '../helpers/db';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -142,10 +143,12 @@ describe('backlog item 17 / Part 4: the Updates card carries the preset-pack lin
   });
 });
 
-// v1.58.1: while the app still sees the shared default update token from older compose files, an
-// admin is told how to change it. Updates stay allowed; this only warns.
-describe('v1.58.1: the legacy update token notice', () => {
-  const NOTICE_TITLE = 'Change the update token';
+// v1.58.1 told an admin about the shared default update token in a banner above the card; v1.59.1
+// makes it one quiet line inside the card, with a Fix helper. Updates stay allowed; this only warns.
+describe('v1.59.1: the legacy update token line', () => {
+  const LINE = 'Update token: shared default';
+  const OLD_BANNER = /still the shared default from older compose files/;
+  const WATCHTOWER_URL = 'http://watchtower:8080/v1/update';
   const originalToken = process.env.WATCHTOWER_TOKEN;
   const originalUrl = process.env.WATCHTOWER_URL;
 
@@ -159,7 +162,7 @@ describe('v1.58.1: the legacy update token notice', () => {
   async function renderAs(role: 'admin' | 'member', token: string) {
     const t = createTestDb();
     try {
-      process.env.WATCHTOWER_URL = 'http://watchtower:8080/v1/update';
+      process.env.WATCHTOWER_URL = WATCHTOWER_URL;
       process.env.WATCHTOWER_TOKEN = token;
       currentUser.value.role = role;
       const { default: SettingsPage } = await import('@/app/(app)/settings/page');
@@ -170,20 +173,46 @@ describe('v1.58.1: the legacy update token notice', () => {
     }
   }
 
-  it('shows an admin the notice for the old shared value', async () => {
+  it('shows an admin one quiet line and a Fix for the old shared value, and no banner', async () => {
     const { LEGACY_WATCHTOWER_TOKEN } = await import('@/lib/update/watchtower');
     await renderAs('admin', LEGACY_WATCHTOWER_TOKEN);
-    expect(screen.getByText(NOTICE_TITLE)).toBeTruthy();
+    expect(screen.getByText(LINE)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Fix' }).getAttribute('aria-haspopup')).toBe('dialog');
+    // The old Notice's title is now only the closed Sheet's, and its body copy is gone.
+    expect(screen.queryByText('Change the update token')).toBeNull();
+    expect(screen.queryByText(OLD_BANNER)).toBeNull();
   });
 
   it('shows nothing for another value', async () => {
     await renderAs('admin', 'f3a9c1d27b8e4a6f90b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d');
-    expect(screen.queryByText(NOTICE_TITLE)).toBeNull();
+    expect(screen.queryByText(LINE)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Fix' })).toBeNull();
   });
 
   it('shows a member nothing, even for the old shared value', async () => {
     const { LEGACY_WATCHTOWER_TOKEN } = await import('@/lib/update/watchtower');
     await renderAs('member', LEGACY_WATCHTOWER_TOKEN);
-    expect(screen.queryByText(NOTICE_TITLE)).toBeNull();
+    expect(screen.queryByText(LINE)).toBeNull();
+  });
+
+  it('MUST-7.3: the card is told a boolean, and neither its props nor the markup carry the token', async () => {
+    const { LEGACY_WATCHTOWER_TOKEN } = await import('@/lib/update/watchtower');
+    const { UpdatesCard } = await import('@/app/(app)/settings/updates-card');
+    const t = createTestDb();
+    try {
+      process.env.WATCHTOWER_URL = WATCHTOWER_URL;
+      process.env.WATCHTOWER_TOKEN = LEGACY_WATCHTOWER_TOKEN;
+      const card = UpdatesCard();
+      const props = card.props as Record<string, unknown>;
+      expect(props.legacyToken).toBe(true);
+      expect(JSON.stringify(props)).not.toContain(LEGACY_WATCHTOWER_TOKEN);
+      expect(JSON.stringify(props)).not.toContain(WATCHTOWER_URL);
+      const html = renderToStaticMarkup(card);
+      expect(html).toContain(LINE);
+      expect(html).not.toContain(LEGACY_WATCHTOWER_TOKEN);
+      expect(html).not.toContain(WATCHTOWER_URL);
+    } finally {
+      t.cleanup();
+    }
   });
 });

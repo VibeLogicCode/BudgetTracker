@@ -141,4 +141,19 @@ describe('CardActionRow', () => {
     expect(b.getAttribute('aria-haspopup')).toBe('dialog');
     expect(b.getAttribute('aria-expanded')).toBeNull();
   });
+
+  it('inline: the same accent look at the width of its label, chevron after it, touch floor kept', () => {
+    render(
+      <CardActionRow onClick={() => {}} opensDialog inline>
+        Fix
+      </CardActionRow>,
+    );
+    const b = screen.getByRole('button', { name: 'Fix' });
+    const classes = b.className.split(/\s+/);
+    expect(classes).toEqual(expect.arrayContaining(['inline-flex', 'text-accent-text', 'min-h-11', 'sm:min-h-0']));
+    expect(classes).not.toContain('w-full');
+    expect(classes).not.toContain('justify-between');
+    expect(b.lastElementChild?.tagName.toLowerCase()).toBe('svg');
+    expect(svgOf(b).getAttribute('aria-hidden')).toBe('true');
+  });
 });

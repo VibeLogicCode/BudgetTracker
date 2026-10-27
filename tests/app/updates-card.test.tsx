@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, cleanup, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { UpdatesClient, type UpdatesViewProps } from '@/app/(app)/settings/updates-client';
 import { RESTART_NOTICE_KEY } from '@/lib/update/restart-notice';
@@ -54,6 +54,7 @@ const base: UpdatesViewProps = {
   applyRequestedAt: null,
   severity: 'none',
   canApplyInApp: true,
+  legacyToken: false,
   watchtowerError: null,
   canadianPackUpdate: null,
 };
@@ -266,7 +267,10 @@ describe('MUST-7.3: the card never receives a token', () => {
   it('the props type carries canApplyInApp and no credential field', () => {
     const keys = Object.keys(base);
     expect(keys).toContain('canApplyInApp');
-    for (const key of keys) expect(key.toLowerCase()).not.toContain('token');
+    // v1.59.1: legacyToken is the one key that names a token, and it is a boolean -- whether the
+    // shared default is in use, never any part of a value.
+    expect(keys.filter((key) => key.toLowerCase().includes('token'))).toEqual(['legacyToken']);
+    expect(typeof base.legacyToken).toBe('boolean');
     expect(JSON.stringify(base).toLowerCase()).not.toContain('bearer');
   });
 });
@@ -813,5 +817,164 @@ describe('UP-2: an accepted apply arms the restart notice, a refused one does no
     // every visit to Settings would let a long-dead apply speak for a fresh crash.
     expect(screen.getByText(/Watchtower is pulling 1\.4\.0/)).toBeTruthy();
     expect(stored()).toBeNull();
+  });
+});
+
+/**
+ * v1.59.1: the update token helper. One quiet line under the stamps while the app still sees the
+ * shared default, and a Sheet with a value made in the browser and the steps to put it in place.
+ */
+describe('v1.59.1: the update token helper', () => {
+  // Bytes 0x00..0x1f, so the token is a known 64-character string.
+  const TOKEN = Array.from({ length: 32 }, (_, i) => i.toString(16).padStart(2, '0')).join('');
+  const COMPOSE = `WATCHTOWER_TOKEN: "${TOKEN}"\nWATCHTOWER_HTTP_API_TOKEN: "${TOKEN}"`;
+  const ENV = `WATCHTOWER_TOKEN=${TOKEN}`;
+  const LINE = 'Update token: shared default';
+  const TITLE = 'Change the update token';
+  let getRandomValues: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    getRandomValues = vi.spyOn(crypto, 'getRandomValues').mockImplementation(((array: Uint8Array) => {
+      for (let i = 0; i < array.length; i++) array[i] = i;
+      return array;
+    }) as typeof crypto.getRandomValues);
+  });
+
+  afterEach(() => {
+    getRandomValues.mockRestore();
+    Reflect.deleteProperty(navigator, 'clipboard');
+    vi.useRealTimers();
+  });
+
+  function stubClipboard(writeText: (text: string) => Promise<void>) {
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+  }
+
+  function openHelper(): HTMLElement {
+    fireEvent.click(screen.getByRole('button', { name: 'Fix' }));
+    return screen.getByRole('dialog', { name: TITLE });
+  }
+
+  it('shows one line under the stamps, a warning icon and a Fix that opens a dialog', () => {
+    render(<UpdatesClient {...base} legacyToken />);
+    const line = screen.getByText(LINE).parentElement as HTMLElement;
+    expect(screen.getByText(/Last checked 2026-08-18 09:30/).nextElementSibling).toBe(line);
+    const icon = line.querySelector('svg') as SVGElement;
+    expect(icon.getAttribute('aria-hidden')).toBe('true');
+    expect(icon.getAttribute('class')).toContain('text-warning');
+    const fix = within(line).getByRole('button', { name: 'Fix' });
+    expect(fix.getAttribute('aria-haspopup')).toBe('dialog');
+    expect(fix.className).toContain('text-accent-text');
+    expect(fix.className).toContain('min-h-11 sm:min-h-0');
+    expect(fix.className).not.toContain('w-full');
+  });
+
+  it('shows the line with update checks off too, since Watchtower answers the default either way', () => {
+    render(<UpdatesClient {...base} enabled={false} autoApply={false} lastCheckedAt={null} legacyToken />);
+    expect(screen.getByText(LINE)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Fix' })).toBeTruthy();
+  });
+
+  it('renders nothing when the token is not the shared default', () => {
+    render(<UpdatesClient {...base} />);
+    expect(screen.queryByText(LINE)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Fix' })).toBeNull();
+    cleanup();
+    render(<UpdatesClient {...base} enabled={false} autoApply={false} lastCheckedAt={null} />);
+    expect(screen.queryByText(LINE)).toBeNull();
+  });
+
+  it('Fix opens the Sheet with its title; Escape and Close shut it', () => {
+    render(<UpdatesClient {...base} legacyToken />);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    const dialog = openHelper();
+    expect(dialog.getAttribute('aria-modal')).toBe('true');
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    openHelper();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('makes a 64-character hex token in the browser and puts the same value in every line', () => {
+    render(<UpdatesClient {...base} legacyToken />);
+    expect(getRandomValues).not.toHaveBeenCalled();
+    openHelper();
+    expect(getRandomValues).toHaveBeenCalledTimes(1);
+    const bytes = getRandomValues.mock.calls[0][0] as Uint8Array;
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    expect(bytes.length).toBe(32);
+
+    const token = screen.getByTestId('update-token-value').textContent;
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    expect(token).toBe(TOKEN);
+    expect(screen.getByTestId('update-token-compose').textContent).toBe(COMPOSE);
+    const env = screen.getByTestId('update-token-env');
+    expect(env.textContent).toBe(ENV);
+    // The .env route is a secondary disclosure, collapsed until asked for.
+    expect((env.closest('details') as HTMLDetailsElement).open).toBe(false);
+  });
+
+  it('keeps the same token when the Sheet is closed and opened again', () => {
+    render(<UpdatesClient {...base} legacyToken />);
+    openHelper();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    openHelper();
+    expect(getRandomValues).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('update-token-value').textContent).toBe(TOKEN);
+  });
+
+  it.each([
+    ['Copy new token', TOKEN],
+    ['Copy both lines', COMPOSE],
+    ['Copy the .env line', ENV],
+  ])('%s writes the right text, announces Copied, and its label returns', async (name, text) => {
+    vi.useFakeTimers();
+    const writeText = vi.fn(async (_text: string) => {});
+    stubClipboard(writeText);
+    render(<UpdatesClient {...base} legacyToken />);
+    const dialog = openHelper();
+    const button = within(dialog).getByRole('button', { name });
+    expect(button.textContent).toBe('Copy');
+
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    expect(writeText).toHaveBeenCalledWith(text);
+    expect(button.textContent).toBe('Copied');
+    // The accessible name does not change with the label.
+    expect(within(dialog).getByRole('button', { name })).toBe(button);
+    const live = within(dialog).getByRole('status');
+    expect(live.getAttribute('aria-live')).toBe('polite');
+    expect(live.textContent).toBe('Copied');
+
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(button.textContent).toBe('Copy');
+    expect(live.textContent).toBe('');
+  });
+
+  it('without a working clipboard, Copy selects the text and says how to finish', async () => {
+    stubClipboard(async () => {
+      throw new Error('not allowed');
+    });
+    render(<UpdatesClient {...base} legacyToken />);
+    const dialog = openHelper();
+    const button = within(dialog).getByRole('button', { name: 'Copy new token' });
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    expect(window.getSelection()?.toString()).toBe(TOKEN);
+    expect(button.textContent).toBe('Selected');
+    expect(within(dialog).getByRole('status').textContent).toBe('Selected. Use your device’s Copy to finish.');
+  });
+
+  it('MUST-7.3: the server-rendered card carries the line and no token', () => {
+    const html = renderToStaticMarkup(<UpdatesClient {...base} legacyToken />);
+    expect(html).toContain(LINE);
+    expect(html).not.toMatch(/[0-9a-f]{64}/);
+    expect(html).not.toContain(TITLE);
+    expect(getRandomValues).not.toHaveBeenCalled();
   });
 });

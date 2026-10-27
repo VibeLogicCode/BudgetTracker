@@ -25,6 +25,7 @@ import {
   type UpdateActionState,
 } from './actions';
 import { pendingApplyMessage } from './pending-apply-message';
+import { UpdateTokenLine } from './update-token-helper';
 import { buttonClass } from '@/components/ui/Button';
 
 export interface UpdatesViewProps {
@@ -48,6 +49,9 @@ export interface UpdatesViewProps {
   severity: UpdateSeverity;
   /** MUST-7.3: the card receives this boolean and NOTHING else about Watchtower. */
   canApplyInApp: boolean;
+  /** v1.59.1: true while the app still sees the shared default update token. A boolean only
+   *  (MUST-7.3): whether the default is in use, never any part of the value. */
+  legacyToken: boolean;
   watchtowerError: string | null;
   /** Backlog item 17 / Part 4: null when up to date or nothing installed -- see UpdatesCard for
    *  how this is derived (a plain version comparison, never a network call). */
@@ -265,6 +269,9 @@ export function UpdatesClient(props: UpdatesViewProps) {
       <Card>
         <CardHeader title="Updates" description={`Budget Tracker v${props.currentVersion} · update checks are off.`} />
         <CardBody className="flex flex-col gap-4">
+          {/* v1.59.1: shown with checks off too. Watchtower answers the shared default whether or
+              not this app ever asks it for an update, and checks start off on a new install. */}
+          {props.legacyToken ? <UpdateTokenLine /> : null}
           {canadianPackNotice}
           <p className="text-sm text-muted">
             This app does not check for updates unless you ask it to. Switch this on and once a day it will ask GitHub
@@ -361,28 +368,33 @@ export function UpdatesClient(props: UpdatesViewProps) {
           budget behind it. role="status" so the change is announced rather than only seen —
           this line is the entire feedback for a button that is otherwise silent.
         */}
-        <p className="text-sm text-subtle" role="status" aria-live="polite">
-          {checkPending ? (
-            <>
-              Asking GitHub for the newest published release — it gives up after{' '}
-              {timeoutSeconds(GITHUB_INTERACTIVE_TIMEOUT_MS)} seconds. Previously checked{' '}
-              {stamp(resolved.lastCheckedAt)}.
-            </>
-          ) : checkFailed ? (
-            <>
-              {resolved.lastSuccessAt === null
-                ? 'No successful check yet'
-                : `Last successful check ${stamp(resolved.lastSuccessAt)}`}
-              {props.lastAppliedAt === null ? null : ` · last updated ${stamp(props.lastAppliedAt)}`}
-            </>
-          ) : (
-            <>
-              Last checked {stamp(resolved.lastCheckedAt)}
-              {resolved.latestPublishedAt === null ? null : ` · published ${stamp(resolved.latestPublishedAt)}`}
-              {props.lastAppliedAt === null ? null : ` · last updated ${stamp(props.lastAppliedAt)}`}
-            </>
-          )}
-        </p>
+        <div className="flex flex-col gap-1">
+          <p className="text-sm text-subtle" role="status" aria-live="polite">
+            {checkPending ? (
+              <>
+                Asking GitHub for the newest published release — it gives up after{' '}
+                {timeoutSeconds(GITHUB_INTERACTIVE_TIMEOUT_MS)} seconds. Previously checked{' '}
+                {stamp(resolved.lastCheckedAt)}.
+              </>
+            ) : checkFailed ? (
+              <>
+                {resolved.lastSuccessAt === null
+                  ? 'No successful check yet'
+                  : `Last successful check ${stamp(resolved.lastSuccessAt)}`}
+                {props.lastAppliedAt === null ? null : ` · last updated ${stamp(props.lastAppliedAt)}`}
+              </>
+            ) : (
+              <>
+                Last checked {stamp(resolved.lastCheckedAt)}
+                {resolved.latestPublishedAt === null ? null : ` · published ${stamp(resolved.latestPublishedAt)}`}
+                {props.lastAppliedAt === null ? null : ` · last updated ${stamp(props.lastAppliedAt)}`}
+              </>
+            )}
+          </p>
+          {/* v1.59.1: one quiet line under the stamps, not a banner above the card. Fix opens the
+              helper Sheet (update-token-helper.tsx); nothing renders once the default is gone. */}
+          {props.legacyToken ? <UpdateTokenLine /> : null}
+        </div>
 
         {resolved.lastCheckError === null ? null : <Notice tone="error">{resolved.lastCheckError}</Notice>}
         {resolved.lastCheckError?.startsWith(COULD_NOT_REACH_GITHUB) ? (

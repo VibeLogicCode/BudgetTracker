@@ -2,13 +2,15 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { ExpandIcon } from '@/components/ui/icons';
 
-const LOOK =
-  'flex w-full items-center justify-between gap-2 text-left font-medium text-accent-text hover:underline min-h-11 sm:min-h-0';
+const LOOK = 'items-center text-left font-medium text-accent-text hover:underline min-h-11 sm:min-h-0';
+const ROW = `flex w-full justify-between gap-2 ${LOOK}`;
+const INLINE = `inline-flex gap-0.5 ${LOOK}`;
 
 /**
  * A card's footer action: full width, label left, chevron right. Pass `href` for a navigation,
  * or `onClick` for a button. `expanded` (when given) makes it a disclosure and rotates the
- * chevron; `opensDialog` marks a button that opens a dialog.
+ * chevron; `opensDialog` marks a button that opens a dialog. `inline` keeps the same look at the
+ * width of its label, chevron right after it, for an action that ends a line of text.
  */
 export function CardActionRow({
   children,
@@ -17,6 +19,7 @@ export function CardActionRow({
   expanded,
   controls,
   opensDialog,
+  inline = false,
 }: {
   children: ReactNode;
   href?: string;
@@ -24,7 +27,9 @@ export function CardActionRow({
   expanded?: boolean;
   controls?: string;
   opensDialog?: boolean;
+  inline?: boolean;
 }) {
+  const look = inline ? INLINE : ROW;
   const icon = (
     <ExpandIcon
       aria-hidden="true"
@@ -33,7 +38,7 @@ export function CardActionRow({
   );
   if (href !== undefined) {
     return (
-      <Link href={href} className={LOOK}>
+      <Link href={href} className={look}>
         <span>{children}</span>
         {icon}
       </Link>
@@ -43,7 +48,7 @@ export function CardActionRow({
     <button
       type="button"
       onClick={onClick}
-      className={LOOK}
+      className={look}
       aria-expanded={expanded === undefined ? undefined : expanded}
       aria-controls={controls}
       aria-haspopup={opensDialog ? 'dialog' : undefined}

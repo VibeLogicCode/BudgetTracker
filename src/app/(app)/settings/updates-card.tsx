@@ -1,7 +1,6 @@
 import { canadianPackState } from '@/lib/canadian-pack';
 import { classify, parseSemver, type UpdateSeverity } from '@/lib/update/semver';
 import { readUpdateState } from '@/lib/update/state';
-import { Notice } from '@/components/ui/Notice';
 import { usesLegacyWatchtowerToken, watchtowerConfig, watchtowerConfigError } from '@/lib/update/watchtower';
 import { APP_VERSION } from '@/lib/version';
 import { UpdatesClient } from './updates-client';
@@ -13,8 +12,8 @@ import { UpdatesClient } from './updates-client';
  * MUST-9.2: this is NOT added to ADMIN_LINKS. It is a card with controls, not a link to
  * another page, for the same reason the Sessions card is.
  *
- * MUST-7.3: the client half receives `canApplyInApp: boolean` and nothing more. No page
- * prop carries WATCHTOWER_TOKEN, or WATCHTOWER_URL, or any fragment of either.
+ * MUST-7.3: the client half receives `canApplyInApp: boolean` and `legacyToken: boolean` and
+ * nothing more. No page prop carries WATCHTOWER_TOKEN, or WATCHTOWER_URL, or any fragment of either.
  *
  * Review fix (bug): NOT async, deliberately. readUpdateState()/watchtowerConfig() are both
  * synchronous, and an async component can only be rendered by Next's RSC pipeline. Marking
@@ -38,20 +37,11 @@ export function UpdatesCard() {
   // inherits that same gate for free.
   const pack = canadianPackState();
 
-  // v1.58.1: warn only. Updates are never refused because of the token's value.
+  // v1.58.1: warn only. Updates are never refused because of the token's value. v1.59.1: told to
+  // the client as a boolean, which shows a quiet line and the helper Sheet instead of a banner.
   const legacyToken = usesLegacyWatchtowerToken();
 
   return (
-    <>
-      {legacyToken ? (
-        <Notice tone="warning" title="Change the update token">
-          <p>
-            The update token is still the shared default from older compose files. Choose a long random value, set it as
-            both WATCHTOWER_TOKEN and WATCHTOWER_HTTP_API_TOKEN in the compose file, and recreate both containers.
-            Updates keep working until then.
-          </p>
-        </Notice>
-      ) : null}
     <UpdatesClient
       currentVersion={APP_VERSION}
       enabled={state.enabled}
@@ -72,6 +62,7 @@ export function UpdatesCard() {
       applyRequestedAt={state.applyRequestedAt}
       severity={severity}
       canApplyInApp={watchtowerConfig() !== null}
+      legacyToken={legacyToken}
       watchtowerError={watchtowerConfigError()}
       canadianPackUpdate={
         // UP-3: a notice an admin has put down for THIS bundled version is not sent to the client
@@ -82,6 +73,5 @@ export function UpdatesCard() {
           : null
       }
     />
-    </>
   );
 }
