@@ -739,6 +739,8 @@ describe('v1.18.0 Lane 2 items 1-2: a group collapses, and its header already ca
     const toggle = getByRole('button', { name: 'Housing' });
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(toggle.getAttribute('aria-controls')).toBe('budget-row-household-h-11 budget-row-household-h-12');
+    // Shrinks below its text width, so the row's flex-wrap can drop the pill under the name.
+    expect(toggle.className.split(/\s+/)).toContain('min-w-0');
 
     // Ruling U2: the parent's OWN row already carries the rolled-up spend/remaining
     // (foldRollup, src/lib/budgets.ts) -- no client-side re-summation was needed to show it.

@@ -47,6 +47,7 @@ function ActionButton({ action }: { action: HeaderAction }) {
  * width, because a menu of one is worse than a button (RowMenu's own rule). More than one is a row
  * of buttons from `sm:` up and, on a phone, one "Actions" menu holding the same actions, so the
  * header never wraps into a stack of buttons. Each width renders its set once: CSS hides the other.
+ * An action's `title` is its tooltip in both sets.
  */
 export function HeaderActions({ menuLabel, actions }: { menuLabel: string; actions: HeaderAction[] }) {
   if (actions.length === 0) return null;
@@ -62,11 +63,11 @@ export function HeaderActions({ menuLabel, actions }: { menuLabel: string; actio
         <RowMenu label={menuLabel} trigger="Actions">
           {actions.map((action) =>
             'onSelect' in action ? (
-              <RowMenuButton key={action.key} onSelect={action.onSelect}>
+              <RowMenuButton key={action.key} onSelect={action.onSelect} title={action.title}>
                 {action.label}
               </RowMenuButton>
             ) : (
-              <RowMenuForm key={action.key} action={action.action} fields={action.fields}>
+              <RowMenuForm key={action.key} action={action.action} fields={action.fields} title={action.title}>
                 {action.label}
               </RowMenuForm>
             ),

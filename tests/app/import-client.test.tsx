@@ -987,7 +987,7 @@ describe('ImportClient — per-card assignment UI (MUST-6.1, MUST-6.2)', () => {
     putFileOnPage(container);
     fireEvent.submit(container.querySelector('form')!);
     await waitFor(() => expect(container.textContent).toContain('Preview —'));
-    expect(container.textContent).not.toMatch(/account owner \(default\)/i);
+    expect(container.textContent).not.toContain('No one (person rule, else account owner)');
   });
 
   it('lists each distinct card value with its row count', async () => {
@@ -1064,12 +1064,13 @@ describe('ImportClient — per-card assignment UI (MUST-6.1, MUST-6.2)', () => {
     expect(submitted.get('accountId')).toBe('10');
   });
 
-  it('preselects "account owner (default)" for a value with no assignment, proved the same way', async () => {
+  it('preselects "No one (person rule, else account owner)" for a value with no assignment, proved the same way', async () => {
     const { getByLabelText } = await renderWithCardValues([
       { value: '-9999', rowCount: 1, assignedUserId: null, assignedUserName: null },
     ]);
     const { setCardPersonAction } = await import('@/app/(app)/import/actions');
     const select = getByLabelText(/Person for -9999/i) as HTMLSelectElement;
+    expect(select.options[select.selectedIndex].textContent).toBe('No one (person rule, else account owner)');
 
     fireEvent.change(select, { target: { value: '' } });
 
@@ -1081,7 +1082,7 @@ describe('ImportClient — per-card assignment UI (MUST-6.1, MUST-6.2)', () => {
   it('still preselects an assignment to a person who is no longer in the active `people` list, instead of silently showing it as unassigned', async () => {
     // 99 is deliberately absent from PEOPLE -- a since-deactivated assignee (MUST-3.1). A
     // naive select offering only `people` as <option>s would fall back to the FIRST option
-    // ("Account owner (default)") here and look identical to a genuinely unassigned row.
+    // ("No one (person rule, else account owner)") here and look identical to a genuinely unassigned row.
     const { getByLabelText } = await renderWithCardValues([
       { value: '-1001', rowCount: 3, assignedUserId: 99, assignedUserName: 'Retired Member' },
     ]);

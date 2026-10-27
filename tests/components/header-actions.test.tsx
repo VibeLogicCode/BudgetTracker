@@ -56,6 +56,24 @@ describe('HeaderActions (v1.59.0 item 10)', () => {
     expect(Object.fromEntries(posted.entries())).toEqual({ scope: 'household', month: '2026-05' });
   });
 
+  it('each action keeps its title as the tooltip in the phone menu too, its name unchanged', () => {
+    render(
+      <HeaderActions
+        menuLabel="Actions for Household"
+        actions={[
+          { key: 'copy', label: 'Copy previous month', title: 'Also brings forward the savings target.', action: vi.fn(), fields: { month: '2026-05' } },
+          { key: 'fill', label: 'Fill from suggestions', title: 'Uses the last three full months.', onSelect: vi.fn() },
+          { key: 'edit', label: 'Edit limits', onSelect: vi.fn() },
+        ]}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Household' }));
+    const menu = screen.getByRole('menu', { name: 'Actions for Household' });
+    expect(within(menu).getByRole('menuitem', { name: 'Copy previous month' }).getAttribute('title')).toBe('Also brings forward the savings target.');
+    expect(within(menu).getByRole('menuitem', { name: 'Fill from suggestions' }).getAttribute('title')).toBe('Uses the last three full months.');
+    expect(within(menu).getByRole('menuitem', { name: 'Edit limits' }).hasAttribute('title')).toBe(false);
+  });
+
   it('the desktop form posts the same fields, and a menu button runs its handler', async () => {
     const copy = vi.fn();
     const onEdit = vi.fn();

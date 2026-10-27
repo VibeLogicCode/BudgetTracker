@@ -259,13 +259,15 @@ export function RowMenuLink({ href, children }: { href: string; children: ReactN
   );
 }
 
-export function RowMenuButton({ onSelect, children }: { onSelect: () => void; children: ReactNode }) {
+/** `title`, here and on RowMenuForm, is the item's tooltip (HeaderActions passes its buttons' own). */
+export function RowMenuButton({ onSelect, title, children }: { onSelect: () => void; title?: string; children: ReactNode }) {
   const close = useRowMenuClose();
   return (
     <button
       type="button"
       role="menuitem"
       tabIndex={-1}
+      title={title}
       onClick={() => {
         close();
         onSelect();
@@ -281,10 +283,12 @@ export function RowMenuForm({
   action,
   fields,
   confirm,
+  title,
   children,
 }: {
   action: (formData: FormData) => void | Promise<unknown>;
   fields: Record<string, string>;
+  title?: string;
   /**
    * v1.12.1 (item AU / UX-6, ruling R5). When set, this sentence is put to the person before the
    * submission starts. Used by the two ROW-level destructive actions -- Remove an installment,
@@ -324,7 +328,7 @@ export function RowMenuForm({
       {Object.entries(fields).map(([name, value]) => (
         <input key={name} type="hidden" name={name} value={value} />
       ))}
-      <button type="submit" role="menuitem" tabIndex={-1} className={ITEM_CLASS}>
+      <button type="submit" role="menuitem" tabIndex={-1} title={title} className={ITEM_CLASS}>
         {children}
       </button>
     </form>

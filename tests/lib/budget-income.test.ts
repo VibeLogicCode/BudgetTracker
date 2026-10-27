@@ -102,6 +102,25 @@ describe('budgetIncomeLine: typical income', () => {
     expect(line.overTypicalByCents).toBeNull();
   });
 
+  it('counts a window that opens on a quiet month when older history exists, the quiet month as 0', () => {
+    const { salary, groceries, add, household } = setup();
+    for (const month of ['2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06']) add(`${month}-10`, -4500, groceries);
+    add('2026-08-15', 300000, salary);
+    add('2026-09-15', 330000, salary);
+    const line = budgetIncomeLine({ month: '2026-10', currentMonth: '2026-10', attributedUserId: null, budgetedLimitCents: 0 }, household);
+    expect(line.typicalMonths).toEqual(['2026-07', '2026-08', '2026-09']);
+    expect(line.typicalIncomeCents).toBe(210000);
+  });
+
+  it('is still null when the quiet opening month is where history starts', () => {
+    const { salary, add, household } = setup();
+    add('2026-08-15', 300000, salary);
+    add('2026-09-15', 330000, salary);
+    const line = budgetIncomeLine({ month: '2026-10', currentMonth: '2026-10', attributedUserId: null, budgetedLimitCents: 0 }, household);
+    expect(line.typicalMonths).toEqual(['2026-07', '2026-08', '2026-09']);
+    expect(line.typicalIncomeCents).toBeNull();
+  });
+
   it('is 0, not null, when the three months hold spending but no income', () => {
     const { groceries, add, household } = setup();
     add('2026-02-10', -4500, groceries);

@@ -1305,11 +1305,13 @@ function EditRow({
           <div style={{ paddingLeft: `${depth * 20}px` }} className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
             {disclosure ? (
               // v1.59.0: the shared disclosure look (ruling U3's chevron, right at rest and down
-              // when open). The flex-wrap above still drops the pill to its own line on a phone.
+              // when open). `min-w-0` lets the button shrink below its text width, which is what
+              // gives the flex-wrap above room to drop the pill to its own line on a phone.
               <DisclosureButton
                 open={disclosure.open}
                 onToggle={disclosure.onToggle}
                 controls={row.children.map((child) => rowId(scope, userId, child.categoryId)).join(' ')}
+                className="min-w-0"
               >
                 {row.categoryName}
               </DisclosureButton>

@@ -82,7 +82,7 @@ export interface ImportedFile {
  * already in that list -- an assignment can point at a since-deactivated user
  * (src/lib/import/card-people.ts, MUST-3.1: "remains valid and resolvable for display"), and
  * without this the <select>'s `defaultValue` would match no <option>, which the browser
- * resolves by silently selecting the FIRST option ("Account owner (default)") -- exactly the
+ * resolves by silently selecting the FIRST option ("No one (person rule, else account owner)") -- exactly the
  * native-fallback trap the Task 5 ledger entry warns about, here it would make a real
  * assignment look unassigned.
  */
@@ -162,7 +162,7 @@ function CardValueRow({
           name="person"
           defaultValue={assignedUserId === null ? '' : String(assignedUserId)}
           options={[
-            { value: '', label: 'Account owner (default)' },
+            { value: '', label: 'No one (person rule, else account owner)' },
             ...options.map((person) => ({ value: String(person.id), label: person.name })),
           ]}
           fields={{ accountId: String(accountId), cardValue }}
@@ -1037,7 +1037,7 @@ export function ImportClient({
                 ) : null}
                 <p className="mt-1 text-sm text-muted">
                   Assign each value found in the cardholder column to a person; a linked value wins over any person rule.
-                  Anything left as &ldquo;Account owner (default)&rdquo; — including a row where that column is blank — goes to a
+                  Anything left as &ldquo;No one&rdquo; — including a row where that column is blank — goes to a
                   person rule if one matches, else the account owner; nothing here blocks the import. Linking a value changes future
                   imports only; rows already imported keep their person.
                 </p>

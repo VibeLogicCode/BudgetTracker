@@ -87,6 +87,8 @@ const REQUIRE_VIEWER: { file: string; fn: string }[] = [
   { file: 'src/lib/recurring.ts', fn: 'recurringLoad' },
   // Spec 2026-10-06 §2.6: the Coming up card's expected charges, a spending read like recurringCharges.
   { file: 'src/lib/recurring.ts', fn: 'expectedRecurringCharges' },
+  // v1.59.0: the Budgets income line, the month's income and spend for the household or a person.
+  { file: 'src/lib/budget-income.ts', fn: 'budgetIncomeLine' },
 ];
 
 /** Exempt, WITH the reason. Nothing is exempt without one. */
@@ -268,8 +270,9 @@ describe('ruling R2: every read-model helper takes a viewer', () => {
   // Spec 2026-10-05: raised from 34 to 41, the actual count with merchantsOfTransactions added.
   // Spec 2026-10-06: raised from 41 to 42, the actual count with expectedRecurringCharges added.
   // Spec 2026-10-21: raised from 42 to 43, the actual count with uncategorizedSpend added.
-  it('the named lists cannot shrink below 43 entries', () => {
-    expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(43);
+  // v1.59.0: raised from 43 to 44, the actual count with budgetIncomeLine added.
+  it('the named lists cannot shrink below 44 entries', () => {
+    expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(44);
   });
 });
 

@@ -50,6 +50,24 @@ describe('DisclosureButton', () => {
     expect(svgOf(btn).getAttribute('class')).toContain('rotate-90');
   });
 
+  it('keeps wrapped text left and merges a caller className onto the button', () => {
+    const { rerender } = render(
+      <DisclosureButton open={false} onToggle={() => {}}>
+        Payment on account
+      </DisclosureButton>,
+    );
+    const btn = screen.getByRole('button', { name: 'Payment on account' });
+    const classes = () => btn.className.split(/\s+/);
+    expect(classes()).toContain('text-left');
+    expect(classes()).not.toContain('min-w-0');
+    rerender(
+      <DisclosureButton open={false} onToggle={() => {}} className="min-w-0">
+        Payment on account
+      </DisclosureButton>,
+    );
+    expect(classes()).toEqual(expect.arrayContaining(['text-left', 'text-accent-text', 'min-w-0']));
+  });
+
   it('uses label as the name when icon-only', () => {
     render(<DisclosureButton open={false} onToggle={() => {}} label="Show members" />);
     expect(screen.getByRole('button', { name: 'Show members' })).toBeTruthy();
