@@ -212,6 +212,33 @@ describe('S-18 fix (v1.13.0 ruling R2): overBudget names only the recipient\'s o
   });
 });
 
+describe('v1.58.1: needs-review count is household-wide, so a self-scoped recipient gets none', () => {
+  function uncategorized(): void {
+    t.db.run(
+      sql`insert into transactions
+            (account_id, date, amount_cents, raw_description, normalized_merchant, category_id,
+             attributed_user_id, is_transfer, dedup_hash, created_by, created_at, updated_at)
+          values (${accountId}, ${'2026-08-12'}, ${-1500}, ${'MAPLE GROCER'}, ${'MAPLE GROCER'}, ${null},
+                  ${null}, 0, ${`h${Math.random()}`}, ${creatorId}, ${'2026-08-05T00:00:00.000Z'}, ${'2026-08-05T00:00:00.000Z'})`,
+    );
+  }
+
+  it('a self-scoped recipient has no review sentence; a household recipient does', () => {
+    const selfUser = emailUser('member');
+    setUserVisibility(selfUser, 'self');
+    const householdUser = emailUser('member');
+    uncategorized();
+
+    expect(evaluateWeeklyDigest({ userId: selfUser, slotDate: '2026-08-17', now: NOW })).toBe(1);
+    const selfBody = (t.sqlite.prepare('select body from notification_outbox where user_id = ?').get(selfUser) as { body: string }).body;
+    expect(selfBody).not.toContain('still need review');
+
+    expect(evaluateWeeklyDigest({ userId: householdUser, slotDate: '2026-08-17', now: NOW })).toBe(1);
+    const houseBody = (t.sqlite.prepare('select body from notification_outbox where user_id = ?').get(householdUser) as { body: string }).body;
+    expect(houseBody).toContain('1 transactions still need review.');
+  });
+});
+
 describe('item BK: viewerFor skips rather than falling back to a household scope', () => {
   it('sends nothing when the recipient\'s own row is gone', () => {
     const userId = emailUser();

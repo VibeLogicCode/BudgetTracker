@@ -151,7 +151,8 @@ export default async function DashboardPage({
     viewer,
   );
   const goals = listGoals({}, viewer);
-  const reviewCount = reviewQueueCount();
+  // v1.58.1: the queue is household-wide; a self-scoped viewer gets 0, as the app shell does.
+  const reviewCount = selfScoped ? 0 : reviewQueueCount();
   // v1.13.1 review A: a self viewer must never receive the household roster -- not shown, not
   // sent. Every other use of `people` below is already behind `selfScoped ? undefined : (...)`
   // except the QuickAddTransaction prop, which this gate now covers too.

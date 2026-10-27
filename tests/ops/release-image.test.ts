@@ -55,28 +55,46 @@ describe('.github/workflows/release-image.yml', () => {
     expect(workflow).not.toMatch(/ghcr\.io\/[a-zA-Z0-9-]+\/budgettracker/);
   });
 
-  it('pins every third-party action to a major version, not a floating branch or SHA-less latest', () => {
+  it('v1.58.1: pins every third-party action by full commit SHA with its version in a trailing comment', () => {
     // The local reusable-workflow call (uses: ./.github/workflows/test.yml) is excluded on
-    // purpose: a same-repo path has no @ref to pin because it always resolves against the
-    // exact commit this workflow is running from -- there is no floating-branch risk to
-    // guard against the way there is for a third-party action.
-    const usesLines = (workflow.match(/uses:\s*\S+/g) ?? []).filter(
-      (line) => !line.includes('./.github/workflows/'),
-    );
+    // purpose: a same-repo path always resolves against the commit this workflow runs from.
+    const usesLines = workflow
+      .split(/\r?\n/)
+      .filter((line) => /\buses:\s*\S+/.test(line))
+      .filter((line) => !line.includes('./.github/workflows/'));
     expect(usesLines.length).toBeGreaterThan(0);
     for (const line of usesLines) {
-      expect(line, `unpinned or non-major-version action: ${line}`).toMatch(/@v\d+$/);
+      expect(line, `not pinned by SHA with a version comment: ${line}`).toMatch(
+        /uses:\s*[\w.-]+\/[\w.-]+@[0-9a-f]{40}\s+# v\d+\.\d+\.\d+\s*$/,
+      );
     }
     for (const action of [
-      'actions/checkout@v',
-      'actions/setup-node@v',
-      'docker/setup-qemu-action@v',
-      'docker/setup-buildx-action@v',
-      'docker/login-action@v',
-      'docker/build-push-action@v',
+      'actions/checkout@',
+      'actions/setup-node@',
+      'docker/setup-qemu-action@',
+      'docker/setup-buildx-action@',
+      'docker/login-action@',
+      'docker/build-push-action@',
     ]) {
       expect(workflow).toContain(action);
     }
+  });
+
+  it('v1.58.1: a manual dispatch may publish only from main or a version tag, checked first in the guard job', () => {
+    const guardJob = workflow.slice(workflow.indexOf('  guard:'), workflow.indexOf('  build:'));
+    const stepsStart = guardJob.indexOf('steps:');
+    const firstStepStart = guardJob.indexOf('      - name:', stepsStart);
+    const secondStepStart = guardJob.indexOf('      - name:', firstStepStart + 1);
+    const firstStep = guardJob.slice(firstStepStart, secondStepStart);
+    expect(firstStep).toContain('Refuse a dispatch from any other ref');
+    expect(firstStep).toContain('workflow_dispatch');
+    expect(firstStep).toContain('refs/heads/main');
+    expect(firstStep).toContain('refs/tags/v*');
+    expect(firstStep).toContain('exit 1');
+    // The check precedes the checkout, and the build job (the only pusher) needs the guard.
+    expect(guardJob.indexOf('Refuse a dispatch')).toBeLessThan(guardJob.indexOf('actions/checkout@'));
+    const buildJob = workflow.slice(workflow.indexOf('  build:'));
+    expect(buildJob).toMatch(/needs:\s*\[[^\]]*\bguard\b[^\]]*\]/);
   });
 
   it('B9: calls the shared test workflow as a local reusable workflow instead of duplicating its steps', () => {

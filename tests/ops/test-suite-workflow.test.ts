@@ -58,14 +58,16 @@ describe('.github/workflows/test.yml', () => {
     expect(permissionsBlock).not.toMatch(/write/);
   });
 
-  it('pins every action to a major version, not a floating branch or SHA-less latest', () => {
-    const usesLines = workflow.match(/uses:\s*\S+/g) ?? [];
-    expect(usesLines.length).toBeGreaterThan(0);
-    for (const line of usesLines) {
-      expect(line, `unpinned or non-major-version action: ${line}`).toMatch(/@v\d+$/);
+  it('v1.58.1: pins every action by full commit SHA with its version in a trailing comment', () => {
+    const lines = workflow.split(/\r?\n/).filter((line) => /\buses:\s*\S+/.test(line));
+    expect(lines.length).toBeGreaterThan(0);
+    for (const line of lines) {
+      expect(line, `not pinned by SHA with a version comment: ${line}`).toMatch(
+        /uses:\s*[\w.-]+\/[\w.-]+@[0-9a-f]{40}\s+# v\d+\.\d+\.\d+\s*$/,
+      );
     }
-    expect(workflow).toContain('actions/checkout@v');
-    expect(workflow).toContain('actions/setup-node@v');
+    expect(workflow).toContain('actions/checkout@');
+    expect(workflow).toContain('actions/setup-node@');
   });
 
   it('runs on Node 22', () => {

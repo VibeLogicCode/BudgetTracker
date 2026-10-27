@@ -1,5 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
+  SIMPLEFIN_MAX_RESPONSE_BYTES,
+  SIMPLEFIN_TIMEOUT_MS,
   SimplefinError,
   claimSetupToken,
   decodeSetupToken,
@@ -144,5 +146,87 @@ describe('fetchAccounts', () => {
     const start = end - 91 * 86400;
     await expect(fetchAccounts({ accessUrl: ACCESS_URL, startDate: start, endDate: end, fetcher })).rejects.toThrowError(/90 days/i);
     expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+describe('v1.58.1: the real fetch path is bounded', () => {
+  const encoder = new TextEncoder();
+
+  function streamOf(chunks: Uint8Array[], onCancel?: () => void): ReadableStream<Uint8Array> {
+    let index = 0;
+    return new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (index >= chunks.length) controller.close();
+        else controller.enqueue(chunks[index++]);
+      },
+      cancel() {
+        onCancel?.();
+      },
+    });
+  }
+
+  function stubFetch(impl: (url: string, init: RequestInit) => Promise<Response>) {
+    const spy = vi.fn(impl);
+    vi.stubGlobal('fetch', spy);
+    return spy;
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const window = { accessUrl: ACCESS_URL, startDate: 1, endDate: 2 };
+
+  it('passes redirect: error and a 60 second abort signal on every request', async () => {
+    const spy = stubFetch(async () => new Response(JSON.stringify({ accounts: [], errlist: [] })));
+    await fetchAccounts(window);
+    const init = spy.mock.calls[0][1];
+    expect(init.redirect).toBe('error');
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(SIMPLEFIN_TIMEOUT_MS).toBe(60_000);
+    spy.mockClear();
+    stubFetch(async () => new Response('https://u:p@bridge.example/simplefin'));
+    await claimSetupToken(SETUP_TOKEN);
+  });
+
+  it('a normal body still parses', async () => {
+    stubFetch(async () => new Response(JSON.stringify({ accounts: [{ id: 'a', name: 'Chequing', currency: 'USD', balance: '1.00' }], errlist: [] })));
+    const result = await fetchAccounts(window);
+    expect(result.accounts).toHaveLength(1);
+  });
+
+  it('maps a timeout to a plain message', async () => {
+    stubFetch(async () => {
+      throw new DOMException('The operation timed out.', 'TimeoutError');
+    });
+    await expect(fetchAccounts(window)).rejects.toThrowError('SimpleFIN did not answer within 60 seconds.');
+    await expect(claimSetupToken(SETUP_TOKEN)).rejects.toThrowError('SimpleFIN did not answer within 60 seconds.');
+  });
+
+  it('maps a refused redirect to a plain message', async () => {
+    stubFetch(async () => {
+      throw new TypeError('fetch failed', { cause: new Error('unexpected redirect') });
+    });
+    await expect(fetchAccounts(window)).rejects.toThrowError('SimpleFIN tried to redirect the request, which is not allowed.');
+  });
+
+  it('cancels the reader and refuses a streamed body over the cap', async () => {
+    let cancelled = false;
+    const chunk = new Uint8Array(1024 * 1024);
+    const chunks = Array.from({ length: 12 }, () => chunk);
+    stubFetch(async () => new Response(streamOf(chunks, () => { cancelled = true; })));
+    await expect(fetchAccounts(window)).rejects.toThrowError("SimpleFIN's answer was larger than 10 MB.");
+    expect(cancelled).toBe(true);
+  });
+
+  it('refuses early when Content-Length is over the cap', async () => {
+    let cancelled = false;
+    stubFetch(async () =>
+      new Response(streamOf([encoder.encode('{}')], () => { cancelled = true; }), {
+        headers: { 'Content-Length': String(SIMPLEFIN_MAX_RESPONSE_BYTES + 1) },
+      }),
+    );
+    await expect(fetchAccounts(window)).rejects.toThrowError("SimpleFIN's answer was larger than 10 MB.");
+    expect(cancelled).toBe(true);
   });
 });

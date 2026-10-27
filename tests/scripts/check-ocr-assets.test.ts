@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { resolveOcrAssets, TESSDATA_RELATIVE_PATH } from '@/lib/warranty/ocr/assets';
+import { resolveOcrAssets, TESSDATA_RELATIVE_PATH, TESSDATA_SHA256 } from '@/lib/warranty/ocr/assets';
 import {
   DET_MODEL_SHA256,
   REC_MODEL_SHA256,
@@ -86,6 +86,34 @@ describe('scripts/check-ocr-assets.mjs (MUST-7.9)', () => {
     for (const value of Object.values(assets)) {
       expect(source).toContain(path.relative(root, value).split(path.sep).join('/'));
     }
+  });
+
+  // v1.58.1: the tessdata file is verified against the same digest assets.ts pins.
+  it('v1.58.1: its duplicated tessdata digest equals TESSDATA_SHA256 (Ruling P10a)', () => {
+    const source = fs.readFileSync(script, 'utf8');
+    expect(source).toMatch(/const TESSDATA_SHA256 = '([0-9a-f]{64})'/);
+    expect(source).toContain(`const TESSDATA_SHA256 = '${TESSDATA_SHA256}'`);
+  });
+
+  it('v1.58.1: a tampered tessdata digest fails the check with a clear message, and the real file passes', () => {
+    const source = fs.readFileSync(script, 'utf8');
+    const bogus = TESSDATA_SHA256.slice(0, -1) + (TESSDATA_SHA256.endsWith('0') ? '1' : '0');
+    const tamperedScript = source.replace(`'${TESSDATA_SHA256}'`, `'${bogus}'`);
+    expect(tamperedScript).not.toBe(source);
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ocr-guard-tessdata-'));
+    const tmpScript = path.join(dir, 'check-ocr-assets.mjs');
+    fs.writeFileSync(tmpScript, tamperedScript);
+    try {
+      const result = spawnSync(process.execPath, [tmpScript], { cwd: root, encoding: 'utf8' });
+      expect(result.status).not.toBe(0);
+      const output = `${result.stdout}${result.stderr}`;
+      expect(output).toContain('vendor/tessdata/eng.traineddata.gz sha256 mismatch');
+      expect(output).toContain('fetch-tessdata');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    expect(run(root).status).toBe(0);
   });
 
   it('MUST-10.9: it asserts the darwin and win32 platform directories are gone', () => {

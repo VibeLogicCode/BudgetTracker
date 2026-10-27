@@ -49,6 +49,13 @@ const MODEL_HASHES = {
   'vendor/ocr-models/en_dict.txt': 'e025a66d31f327ba0c232e03f407ae8d105e1e709e7ccb3f408aa778c24e70d6',
 };
 
+// v1.58.1: duplicated from TESSDATA_SHA256 in src/lib/warranty/ocr/assets.ts for the same reason
+// as the model hashes above; tests/scripts/check-ocr-assets.test.ts keeps the two literals equal.
+// The same check covers the image's copy, since the script runs against the working directory
+// in both modes.
+const TESSDATA_FILE = 'vendor/tessdata/eng.traineddata.gz';
+const TESSDATA_SHA256 = 'b130d16b69e3888bc099133991a50a5b50e1da0e3ff6ca31a5496fab0fb386c3';
+
 // An un-stripped image is 204 MB heavier and nothing else tells anyone (MUST-10.1).
 const MUST_NOT_EXIST = [
   'node_modules/onnxruntime-node/bin/napi-v6/darwin',
@@ -119,6 +126,24 @@ if (hashMismatches.length > 0) {
       '\nRe-run npm run fetch-ocr-models and check the COPY lines in the Dockerfile — see spec §7.4.',
   );
   process.exit(1);
+}
+
+// v1.58.1: the language data is verified like the models. A mismatch fails `docker build`.
+{
+  const actual = createHash('sha256').update(fs.readFileSync(path.join(process.cwd(), TESSDATA_FILE))).digest('hex');
+  if (actual === TESSDATA_SHA256) {
+    console.log(`ok   ${TESSDATA_FILE} sha256`);
+  } else {
+    console.error(`MISS ${TESSDATA_FILE} sha256 mismatch: expected ${TESSDATA_SHA256}, got ${actual}`);
+    console.error(
+      `
+${TESSDATA_FILE} failed SHA256 verification in ${process.cwd()}.
+` +
+        'Treat this as a corrupted or swapped file. If the language data was regenerated on purpose, ' +
+        'run node scripts/fetch-tessdata.mjs and update TESSDATA_SHA256 here and in src/lib/warranty/ocr/assets.ts.',
+    );
+    process.exit(1);
+  }
 }
 
 // Phase 3: the strip assertion (MUST-10.1, MUST-10.9), image-build only.

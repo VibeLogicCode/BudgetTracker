@@ -516,6 +516,23 @@ describe('MUST-9.15 to MUST-9.19: subscription_creep on the daily slot', () => {
   });
 });
 
+describe('v1.58.1: price-rise alert is not sent to a self-scoped recipient', () => {
+  it('a self-scoped recipient gets no subscription_creep row while a household recipient still does', () => {
+    const selfUser = emailUser('member');
+    setUserVisibility(selfUser, 'self');
+    const householdUser = emailUser('member');
+    seedHistory();
+    charge({ merchant: 'STREAM CO', cents: 1649, date: '2026-05-14' });
+    charge({ merchant: 'STREAM CO', cents: 1649, date: '2026-06-14' });
+    charge({ merchant: 'STREAM CO', cents: 1649, date: '2026-07-14' });
+    charge({ merchant: 'STREAM CO', cents: 2099, date: '2026-08-14' });
+
+    expect(evaluateSubscriptionCreep({ userId: selfUser, now: NOW, tz: TZ })).toBe(0);
+    expect(t.sqlite.prepare('select count(*) as c from notification_outbox where user_id = ?').get(selfUser)).toEqual({ c: 0 });
+    expect(evaluateSubscriptionCreep({ userId: householdUser, now: NOW, tz: TZ })).toBe(1);
+  });
+});
+
 describe('evaluator-to-renderer wiring', () => {
   it('the rendered body carries the real account name and, on a category-baseline verdict, the real category name', () => {
     emailUser();

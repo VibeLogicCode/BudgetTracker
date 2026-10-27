@@ -48,9 +48,61 @@ export type Fetcher = (
 
 const MAX_WINDOW_SECONDS = 90 * 24 * 60 * 60;
 
+/** v1.58.1: how long one SimpleFIN request may take before it is abandoned. */
+export const SIMPLEFIN_TIMEOUT_MS = 60_000;
+/** v1.58.1: the most bytes read from one answer. A 90-day window is a few hundred KB at most. */
+export const SIMPLEFIN_MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
+
+const TIMEOUT_MESSAGE = 'SimpleFIN did not answer within 60 seconds.';
+const REDIRECT_MESSAGE = 'SimpleFIN tried to redirect the request, which is not allowed.';
+const TOO_LARGE_MESSAGE = "SimpleFIN's answer was larger than 10 MB.";
+
+function mentionsRedirect(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current instanceof Error; depth += 1) {
+    if (/redirect/i.test(current.message)) return true;
+    current = (current as Error & { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/** v1.58.1: reads at most SIMPLEFIN_MAX_RESPONSE_BYTES, cancelling the stream once past it. */
+async function readCapped(response: Response): Promise<string> {
+  const declared = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > SIMPLEFIN_MAX_RESPONSE_BYTES) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new SimplefinError('bad_response', TOO_LARGE_MESSAGE, 502);
+  }
+  if (response.body === null) return '';
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > SIMPLEFIN_MAX_RESPONSE_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw new SimplefinError('bad_response', TOO_LARGE_MESSAGE, 502);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 const defaultFetcher: Fetcher = async (url, init) => {
-  const response = await fetch(url, init);
-  return { ok: response.ok, status: response.status, text: () => response.text() };
+  try {
+    const response = await fetch(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(SIMPLEFIN_TIMEOUT_MS) });
+    const body = await readCapped(response);
+    return { ok: response.ok, status: response.status, text: async () => body };
+  } catch (error) {
+    if (error instanceof SimplefinError) throw error;
+    if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+      throw new SimplefinError('http_error', TIMEOUT_MESSAGE, 504);
+    }
+    if (mentionsRedirect(error)) throw new SimplefinError('http_error', REDIRECT_MESSAGE, 502);
+    throw error;
+  }
 };
 
 /** A setup token is base64 of the one-shot claim URL. */

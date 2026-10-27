@@ -1,5 +1,7 @@
 import { and, asc, eq, gte, inArray, lt, ne, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
+import { viewerFor } from '@/lib/auth/users';
+import { isSelfScoped } from '@/lib/auth/viewer';
 import { accounts, transactions } from '@/db/schema';
 import { listCategories } from '@/lib/categories';
 import { addDaysIso, todayIso } from '@/lib/dates';
@@ -397,6 +399,12 @@ export function evaluateSubscriptionCreep(input: { userId: number | null; now: D
     if (!familyChannelNeedsOwnPass('subscription_creep')) return 0;
   } else if (!CHANNELS.some((channel) => isEventEnabled(recipient, 'subscription_creep', channel))) {
     return 0;
+  }
+  // v1.58.1: the merchant reads below are household-wide, so a self-scoped recipient's personal
+  // pass is skipped, as unusual_transaction and duplicate_charge already are for non-admins.
+  if (recipient !== null) {
+    const viewer = viewerFor(recipient);
+    if (viewer === null || isSelfScoped(viewer)) return 0;
   }
 
   const today = todayIso(input.now, input.tz);

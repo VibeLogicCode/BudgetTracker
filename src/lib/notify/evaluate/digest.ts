@@ -227,7 +227,8 @@ export function evaluateWeeklyDigest(input: {
     personalSpentCents: sum(personalCategories),
     topCategories,
     topMerchants: topMerchantLines,
-    reviewCount,
+    // v1.58.1: the queue is household-wide, so a self-scoped recipient's own digest carries none.
+    reviewCount: selfScoped ? 0 : reviewCount,
     budgets,
     openMonths: monthsOpen,
   });

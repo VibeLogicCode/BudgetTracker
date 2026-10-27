@@ -95,7 +95,8 @@ export default async function TransactionsPage({
   // Ruling: cheap even when nobody is looking at it -- one count(*) behind REVIEW_WHERE, the
   // same query the nav badge already runs. Always computed, never gated on reviewMode, so the
   // "Needs review (N)" chip stays accurate when a filtered view happens to be review-empty.
-  const reviewCount = reviewQueueCount();
+  // v1.58.1: the queue is household-wide; a self-scoped viewer gets 0, as the app shell does.
+  const reviewCount = selfScopedViewer ? 0 : reviewQueueCount();
   // Review-mode-only (ruling: matchingCount is computed for review-mode rows only, Lane 1's own
   // docblock on the filter). A plain object keyed by id, the same shape loanLinks/splits below
   // already use for "extra data about this page's rows, not carried on TransactionRow itself".

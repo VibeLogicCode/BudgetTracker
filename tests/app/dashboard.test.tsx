@@ -347,6 +347,20 @@ describe('DashboardPage (ruling R2)', () => {
     expect(screen.getAllByText(/\$12\.00/).length).toBeGreaterThanOrEqual(1);
   });
 
+  it('v1.58.1: the household needs-review callout is shown to a household viewer and not to a self viewer', async () => {
+    const { adultId, childId } = await setup();
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+
+    currentUser.value = { id: childId, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+    expect(screen.queryByText(/transactions need review/)).toBeNull();
+    cleanup();
+
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+    expect(screen.getByText(/2 transactions need review/)).toBeTruthy();
+  });
+
   it('a household viewer keeps the full card set, including net worth, top merchants and the person switcher', async () => {
     const { adultId } = await setup();
     currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
