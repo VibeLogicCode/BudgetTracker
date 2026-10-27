@@ -17,12 +17,14 @@ import type { ComponentType } from 'react';
 import type { LucideProps } from 'lucide-react';
 import {
   ArrowDownLeft,
+  ArrowLeft,
   ArrowUpRight,
   Baby,
   Banknote,
   Calendar,
   Car,
   Check,
+  ChevronDown,
   ChevronRight,
   Circle,
   CircleAlert,
@@ -61,6 +63,10 @@ export const MoneyOutIcon: IconComponent = ArrowUpRight;
 /** The "View breakdown" / "Hide breakdown" disclosure chevron (MetricCard's expandable footer,
  *  a category card's children). Rotation on open is the caller's className, not this file's. */
 export const ExpandIcon: IconComponent = ChevronRight;
+/** Back link / back button glyph (replaces a typed arrow). */
+export const BackIcon: IconComponent = ArrowLeft;
+/** Menu trigger chevron: down at rest, flipped by the caller when open. */
+export const MenuOpenIcon: IconComponent = ChevronDown;
 /** The chip-row disclosure ("Filters (N)", ruling D6's "+n" expander is plain text, not this). */
 export const FilterIcon: IconComponent = Filter;
 /** Import page and dashboard "Upload" section actions. */
