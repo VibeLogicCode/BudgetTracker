@@ -11,6 +11,7 @@ import { getBuiltinPreset, getProfileByName } from '@/lib/import/presets';
 import { undoImport } from '@/lib/import/commit';
 import { listAccountCardPeople, upsertAccountCardPerson } from '@/lib/import/card-people';
 import type { ImportMapping } from '@/lib/import/mapping';
+import { upsertRuleFromCorrection } from '@/lib/categorize/rules';
 
 const fixture = (name: string) => fs.readFileSync(path.join(process.cwd(), 'fixtures', name));
 
@@ -81,6 +82,13 @@ describe('per-card attribution: preview -> assign -> commit -> undo -> re-import
     expect(reassignedPreview.cardValues!.find((v) => v.value === '-1001')).toMatchObject({ assignedUserId: alexId, assignedUserName: 'Alex' });
     expect(reassignedPreview.cardValues!.find((v) => v.value === '-1002')).toMatchObject({ assignedUserId: samId, assignedUserName: 'Sam' });
 
+    // v1.59.0: a person rule that also matches two of Alex's card rows. The linked card wins
+    // (card > rule > owner), so the rule changes nothing in this file.
+    upsertRuleFromCorrection({
+      pattern: 'LCBO', matchType: 'contains', ruleKind: 'attribution', categoryId: null,
+      attributedUserId: samId, createdBy: importedBy, actorRole: 'admin',
+    });
+
     // --- Commit.
     const commitStaging = writeStagedFile(fixture('amex-two-card.csv'));
     const result = commitStagedImport({
@@ -94,6 +102,11 @@ describe('per-card attribution: preview -> assign -> commit -> undo -> re-import
     expect(result.rowsAdded).toBe(7);
     expect(result.rowsDuplicate).toBe(0);
     expect(result.attributionSummary).toBe('3 rows to Alex, 2 rows to Sam, 2 rows to unattributed (no card match)');
+    // -9999 is the one value with no person linked; the blank row has no value to link.
+    expect(result.unlinkedCardValues).toEqual([{ value: '-9999', rowCount: 1 }]);
+    expect(result.unlinkedCardSummary).toBe(
+      'Not linked to anyone yet: -9999 (1 row). Link them under Cardholder assignments before the next import.',
+    );
 
     // Per-row attributed_user_id, checked by row content so a coincidental count match can't
     // hide a wrong pairing.
@@ -133,6 +146,8 @@ describe('per-card attribution: preview -> assign -> commit -> undo -> re-import
     });
     expect(second.rowsAdded).toBe(0);
     expect(second.rowsDuplicate).toBe(7);
+    // Nothing was inserted, so there is no new unlinked row to report.
+    expect(second.unlinkedCardSummary).toBeNull();
 
     // --- Undo the original import. Every transaction is now ALSO linked to the second
     // (all-duplicate) import via transaction_imports, so undoing the first one keeps every

@@ -94,10 +94,13 @@ export interface PreviewResult {
    * normalizeCardValue() found among the file's valid (non-error) rows, with how many rows
    * carry it and this account's current account_card_people assignment for it, if any. A
    * blank cell or a cardCol beyond a row's own cell count never produces an entry — there is
-   * nothing to assign there, since commit.ts's resolveAttribution always falls back to the
-   * account owner for exactly those two cases. Absent entirely (not merely undefined) when
-   * cardCol is null, so a mapping with no cardholder column produces a PreviewResult with no
-   * trace of this feature — proved in preview.test.ts with `'cardValues' in preview`.
+   * nothing to assign there, since resolveAttribution (src/lib/attribution.ts) hands exactly
+   * those two cases, like an unlinked value, to a person rule and else the account owner. A
+   * linked value beats any rule (v1.59.0), for future imports only: the value is never stored on
+   * a transaction, so rows already imported keep their person. Absent entirely (not merely
+   * undefined) when cardCol is null, so a mapping with no cardholder column produces a
+   * PreviewResult with no trace of this feature — proved in preview.test.ts with
+   * `'cardValues' in preview`.
    */
   cardValues?: CardValueSummary[];
 }

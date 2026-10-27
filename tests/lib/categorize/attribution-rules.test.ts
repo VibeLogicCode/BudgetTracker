@@ -159,7 +159,7 @@ describe('what an attribution rule affects, and what "Apply now" does', () => {
     expect(personOf(unrelated)).toBe(admin);
   });
 
-  it('sets Household, which is how a rule stops the card map and the account owner deciding', () => {
+  it('sets Household, which is how a rule stops the account owner deciding when no linked card does', () => {
     const { admin, add } = fixture();
     const txnId = add('JOINT GYM MONTREAL', -4500, admin);
     const ruleId = rule({ pattern: 'JOINT GYM', attributedUserId: null, matchType: 'contains' });

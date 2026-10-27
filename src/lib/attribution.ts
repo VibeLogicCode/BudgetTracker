@@ -4,26 +4,33 @@
  * The report: a rule should be able to name a person too, not only a vendor, and even set
  * household or an individual person.
  *
- * THE ORDER, and the argument for it (ruling P11):
+ * THE ORDER, and the argument for it (ruling P11, first half reversed in v1.59.0):
  *
- *   rule > card > account owner > nobody
+ *   card > rule > account owner > nobody
  *
- * A rule names a merchant, and may name an amount as well: it describes THIS charge. The per-card
- * map (account_card_people) names a whole card, and the account owner names a whole account. The
- * specific beats the general -- which is the same argument src/lib/display-source.ts makes about
- * which label wins, and the same direction. Concretely: a payment for Sam's policy charged to
- * Alex's card lands on Sam.
+ * A linked card value (account_card_people) names the person holding the card this charge was
+ * made on -- a fact the bank wrote into this row of this file. A rule names a merchant, and may
+ * name an amount as well, so it is a judgement about every charge that looks like this one; the
+ * account owner names a whole account. The card holder therefore comes first, and a rule decides
+ * only a row whose card cell is blank or carries a value nobody is linked to. Concretely: a
+ * payment for Sam's policy charged to Alex's linked card lands on Alex, and a rule for it still
+ * decides the same payment on an account with no cardholder column.
+ *
+ * Only a CSV mapping with a cardholder column ever supplies a card. OFX passes no mapping and
+ * SimpleFIN has none, so for both the order is still rule > owner, exactly as before v1.59.0.
  *
  * A RULE THAT NAMES HOUSEHOLD IS STILL A RULE. `ruleUserId: null` with `ruleMatched: true` means
- * "put this on nobody in particular", and it must STOP the chain rather than fall through it --
- * that is the entire value of the Household option, since falling through would hand the row
- * straight back to the card map the rule was written to overrule. The two flags exist because
- * "Household" and "no rule matched" both carry a null user id and mean opposite things.
+ * "put this on nobody in particular", and it must STOP the chain before the account owner rather
+ * than fall through to it -- that is the value of the Household option. A linked card still beats
+ * it, the same as it beats a rule naming a person. The two flags exist because "Household" and "no
+ * rule matched" both carry a null user id and mean opposite things.
  *
  * WHAT HAPPENS AFTER INSERT: nothing automatic. attributed_user_id has no source column, so
  * nothing downstream could tell a person somebody chose by hand from the account owner the
  * importer fell back to -- which is exactly why the engine never writes this column and why a
  * hand edit is final unless somebody deliberately presses "Apply now" on a rule (ruling P10).
+ * The card value itself is never stored on a transaction either, so nothing can re-run this order
+ * on rows already imported: linking a card value changes future imports only.
  * tests/ops/attribution-writers.test.ts enumerates every writer there is.
  *
  * NO DATABASE ACCESS. Each caller has already looked up its own three candidates -- commitImport
@@ -48,7 +55,7 @@ export interface AttributionInput {
 }
 
 export function resolveAttribution(input: AttributionInput): { userId: number | null; source: AttributionSource } {
-  if (input.ruleMatched) return { userId: input.ruleUserId, source: 'rule' };
   if (input.cardUserId !== null) return { userId: input.cardUserId, source: 'card' };
+  if (input.ruleMatched) return { userId: input.ruleUserId, source: 'rule' };
   return { userId: input.ownerUserId, source: 'owner' };
 }

@@ -38,37 +38,44 @@ function personOf(txnId: number): number | null {
  * set household or an individual person.
  *
  * Ruling P17: the order is written ONCE, here, rather than inline in commitImport's closure --
- * because it is the sentence three surfaces have to agree on. Ruling P11 decides the order
- * itself.
+ * because it is the sentence three surfaces have to agree on. Ruling P11 decided the order; v1.59.0
+ * reversed its first half, so a linked card holder now comes before any rule.
  */
-describe('resolveAttribution: rule, then card, then the account owner', () => {
-  it('takes the rule when there is one, over the card and the report alike', () => {
+describe('resolveAttribution: the card holder, then a rule, then the account owner', () => {
+  it('takes a linked card over a person rule', () => {
     expect(resolveAttribution({ ruleUserId: 7, ruleMatched: true, cardUserId: 3, ownerUserId: 1 })).toEqual({
+      userId: 3,
+      source: 'card',
+    });
+  });
+
+  it('takes a linked card over a Household rule as well', () => {
+    expect(resolveAttribution({ ruleUserId: null, ruleMatched: true, cardUserId: 3, ownerUserId: 1 })).toEqual({
+      userId: 3,
+      source: 'card',
+    });
+  });
+
+  it('takes the rule when no card is linked', () => {
+    expect(resolveAttribution({ ruleUserId: 7, ruleMatched: true, cardUserId: null, ownerUserId: 1 })).toEqual({
       userId: 7,
       source: 'rule',
     });
   });
 
   /**
-   * A rule naming HOUSEHOLD is the whole point of the Household option: it stops the fallback
-   * chain rather than falling through it. Distinguished from "no rule matched" by ruleMatched,
-   * because both carry a null user id and they mean opposite things.
+   * A rule naming HOUSEHOLD still stops the chain before the account owner: that is the whole
+   * point of the Household option. Distinguished from "no rule matched" by ruleMatched, because
+   * both carry a null user id and they mean opposite things.
    */
-  it('honours a rule that names Household, rather than falling through to the card', () => {
-    expect(resolveAttribution({ ruleUserId: null, ruleMatched: true, cardUserId: 3, ownerUserId: 1 })).toEqual({
+  it('honours a rule that names Household, rather than falling through to the owner', () => {
+    expect(resolveAttribution({ ruleUserId: null, ruleMatched: true, cardUserId: null, ownerUserId: 1 })).toEqual({
       userId: null,
       source: 'rule',
     });
   });
 
-  it('falls to the card when no rule matched', () => {
-    expect(resolveAttribution({ ruleUserId: null, ruleMatched: false, cardUserId: 3, ownerUserId: 1 })).toEqual({
-      userId: 3,
-      source: 'card',
-    });
-  });
-
-  it('falls to the account owner when neither a rule nor the card says anything', () => {
+  it('falls to the account owner when neither a card nor a rule says anything', () => {
     expect(resolveAttribution({ ruleUserId: null, ruleMatched: false, cardUserId: null, ownerUserId: 1 })).toEqual({
       userId: 1,
       source: 'owner',
@@ -134,43 +141,59 @@ describe('an attribution rule at import time', () => {
   });
 
   /**
-   * Ruling P11/Q7: a rule names a merchant and an amount; a card map names a whole account. The
-   * specific beats the general, so a payment for Sam's policy charged to Alex's card lands on Sam.
+   * v1.59.0, P11 reversed: a linked card names who held the card the charge was made on, so it
+   * beats a person rule for the same row.
    */
-  it('beats the per-card map, which names a whole card rather than this charge', () => {
+  it('loses to a linked card, which names who actually spent it', () => {
     const { alex, sam, accountId } = setup();
     current!.db.run(
       sql`insert into account_card_people (account_id, card_value, user_id, created_at)
-          values (${accountId}, '1234', ${alex}, '2026-01-01T00:00:00.000Z')`,
+          values (${accountId}, 'CARD 1001', ${alex}, '2026-01-01T00:00:00.000Z')`,
     );
     upsertRuleFromCorrection({
-      pattern: 'SAMS GYM', matchType: 'contains', ruleKind: 'attribution', categoryId: null,
+      pattern: 'MAPLE GROCER', matchType: 'contains', ruleKind: 'attribution', categoryId: null,
       attributedUserId: sam, createdBy: alex, actorRole: 'admin',
     });
 
     const result = commitImport({
       accountId, profileId: null, filename: 'march.csv', importedBy: alex,
       mapping: { dateCol: 0, descCol: 1, amountCol: 2, cardCol: 3 } as never,
-      rows: rows([{ description: 'SAMS GYM MONTREAL', amountCents: -4500, cells: ['2026-03-02', 'SAMS GYM MONTREAL', '-45.00', '1234'] }], accountId),
+      rows: rows([{ description: 'MAPLE GROCER 12', amountCents: -4500, cells: ['2026-03-02', 'MAPLE GROCER 12', '-45.00', 'CARD 1001'] }], accountId),
+      errors: [],
+    });
+
+    expect(personOf(result.insertedTransactionIds[0]!)).toBe(alex);
+  });
+
+  it('a Household rule loses to a linked card too', () => {
+    const { alex, sam, accountId } = setup();
+    current!.db.run(
+      sql`insert into account_card_people (account_id, card_value, user_id, created_at)
+          values (${accountId}, 'CARD 1001', ${sam}, '2026-01-01T00:00:00.000Z')`,
+    );
+    upsertRuleFromCorrection({
+      pattern: 'MAPLE GROCER', matchType: 'contains', ruleKind: 'attribution', categoryId: null,
+      attributedUserId: null, createdBy: alex, actorRole: 'admin',
+    });
+
+    const result = commitImport({
+      accountId, profileId: null, filename: 'march.csv', importedBy: alex,
+      mapping: { dateCol: 0, descCol: 1, amountCol: 2, cardCol: 3 } as never,
+      rows: rows([{ description: 'MAPLE GROCER 12', amountCents: -4500, cells: ['2026-03-02', 'MAPLE GROCER 12', '-45.00', 'CARD 1001'] }], accountId),
       errors: [],
     });
 
     expect(personOf(result.insertedTransactionIds[0]!)).toBe(sam);
   });
 
-  /**
-   * The summary is what the household reads after an import. Counting a rule match as a card
-   * fallback would make it say "1 row to the account owner (no card match)" about a row that went
-   * somewhere else entirely.
-   */
-  it('says how many rows a rule decided, rather than filing them under the card fallback', () => {
+  it('still decides a row whose card value is blank or linked to nobody', () => {
     const { alex, sam, accountId } = setup();
     current!.db.run(
       sql`insert into account_card_people (account_id, card_value, user_id, created_at)
-          values (${accountId}, '1234', ${alex}, '2026-01-01T00:00:00.000Z')`,
+          values (${accountId}, 'CARD 1001', ${alex}, '2026-01-01T00:00:00.000Z')`,
     );
     upsertRuleFromCorrection({
-      pattern: 'SAMS GYM', matchType: 'contains', ruleKind: 'attribution', categoryId: null,
+      pattern: 'MAPLE GROCER', matchType: 'contains', ruleKind: 'attribution', categoryId: null,
       attributedUserId: sam, createdBy: alex, actorRole: 'admin',
     });
 
@@ -179,15 +202,51 @@ describe('an attribution rule at import time', () => {
       mapping: { dateCol: 0, descCol: 1, amountCol: 2, cardCol: 3 } as never,
       rows: rows(
         [
-          { description: 'SAMS GYM MONTREAL', amountCents: -4500, cells: ['2026-03-02', 'SAMS GYM MONTREAL', '-45.00', '1234'] },
-          { description: 'THE COFFEE HOUSE', amountCents: -500, cells: ['2026-03-02', 'THE COFFEE HOUSE', '-5.00', '1234'] },
+          { description: 'MAPLE GROCER 12', amountCents: -4500, cells: ['2026-03-02', 'MAPLE GROCER 12', '-45.00', ''] },
+          { description: 'MAPLE GROCER 14', amountCents: -2500, cells: ['2026-03-02', 'MAPLE GROCER 14', '-25.00', 'CARD 2002'] },
         ],
         accountId,
       ),
       errors: [],
     });
 
-    expect(result.attributionSummary).toContain('by rule');
+    expect(personOf(result.insertedTransactionIds[0]!)).toBe(sam);
+    expect(personOf(result.insertedTransactionIds[1]!)).toBe(sam);
+  });
+
+  /**
+   * The summary is what the household reads after an import. Counting a rule match as a card
+   * fallback would make it say "1 row to the account owner (no card match)" about a row that went
+   * somewhere else entirely; counting a card match as a rule would hide whose card it was.
+   */
+  it('says how many rows a rule decided, apart from the card holder and the fallback', () => {
+    const { alex, sam, accountId } = setup();
+    current!.db.run(
+      sql`insert into account_card_people (account_id, card_value, user_id, created_at)
+          values (${accountId}, 'CARD 1001', ${alex}, '2026-01-01T00:00:00.000Z')`,
+    );
+    upsertRuleFromCorrection({
+      pattern: 'MAPLE GROCER', matchType: 'contains', ruleKind: 'attribution', categoryId: null,
+      attributedUserId: sam, createdBy: alex, actorRole: 'admin',
+    });
+
+    const result = commitImport({
+      accountId, profileId: null, filename: 'march.csv', importedBy: alex,
+      mapping: { dateCol: 0, descCol: 1, amountCol: 2, cardCol: 3 } as never,
+      rows: rows(
+        [
+          // A rule and the linked card both match: the card holder wins.
+          { description: 'MAPLE GROCER 12', amountCents: -4500, cells: ['2026-03-02', 'MAPLE GROCER 12', '-45.00', 'CARD 1001'] },
+          // No card value at all: the rule decides.
+          { description: 'MAPLE GROCER 14', amountCents: -2500, cells: ['2026-03-02', 'MAPLE GROCER 14', '-25.00', ''] },
+          { description: 'FUEL STOP 12', amountCents: -500, cells: ['2026-03-02', 'FUEL STOP 12', '-5.00', 'CARD 1001'] },
+        ],
+        accountId,
+      ),
+      errors: [],
+    });
+
+    expect(result.attributionSummary).toBe('2 rows to Alex, 1 row by rule');
   });
 
   it('leaves every row where it was when the household has no attribution rule at all', () => {

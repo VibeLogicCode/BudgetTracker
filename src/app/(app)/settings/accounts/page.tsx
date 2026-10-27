@@ -3,6 +3,7 @@ import { listAccounts } from '@/lib/accounts';
 import { listUsers } from '@/lib/auth/users';
 import { reconcileAccount } from '@/lib/balance-reconcile';
 import { todayIso } from '@/lib/dates';
+import { listAccountCardPeople } from '@/lib/import/card-people';
 import { hasReadableMapping, listProfiles } from '@/lib/import/presets';
 import { latestSnapshots } from '@/lib/networth';
 import { isSimplefinManaged } from '@/lib/simplefin/connection';
@@ -33,9 +34,16 @@ export default async function AccountsPage() {
     .filter((p) => p.isActive)
     .map((p) => ({ id: p.id, name: p.name }));
   const profileNameById = new Map(allProfiles.map((p) => [p.id, p.name] as const));
+  const profileById = new Map(allProfiles.map((p) => [p.id, p] as const));
 
   const accounts = listAccounts({ includeInactive: true }, user).map((account) => {
     const balance = balanceByAccountId.get(account.id) ?? null;
+    const simplefin = isSimplefinManaged(account.id);
+    // v1.59.0: whether this account's imports read a cardholder column at all. Taken from the
+    // pinned profile when its mapping is readable (active or not -- a dormant pin is still what
+    // the account last imported with); null for SimpleFIN or no such pin.
+    const pinned = account.importProfileId === null ? undefined : profileById.get(account.importProfileId);
+    const column = simplefin || pinned === undefined || !hasReadableMapping(pinned) ? null : pinned.mapping.cardCol !== null;
     return {
       id: account.id,
       name: account.name,
@@ -43,7 +51,7 @@ export default async function AccountsPage() {
       type: account.type,
       ownerUserId: account.ownerUserId,
       isActive: account.isActive,
-      isSimplefinManaged: isSimplefinManaged(account.id),
+      isSimplefinManaged: simplefin,
       importProfileId: account.importProfileId,
       importProfileName: account.importProfileId === null ? null : profileNameById.get(account.importProfileId) ?? null,
       expectedImportWeeks: account.expectedImportWeeks,
@@ -58,6 +66,7 @@ export default async function AccountsPage() {
       // unconditionally on every page load; there is no write path for it to accidentally
       // trigger.
       discrepancies: reconcileAccount({ accountId: account.id }),
+      cardholder: { column, linked: listAccountCardPeople(account.id).length },
     };
   });
   const people = listUsers().map((user) => ({ id: user.id, name: user.name, isActive: user.isActive }));

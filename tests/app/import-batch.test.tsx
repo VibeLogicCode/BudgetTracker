@@ -54,6 +54,19 @@ function dropFiles(names: string[]): void {
   fireEvent.drop(screen.getByTestId('file-drop'), { dataTransfer: { files, types: ['Files'] } });
 }
 
+/**
+ * v1.59.0: the way back at the top of an opened file is the shared BackButton, an icon and the
+ * bare label. The footer's own "Back to the list" stays a plain button, so the two are told
+ * apart by `data-back` rather than by text.
+ */
+function backToList(): HTMLButtonElement | null {
+  return document.querySelector<HTMLButtonElement>('button[data-back]');
+}
+
+function footerBackToList(): HTMLButtonElement {
+  return screen.getAllByRole('button', { name: 'Back to the list' }).find((button) => !button.hasAttribute('data-back')) as HTMLButtonElement;
+}
+
 /** What /api/import/preview answers -- only the fields the screen actually renders. */
 const PREVIEW = {
   stagingId: '11111111-1111-4111-8111-111111111111',
@@ -257,6 +270,41 @@ describe('BatchClient: nothing commits without a confirmation', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  /** v1.59.0: the same two sentences the one-file screen appends to its own result. */
+  it('reports who each file went to and which card values nobody is linked to yet', async () => {
+    const fetchMock = answerDetect([row({ filename: 'jan.csv', rowCount: 4 })]);
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).includes('/api/import/batch/detect')) {
+        return { ok: true, json: async () => ({ rows: [row({ filename: 'jan.csv', rowCount: 4 })] }) } as unknown as Response;
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          results: [
+            {
+              filename: 'jan.csv',
+              ok: true,
+              rowsAdded: 4,
+              rowsDuplicate: 0,
+              attributionSummary: '1 row to Alex, 3 rows to the account owner (no card match)',
+              unlinkedCardSummary:
+                'Not linked to anyone yet: CARD 2002 (2 rows), CARD 3003 (1 row). Link them under Cardholder assignments before the next import.',
+            },
+          ],
+        }),
+      } as unknown as Response;
+    });
+    render(<BatchClient {...props} />);
+    dropFiles(['jan.csv']);
+    await waitFor(() => expect(screen.getByText('Import the 1 ready one')).toBeTruthy());
+    fireEvent.click(screen.getByText('Import the 1 ready one'));
+    fireEvent.click(screen.getByText('Yes, import them'));
+    await waitFor(() => expect(screen.getByText(/4 added, 0 already there/)).toBeTruthy());
+    expect(screen.getByText('jan.csv').closest('li')!.textContent).toContain(
+      '1 row to Alex, 3 rows to the account owner (no card match). Not linked to anyone yet: CARD 2002 (2 rows), CARD 3003 (1 row). Link them under Cardholder assignments before the next import.',
+    );
+  });
+
   it('reports what each file did, and takes the imported ones off the list', async () => {
     answerDetect([row({ filename: 'jan.csv', rowCount: 40 }), row({ filename: 'x.csv', status: 'needs-you' })]);
     render(<BatchClient {...props} />);
@@ -289,9 +337,20 @@ describe('BatchClient: opening one row', () => {
     dropFiles(['jan.csv']);
     await waitFor(() => expect(screen.getByText('jan.csv')).toBeTruthy());
     fireEvent.click(screen.getByText('jan.csv'));
-    await waitFor(() => expect(screen.getByText('← Back to the list')).toBeTruthy());
-    fireEvent.click(screen.getByText('← Back to the list'));
+    await waitFor(() => expect(backToList()).toBeTruthy());
+    fireEvent.click(backToList()!);
     await waitFor(() => expect(screen.getByText('feb.csv')).toBeTruthy());
+  });
+
+  it('is the shared back button: an icon and the bare label, no arrow glyph in the name', async () => {
+    answerDetect([row({ filename: 'jan.csv' })]);
+    render(<BatchClient {...props} />);
+    dropFiles(['jan.csv']);
+    await waitFor(() => expect(screen.getByText('jan.csv')).toBeTruthy());
+    fireEvent.click(screen.getByText('jan.csv'));
+    await waitFor(() => expect(backToList()).toBeTruthy());
+    expect(backToList()!.textContent).toBe('Back to the list');
+    expect(backToList()!.querySelector('svg')!.getAttribute('aria-hidden')).toBe('true');
   });
 
   /** Seeded from the detection the list already holds, so the row opens mid-flow, not empty. */
@@ -301,7 +360,7 @@ describe('BatchClient: opening one row', () => {
     dropFiles(['jan.csv']);
     await waitFor(() => expect(screen.getByText('jan.csv')).toBeTruthy());
     fireEvent.click(screen.getByText('jan.csv'));
-    await waitFor(() => expect(screen.getByText('← Back to the list')).toBeTruthy());
+    await waitFor(() => expect(backToList()).toBeTruthy());
     const selects = [...container.querySelectorAll('select')].map((select) => select.value);
     expect(selects).toContain('7');
     expect(selects).toContain('3');
@@ -413,7 +472,7 @@ describe('BatchClient: arriving with a file already in hand', () => {
       />,
     );
     await waitFor(() => expect(screen.getByText(/7 rows, 6 duplicates/)).toBeTruthy());
-    expect(screen.getByText('← Back to the list')).toBeTruthy();
+    expect(backToList()).toBeTruthy();
   });
 
   it('takes the file out of the address once it has opened it, so a reload does not reopen it', async () => {
@@ -496,6 +555,24 @@ describe('BatchClient: history is a reference, not part of importing', () => {
     expect(screen.queryByText('activity.csv')).toBeNull();
   });
 
+  /** v1.59.0: the shared disclosure toggle, whose chevron and aria-expanded follow the state. */
+  it('is a disclosure that names what it controls and says whether it is open', () => {
+    render(<BatchClient {...props} history={[entry]} />);
+    const toggle = screen.getByRole('button', { name: 'Show history' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.className).toContain('text-accent-text');
+    expect(toggle.querySelector('svg')!.getAttribute('aria-hidden')).toBe('true');
+    const controlled = toggle.getAttribute('aria-controls');
+    expect(controlled).toBeTruthy();
+    expect(document.getElementById(controlled!)).toBeTruthy();
+
+    fireEvent.click(toggle);
+    const open = screen.getByRole('button', { name: 'Hide history' });
+    expect(open.getAttribute('aria-expanded')).toBe('true');
+    expect(open.querySelector('svg')!.getAttribute('class')).toContain('rotate-90');
+    expect(document.getElementById(controlled!)!.textContent).toContain('activity.csv');
+  });
+
   /**
    * A long table of past imports underneath the rows you are deciding about answers a question
    * nobody is asking at that moment.
@@ -531,13 +608,13 @@ describe('BatchClient: three ways out of a file, not one', () => {
     await openFirstRow();
     expect(screen.getByText('Import 1 transactions')).toBeTruthy();
     expect(screen.getByText('Discard this file')).toBeTruthy();
-    expect(screen.getByText('Back to the list')).toBeTruthy();
+    expect(footerBackToList()).toBeTruthy();
   });
 
   it('back keeps the file on the list', async () => {
     answerDetect([row({ filename: 'jan.csv' }), row({ filename: 'feb.csv' })]);
     await openFirstRow();
-    fireEvent.click(screen.getByText('Back to the list'));
+    fireEvent.click(footerBackToList());
     await waitFor(() => expect(screen.getByText('jan.csv')).toBeTruthy());
     expect(screen.getByText('feb.csv')).toBeTruthy();
   });
@@ -629,7 +706,7 @@ describe('BatchClient: a file imported from its own screen', () => {
   async function importAndGoBack(): Promise<void> {
     fireEvent.click(screen.getByText(/^Import \d+ transactions$/));
     await waitFor(() => expect(screen.getByText(/13 added, 4 duplicates skipped/)).toBeTruthy());
-    fireEvent.click(screen.getByText('← Back to the list'));
+    fireEvent.click(backToList()!);
   }
 
   it('takes the row off the list and reports what the import did', async () => {
@@ -642,7 +719,7 @@ describe('BatchClient: a file imported from its own screen', () => {
 
     // The person stays on the result until they choose to leave it.
     expect(screen.queryByTestId('batch-list')).toBeNull();
-    fireEvent.click(screen.getByText('← Back to the list'));
+    fireEvent.click(backToList()!);
 
     await waitFor(() => expect(screen.getByTestId('batch-list')).toBeTruthy());
     const list = screen.getByTestId('batch-list');
@@ -717,7 +794,7 @@ describe('BatchClient: a file imported from its own screen', () => {
     await setUpMay(['sample-may.csv', 'sample-june.csv']);
     fireEvent.click(screen.getByText(/^Import \d+ transactions$/));
     await waitFor(() => expect(screen.getByText('That account no longer exists.')).toBeTruthy());
-    fireEvent.click(screen.getByText('← Back to the list'));
+    fireEvent.click(backToList()!);
 
     await waitFor(() => expect(screen.getByTestId('batch-list')).toBeTruthy());
     expect(within(screen.getByTestId('batch-list')).getByText('sample-may.csv')).toBeTruthy();
@@ -730,8 +807,8 @@ describe('BatchClient: a file imported from its own screen', () => {
     dropFiles(['sample-may.csv', 'sample-june.csv']);
     await waitFor(() => expect(screen.getByText('sample-may.csv')).toBeTruthy());
     fireEvent.click(within(screen.getByText('sample-may.csv').closest('li')!).getByText('Set it up'));
-    await waitFor(() => expect(screen.getByText('← Back to the list')).toBeTruthy());
-    fireEvent.click(screen.getByText('← Back to the list'));
+    await waitFor(() => expect(backToList()).toBeTruthy());
+    fireEvent.click(backToList()!);
 
     await waitFor(() => expect(screen.getByTestId('batch-list')).toBeTruthy());
     const list = screen.getByTestId('batch-list');

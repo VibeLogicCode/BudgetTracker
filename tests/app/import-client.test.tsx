@@ -367,6 +367,33 @@ describe('ImportClient — polish item 9: rows the profile silently skipped', ()
   });
 });
 
+/** v1.59.0: the unreadable-rows list uses the one shared disclosure look. */
+describe('ImportClient — the rows that could not be read sit behind the shared disclosure', () => {
+  it('renders the chevron as a hidden icon, so the summary names only the count', async () => {
+    vi.stubGlobal(
+      'fetch',
+      twoHop({ errors: [{ rowIndex: 4, reason: 'Unreadable date', cells: ['32/13/2026', 'MAPLE GROCER', '4.85'] }], errorCount: 1 }),
+    );
+    const { container } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        simplefinManaged={[]}
+      />,
+    );
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => expect(container.textContent).toContain('Preview —'));
+
+    // The page guide is a <details> too; this is the one holding the unreadable rows.
+    const details = [...container.querySelectorAll('details')].find((el) => el.textContent?.includes('could not be parsed'))!;
+    expect(details.className).toContain('group/disclosure');
+    const summary = details.querySelector('summary')!;
+    expect(summary.className).toContain('text-accent-text');
+    expect(summary.querySelector('svg')!.getAttribute('aria-hidden')).toBe('true');
+    expect(summary.textContent).toBe('1 rows could not be parsed');
+  });
+});
+
 describe('ImportClient — the Preview and Import buttons are busy-guarded', () => {
   it('disables Preview for as long as the upload is in flight (useFormStatus, not a local flag)', async () => {
     const pending: { release?: (value: unknown) => void } = {};
@@ -615,6 +642,48 @@ describe('ImportClient — Carry 2: the post-commit message shows the attributio
 
     await waitFor(() => expect(container.textContent).toContain('3 rows to Alex, 2 rows to Sam'));
     expect(container.textContent).toContain('7 added');
+  });
+
+  it('appends the unlinked card sentence after the attribution split (v1.59.0)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockImplementationOnce(async () => DETECT_UNDECIDED)
+        .mockImplementationOnce(async () => ({ ok: true, json: async () => previewBody({ totalRows: 4 }) }))
+        .mockImplementationOnce(async () => ({
+          ok: true,
+          json: async () => ({
+            rowsAdded: 4,
+            rowsDuplicate: 0,
+            rowsError: 0,
+            needsReview: 0,
+            engineFailed: false,
+            loanMatchFailed: false,
+            attributionSummary: '1 row to Alex, 3 rows to the account owner (no card match)',
+            unlinkedCardSummary:
+              'Not linked to anyone yet: CARD 2002 (2 rows), CARD 3003 (1 row). Link them under Cardholder assignments before the next import.',
+          }),
+        })),
+    );
+
+    const { container, getByRole } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        simplefinManaged={[]}
+      />,
+    );
+    putFileOnPage(container);
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => expect(container.textContent).toContain('Preview —'));
+    fireEvent.click(getByRole('button', { name: /^Import \d+ transactions$/ }));
+
+    await waitFor(() =>
+      expect(container.textContent).toContain(
+        '(no card match). Not linked to anyone yet: CARD 2002 (2 rows), CARD 3003 (1 row). Link them under Cardholder assignments before the next import.',
+      ),
+    );
   });
 
   it('says nothing extra when attributionSummary is null (no cardCol on this mapping)', async () => {
@@ -932,13 +1001,41 @@ describe('ImportClient — per-card assignment UI (MUST-6.1, MUST-6.2)', () => {
     expect(container.textContent).toContain('2 rows');
   });
 
-  it('says an unassigned value falls back to the account owner, rather than blocking the import (MUST-6.2)', async () => {
+  it('says a person rule decides an unassigned value, else the account owner, rather than blocking the import (MUST-6.2)', async () => {
     const { container, getByRole } = await renderWithCardValues([
       { value: '-9999', rowCount: 1, assignedUserId: null, assignedUserName: null },
     ]);
-    expect(container.textContent).toMatch(/falls back to the account owner/i);
+    expect(container.textContent).toContain('Unassigned — a person rule decides, else the account owner.');
     // Nothing about an unassigned value disables the commit button.
     expect((getByRole('button', { name: /^Import \d+ transactions$/ }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('opens the box with how many of the values are not linked to anyone yet (v1.59.0)', async () => {
+    const { container } = await renderWithCardValues([
+      { value: 'CARD 1001', rowCount: 3, assignedUserId: 5, assignedUserName: 'Alex' },
+      { value: 'CARD 2002', rowCount: 2, assignedUserId: null, assignedUserName: null },
+      { value: 'CARD 3003', rowCount: 1, assignedUserId: null, assignedUserName: null },
+    ]);
+    const box = [...container.querySelectorAll('div')].find((div) =>
+      div.firstElementChild?.textContent?.includes('Cardholder assignments'),
+    )!;
+    expect(box.children[1]!.textContent).toBe('2 of 3 card values are not linked to anyone yet.');
+  });
+
+  it('says nothing about unlinked values once every value is linked', async () => {
+    const { container } = await renderWithCardValues([
+      { value: 'CARD 1001', rowCount: 3, assignedUserId: 5, assignedUserName: 'Alex' },
+    ]);
+    expect(container.textContent).not.toContain('not linked to anyone yet');
+  });
+
+  it('says linking changes future imports only, never rows already imported (v1.59.0)', async () => {
+    const { container } = await renderWithCardValues([
+      { value: 'CARD 2002', rowCount: 2, assignedUserId: null, assignedUserName: null },
+    ]);
+    expect(container.textContent).toContain(
+      'Linking a value changes future imports only; rows already imported keep their person.',
+    );
   });
 
   // AutoSaveSelect is a CONTROLLED select (`value`, not `defaultValue`): when its `value` names

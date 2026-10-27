@@ -83,8 +83,9 @@ export type RuleKind =
  *
  * NULL attributed_user_id on this kind means HOUSEHOLD -- the same thing NULL already means in
  * transactions.attributed_user_id, so there is no third state to tell apart. The value of such a
- * rule is that it STOPS the import-time fallback chain (the per-card map, then the account owner)
- * putting the row on somebody.
+ * rule is that it STOPS the import-time fallback to the account owner putting the row on somebody.
+ * Since v1.59.0 a linked card holder comes before every rule, Household included (card > rule >
+ * owner, src/lib/attribution.ts), so a rule decides only rows with no linked card value.
  *
  * NEVER APPLIED BY runEngine (ruling P10): ELIGIBLE protects a human category decision through
  * categorization_source, and attributed_user_id has no source column, so a re-run could not tell a

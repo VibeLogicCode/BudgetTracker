@@ -93,6 +93,13 @@ export interface AccountRow {
    * alert that demands attention.
    */
   discrepancies: Discrepancy[];
+  /**
+   * v1.59.0, resolved by page.tsx. `column` is whether the pinned, readable mapping names a
+   * cardholder column: null for a SimpleFIN account or one with no such pin, where there is
+   * nothing to say. `linked` is how many card values this account has a person linked to.
+   * Optional so a caller with nothing to say about cards can leave it out.
+   */
+  cardholder?: { column: boolean | null; linked: number };
 }
 
 export interface PersonRow {
@@ -170,6 +177,24 @@ function AccountSubtitle({ account, people }: { account: AccountRow; people: Per
       )}
       <span>{statusLabel}</span>
     </span>
+  );
+}
+
+/**
+ * v1.59.0. Whether this account's imports can tell card holders apart. Without a cardholder column
+ * the per-card links are never read, so every row goes to a person rule, else the owner -- which
+ * used to be invisible from here.
+ */
+function CardholderLine({ account, people }: { account: AccountRow; people: PersonRow[] }) {
+  const column = account.cardholder?.column ?? null;
+  if (column === null) return null;
+  const profile = account.importProfileName ?? 'its mapping';
+  if (column) {
+    return <p className="text-xs text-muted">{`Cardholder column in ${profile} · ${account.cardholder?.linked ?? 0} linked.`}</p>;
+  }
+  const owner = people.find((person) => person.id === account.ownerUserId)?.name ?? 'the household';
+  return (
+    <p className="text-xs text-muted">{`No cardholder column in ${profile}: every row goes to a person rule, else ${owner}.`}</p>
   );
 }
 
@@ -374,6 +399,7 @@ export function AccountsManager({
                 {/* v1.8.0 Task 5 (spec 2026-08-23), ruling R7: diagnostic, not an alert -- one
                     plain-language line per discrepancy, no badge, no icon, nothing rendered at
                     all when the account is clean. */}
+                <CardholderLine account={account} people={people} />
                 {account.discrepancies.length > 0 ? (
                   <ul className="flex flex-col gap-1 rounded-md bg-warning-soft/50 px-3 py-2 text-xs text-warning-soft-fg">
                     {account.discrepancies.map((discrepancy) => (

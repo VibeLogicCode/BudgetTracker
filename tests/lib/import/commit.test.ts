@@ -398,6 +398,103 @@ describe('commitImport — attribution split in the result message (SHOULD-3.6)'
   });
 });
 
+/**
+ * v1.59.0. Card values nobody is linked to, reported at commit so the admin can link them before
+ * the next import. The card value is never stored on a transaction, so this is the only moment the
+ * app knows which rows carried an unlinked value.
+ */
+describe('commitImport — card values linked to nobody yet (v1.59.0)', () => {
+  const CARD_MAPPING = { dateCol: 0, descCol: 1, amountCol: 2, cardCol: 3 } as never;
+
+  function cardRows(accountId: number, input: [description: string, card: string][]) {
+    return computeRowHashes(
+      accountId,
+      input.map(([description, card], index) => ({
+        rowIndex: index,
+        rawDate: '2026-03-02',
+        date: '2026-03-02',
+        rawDescription: description,
+        amountCents: -100 * (index + 1),
+        balanceCents: null,
+        cells: ['2026-03-02', description, '0.00', card],
+      })),
+    );
+  }
+
+  function setup() {
+    current = createSeededTestDb();
+    const alex = insertTestUser(current.db, { name: 'Alex', username: 'alex' });
+    const accountId = insertTestAccount(current.db, { name: 'Joint Visa', type: 'credit', ownerUserId: alex });
+    upsertAccountCardPerson({ accountId, cardValue: 'CARD 1001', userId: alex });
+    return { alex, accountId };
+  }
+
+  it('lists each unlinked value among the inserted rows, most rows first, and says so in a sentence', () => {
+    const { alex, accountId } = setup();
+    const rows = cardRows(accountId, [
+      ['MAPLE GROCER 12', 'CARD 3003'],
+      ['FUEL STOP 12', 'CARD 2002'],
+      ['MAPLE GROCER 14', 'CARD 1001'],
+      ['FUEL STOP 14', 'CARD 2002'],
+      ['CORNER BAKERY', ''],
+    ]);
+
+    const result = commitImport({ accountId, profileId: null, filename: 'visa.csv', importedBy: alex, mapping: CARD_MAPPING, rows, errors: [] });
+
+    expect(result.unlinkedCardValues).toEqual([
+      { value: 'CARD 2002', rowCount: 2 },
+      { value: 'CARD 3003', rowCount: 1 },
+    ]);
+    expect(result.unlinkedCardSummary).toBe(
+      'Not linked to anyone yet: CARD 2002 (2 rows), CARD 3003 (1 row). Link them under Cardholder assignments before the next import.',
+    );
+  });
+
+  it('counts one card typed two ways as one value', () => {
+    const { alex, accountId } = setup();
+    const rows = cardRows(accountId, [
+      ['MAPLE GROCER 12', ' card  2002 '],
+      ['FUEL STOP 12', 'CARD 2002'],
+    ]);
+
+    const result = commitImport({ accountId, profileId: null, filename: 'visa.csv', importedBy: alex, mapping: CARD_MAPPING, rows, errors: [] });
+
+    expect(result.unlinkedCardValues).toEqual([{ value: 'CARD 2002', rowCount: 2 }]);
+  });
+
+  it('counts inserted rows only, so a second import of the same file reports nothing', () => {
+    const { alex, accountId } = setup();
+    const rows = cardRows(accountId, [['MAPLE GROCER 12', 'CARD 2002']]);
+    commitImport({ accountId, profileId: null, filename: 'visa.csv', importedBy: alex, mapping: CARD_MAPPING, rows, errors: [] });
+
+    const again = commitImport({ accountId, profileId: null, filename: 'visa-again.csv', importedBy: alex, mapping: CARD_MAPPING, rows, errors: [] });
+
+    expect(again.rowsDuplicate).toBe(1);
+    expect(again.unlinkedCardValues).toEqual([]);
+    expect(again.unlinkedCardSummary).toBeNull();
+  });
+
+  it('reports nothing when every value is linked', () => {
+    const { alex, accountId } = setup();
+    const rows = cardRows(accountId, [['MAPLE GROCER 12', 'CARD 1001'], ['FUEL STOP 12', '']]);
+
+    const result = commitImport({ accountId, profileId: null, filename: 'visa.csv', importedBy: alex, mapping: CARD_MAPPING, rows, errors: [] });
+
+    expect(result.unlinkedCardValues).toEqual([]);
+    expect(result.unlinkedCardSummary).toBeNull();
+  });
+
+  it('reports nothing without a cardholder column, whatever the cells hold', () => {
+    const { alex, accountId } = setup();
+    const rows = cardRows(accountId, [['MAPLE GROCER 12', 'CARD 2002']]);
+
+    const result = commitImport({ accountId, profileId: null, filename: 'visa.csv', importedBy: alex, rows, errors: [] });
+
+    expect(result.unlinkedCardValues).toEqual([]);
+    expect(result.unlinkedCardSummary).toBeNull();
+  });
+});
+
 // v1.8.0 (spec 2026-08-23 Task 3): td-chequing.csv is the real 5-column TD export (date,
 // description, debit, credit, balance) and the TD Chequing/Debit preset now ships with
 // balanceCol: 4 mapped, so parsing it for these tests needs no mapping override. The fixture's

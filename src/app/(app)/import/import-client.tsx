@@ -5,7 +5,9 @@ import { FileDrop } from '@/components/FileDrop';
 import { MappingEditor } from '@/components/MappingEditor';
 import { SubmitButton } from '@/components/SubmitButton';
 import { AutoSaveSelect, type AutoSaveResult } from '@/components/ui/AutoSave';
+import { BackButton } from '@/components/ui/BackLink';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
+import { DisclosureSummary } from '@/components/ui/Disclosure';
 import { Money } from '@/components/ui/Money';
 import { Notice } from '@/components/ui/Notice';
 import { PageGuide } from '@/components/ui/PageGuide';
@@ -149,7 +151,7 @@ function CardValueRow({
         {rowCount} row{rowCount === 1 ? '' : 's'}
       </span>
       {assignedUserId === null ? (
-        <span className="text-xs text-muted">Unassigned — falls back to the account owner at import.</span>
+        <span className="text-xs text-muted">Unassigned — a person rule decides, else the account owner.</span>
       ) : null}
       {/* `options` is `people` PLUS the currently assigned person when they are not in that
           list: an assignment can point at a since-deactivated user (MUST-3.1), and without the
@@ -604,10 +606,13 @@ export function ImportClient({
       // already flowing through CommitFlowResult.attributionSummary (Task 3) -- null
       // whenever there is nothing card-specific to report, so nothing is appended then.
       const withAttribution = body.attributionSummary ? `${base} ${body.attributionSummary}.` : base;
+      // v1.59.0: card values in this file nobody is linked to yet, named so they can be linked
+      // before the next import. Null without a cardholder column or when every value is linked.
+      const withUnlinked = body.unlinkedCardSummary ? `${withAttribution} ${body.unlinkedCardSummary}` : withAttribution;
       // NEW-5 fix-round: applyPaymentMatchers is internally guarded (MUST-13.5) the same way
       // runEngine is caught above, so a matcher failure never fails the import either — it
       // just needs the same honest note engineFailed already gets.
-      const withLoanNote = body.loanMatchFailed ? `${withAttribution} Loan payment matching failed for these rows.` : withAttribution;
+      const withLoanNote = body.loanMatchFailed ? `${withUnlinked} Loan payment matching failed for these rows.` : withUnlinked;
       // F-03 (v1.31.0): CommitFlowResult.discrepancy is null for every account that cannot
       // reconcile at all (no balance column on the mapping, or an OFX file, which has none
       // either -- flow.ts's own doc comment on this field has the full list), AND for a clean
@@ -647,17 +652,16 @@ export function ImportClient({
   // a just-loaded preview's mapping, but a defensive `undefined` here (never rendering the
   // panel) is cheaper than a crash if that ever stops being true.
   const currentProfile = profiles.find((profile) => profile.id === profileId);
+  // v1.59.0: the card values in this preview nobody is linked to yet. Read off the same
+  // `preview.cardValues` a saved assignment patches, so the count drops the moment one is linked.
+  const unlinkedCount = preview?.cardValues?.filter((cv) => cv.assignedUserId === null).length ?? 0;
 
   return (
     <div className="flex flex-col gap-4 sm:gap-5">
       {/* Only when the batch screen opened this file. The way BACK is the thing a one-file-at-a-
           time page never needed and a list of ten does -- without it, looking at row 4 costs the
           other nine, because there is nothing on the page that remembers them. */}
-      {onBackToList === undefined ? null : (
-        <button type="button" onClick={onBackToList} className={`${buttonClass('ghost', 'sm')} self-start`}>
-          ← Back to the list
-        </button>
-      )}
+      {onBackToList === undefined ? null : <BackButton onClick={onBackToList}>Back to the list</BackButton>}
       <PageHeader
         title="Import"
         description="Upload a statement, check what it found, then add it. Nothing is written until you say so."
@@ -1026,10 +1030,16 @@ export function ImportClient({
                     SectionHeader, in place of a hand-rolled <h3> -- this stays a table page
                     (ruling D7), so SectionHeader is the one piece of the new system it adopts. */}
                 <SectionHeader title="Cardholder assignments" />
+                {unlinkedCount > 0 ? (
+                  <p className="mt-1 text-sm font-medium text-ink">
+                    {unlinkedCount} of {preview.cardValues.length} card values are not linked to anyone yet.
+                  </p>
+                ) : null}
                 <p className="mt-1 text-sm text-muted">
-                  Assign each value found in the cardholder column to a person. Anything left as &ldquo;Account owner (default)&rdquo; —
-                  including a row where that column is blank — is attributed to the account owner automatically; nothing here blocks the
-                  import.
+                  Assign each value found in the cardholder column to a person; a linked value wins over any person rule.
+                  Anything left as &ldquo;Account owner (default)&rdquo; — including a row where that column is blank — goes to a
+                  person rule if one matches, else the account owner; nothing here blocks the import. Linking a value changes future
+                  imports only; rows already imported keep their person.
                 </p>
                 {preview.cardValues.length === 0 ? (
                   <p className="mt-2 text-sm text-muted">No cardholder values were found in that column.</p>
@@ -1092,8 +1102,8 @@ export function ImportClient({
             </TableWrap>
 
             {preview.errors.length > 0 ? (
-              <details className="rounded-md border border-line bg-surface-2/50 px-3 py-2">
-                <summary className="cursor-pointer text-sm font-medium text-ink">{preview.errors.length} rows could not be parsed</summary>
+              <details className="group/disclosure rounded-md border border-line bg-surface-2/50 px-3 py-2">
+                <DisclosureSummary className="text-sm">{preview.errors.length} rows could not be parsed</DisclosureSummary>
                 <ul className="mt-2 list-inside list-disc text-xs text-muted">
                   {preview.errors.map((rowError) => (
                     <li key={rowError.rowIndex}>

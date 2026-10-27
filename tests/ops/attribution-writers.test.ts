@@ -28,8 +28,9 @@ function stripComments(source: string): string {
  *
  * `transactions.attributed_user_id` decides who a charge belongs to -- which report it appears in,
  * whose spending it counts toward, and what "Household/unattributed" means. The ORDER in which
- * candidates win is now three deep (rule > card > account owner) and lives in exactly one place,
- * src/lib/attribution.ts. This file ties the writers to it.
+ * candidates win is three deep (card > rule > account owner since v1.59.0, which reversed the first
+ * half of ruling P11) and lives in exactly one place, src/lib/attribution.ts. This file ties the
+ * writers to it.
  *
  * WHY IT IS WRITTEN THE SAME WAY AS display-source-writers. That guard exists because R24 shipped
  * a precedence module, a docblock and two writers that consulted it, and ASSERTED in prose that
@@ -79,8 +80,9 @@ const WRITERS_NOT_CONSULTING: Record<string, string> = {
     'person who just pressed Save.',
   'src/lib/categorize/engine.ts#applyAttributionRule':
     'a deliberate per-rule apply has one candidate, the rule somebody pressed the button next to. ' +
-    'Consulting the order would ask whether a card map should beat it, which is exactly the ' +
-    'question the button already answered.',
+    'The card holder the import order puts first is not there to rank it against: the card value ' +
+    'is never stored on a transaction, so the button rewrites every matching row whatever card it ' +
+    'came from, having shown the count first.',
   'src/lib/categorize/engine.ts#createRulesFromRow':
     'the applyAttributionRule reason at the moment the rule is born: the person in this write is ' +
     'the one just typed into the dialog, over rows the dialog counted and named first. There is ' +
@@ -219,8 +221,10 @@ describe('every writer of attributed_user_id is accounted for (P17)', () => {
   });
 
   it('the module it points at actually decides the order', () => {
-    expect(resolveAttribution({ ruleUserId: 7, ruleMatched: true, cardUserId: 3, ownerUserId: 1 }).source).toBe('rule');
-    expect(resolveAttribution({ ruleUserId: null, ruleMatched: false, cardUserId: 3, ownerUserId: 1 }).source).toBe('card');
+    expect(resolveAttribution({ ruleUserId: 7, ruleMatched: true, cardUserId: 3, ownerUserId: 1 }).source).toBe('card');
+    expect(resolveAttribution({ ruleUserId: null, ruleMatched: true, cardUserId: 3, ownerUserId: 1 }).source).toBe('card');
+    expect(resolveAttribution({ ruleUserId: 7, ruleMatched: true, cardUserId: null, ownerUserId: 1 }).source).toBe('rule');
+    expect(resolveAttribution({ ruleUserId: null, ruleMatched: false, cardUserId: null, ownerUserId: 1 }).source).toBe('owner');
   });
 
   /**

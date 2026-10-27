@@ -9,6 +9,7 @@ import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Pill, type PillTone } from '@/components/ui/Pill';
 import { buttonClass } from '@/components/ui/Button';
+import { DisclosureButton } from '@/components/ui/Disclosure';
 import type { ImportMapping } from '@/lib/import/mapping';
 import { ImportClient, type AccountOption, type DetectionResult, type ProfileOption, type PersonOption } from './import-client';
 import type { ImportHistoryRow } from '@/lib/import/commit';
@@ -56,6 +57,12 @@ interface CommitOutcome {
   rowsDuplicate?: number;
   /** Rows the file had that could not be read. Shown only when there were some. */
   rowsError?: number;
+  /**
+   * v1.59.0, from "Import all ready" only: who the rows went to, and the card values nobody is
+   * linked to yet. A file imported on its own screen already showed both there.
+   */
+  attributionSummary?: string | null;
+  unlinkedCardSummary?: string | null;
   error?: string;
 }
 
@@ -330,6 +337,13 @@ export function BatchClient(props: {
                       }`
                     : (outcome.error ?? 'Could not be imported')}
                 </span>
+                {outcome.ok && (outcome.attributionSummary || outcome.unlinkedCardSummary) ? (
+                  <span className="basis-full text-xs text-muted">
+                    {[outcome.attributionSummary ? `${outcome.attributionSummary}.` : null, outcome.unlinkedCardSummary ?? null]
+                      .filter((sentence) => sentence !== null)
+                      .join(' ')}
+                  </span>
+                ) : null}
               </li>
             ))}
           </ul>
@@ -480,16 +494,15 @@ export function BatchClient(props: {
         it answered a question nobody was asking at that moment.
       */}
       <div className="flex justify-end">
-        <button
-          type="button"
-          onClick={() => setShowHistory((shown) => !shown)}
-          aria-expanded={showHistory}
-          className={buttonClass('secondary', 'sm')}
-        >
+        <DisclosureButton open={showHistory} onToggle={() => setShowHistory((shown) => !shown)} controls="import-history">
           {showHistory ? 'Hide history' : 'Show history'}
-        </button>
+        </DisclosureButton>
       </div>
-      {showHistory ? <ImportHistoryCard history={history} tz={tz} /> : null}
+      {/* Always present so aria-controls names a real element; the card itself mounts only when
+          open, and a hidden empty div takes no gap in the column. */}
+      <div id="import-history" hidden={!showHistory}>
+        {showHistory ? <ImportHistoryCard history={history} tz={tz} /> : null}
+      </div>
     </div>
   );
 }

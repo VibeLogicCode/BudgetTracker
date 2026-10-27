@@ -37,6 +37,9 @@ export interface CommitFlowResult {
   rulesApplied: number;
   /** SHOULD-3.6, passed straight through from CommitResult — see its doc comment. */
   attributionSummary: string | null;
+  /** v1.59.0, passed straight through from CommitResult — see its doc comment. */
+  unlinkedCardValues: { value: string; rowCount: number }[];
+  unlinkedCardSummary: string | null;
   engine: EngineResult;
   /** true when runEngine threw after the rows were already committed (review-review finding 2). */
   engineFailed: boolean;
@@ -221,6 +224,8 @@ export function commitStagedImport(input: {
     needsReview,
     rulesApplied,
     attributionSummary: committed.attributionSummary,
+    unlinkedCardValues: committed.unlinkedCardValues,
+    unlinkedCardSummary: committed.unlinkedCardSummary,
     engine,
     engineFailed,
     loanLinksCreated,

@@ -257,11 +257,14 @@ export const HELP_SECTIONS: HelpSection[] = [
           <B>About</B> for the other case: one recurring bill whose figure barely moves.
         </P>
         <P>
-          A rule that names a person decides who a charge belongs to when it is imported, ahead of
-          the card it was charged to and ahead of the account&rsquo;s owner. <B>Household</B> means
-          the charge is nobody&rsquo;s in particular, and choosing it deliberately stops the card and
-          the account owner deciding for you. Person rules never run on their own afterwards: a
-          person you set by hand stays set, and &ldquo;Run rules&rdquo; leaves it alone.
+          When a charge is imported, the person it belongs to is decided in this order: the card
+          holder, if the statement has a cardholder column and that card is linked to someone; then
+          a rule that names a person; then the account&rsquo;s owner. <B>Household</B> means the
+          charge is nobody&rsquo;s in particular, and choosing it deliberately stops the account
+          owner deciding for you. That order applies to new imports only. <B>Apply now</B> and{' '}
+          <B>Create a rule…</B> change every matching row already imported, whatever card it came
+          from, because the card is not kept on a transaction. Person rules never run on their own
+          afterwards: a person you set by hand stays set, and &ldquo;Run rules&rdquo; leaves it alone.
         </P>
         <P>
           Which rule does a correction edit? The one that actually decided the row. Correct a $130
@@ -306,10 +309,13 @@ export const HELP_SECTIONS: HelpSection[] = [
         <P>
           <B>A joint card can attribute its rows to the right person.</B> If the statement includes
           a column naming the cardholder, point the mapping at it as the <B>cardholder column</B>{' '}
-          and the preview lists every card value it found in the file, so you can assign each one to
-          a person before committing. Anything left unassigned falls back to the account&rsquo;s
-          owner, which is also what happens on a card with no such column: every row lands on the
-          owner regardless of who spent it.
+          and the preview lists every card value it found in the file, so you can link each one to a
+          person before committing. A linked card holder comes before any person rule. A value left
+          unlinked, or a blank one, goes to a person rule if one matches, else the account&rsquo;s
+          owner &mdash; which is also what happens on a card with no such column. Linking a value
+          changes future imports only: the card value is not kept on a transaction, so rows already
+          imported keep their person, and a past row that went to the wrong person is fixed by hand
+          on <B>Transactions</B>.
         </P>
         <P>
           <B>A mapping you have stopped using can be deactivated instead of deleted</B>, built-in

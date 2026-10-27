@@ -167,7 +167,9 @@ describe('setCardPersonAction (MUST-6.1: saves an account_card_people assignment
     const result = await setCardPersonAction({}, formData({ accountId: String(accountId), cardValue: '-1001', person: String(alexId) }));
 
     expect(result.error).toBeUndefined();
-    expect(result.message).toMatch(/saved/i);
+    // v1.59.0: the card value is not stored on a transaction, so the save says it reaches future
+    // imports only.
+    expect(result.message).toBe('Saved. Future imports into this account use it; rows already imported keep their person.');
     expect(listAccountCardPeople(accountId)).toMatchObject([{ cardValue: '-1001', userId: alexId, userName: 'Alex' }]);
   });
 
@@ -201,7 +203,7 @@ describe('setCardPersonAction (MUST-6.1: saves an account_card_people assignment
     const result = await setCardPersonAction({}, formData({ accountId: String(accountId), cardValue: '-1001', person: '' }));
 
     expect(result.error).toBeUndefined();
-    expect(result.message).toMatch(/fall back to the account owner/i);
+    expect(result.message).toBe('Unassigned. A person rule decides these rows at import, else the account owner.');
     expect(listAccountCardPeople(accountId)).toHaveLength(0);
   });
 

@@ -495,6 +495,70 @@ describe('AccountsManager — card grid (v1.19.0, one design language)', () => {
   });
 });
 
+/**
+ * v1.59.0. Whether an account's import can tell card holders apart at all. Without a cardholder
+ * column every row goes to a person rule, else the owner, which an admin could not see before.
+ */
+describe('AccountsManager — the cardholder line (v1.59.0)', () => {
+  it('says when the pinned mapping has no cardholder column, and who the rows go to instead', () => {
+    render(
+      <AccountsManager
+        accounts={[
+          account({
+            ownerUserId: 1,
+            importProfileId: 10,
+            importProfileName: 'TD Chequing/Debit',
+            cardholder: { column: false, linked: 0 },
+          }),
+        ]}
+        people={PEOPLE}
+        profiles={PROFILES}
+      />,
+    );
+    expect(
+      screen.getByText('No cardholder column in TD Chequing/Debit: every row goes to a person rule, else Alex.'),
+    ).toBeTruthy();
+  });
+
+  it('names the household as the fallback for a joint account', () => {
+    render(
+      <AccountsManager
+        accounts={[account({ importProfileId: 10, importProfileName: 'TD Chequing/Debit', cardholder: { column: false, linked: 0 } })]}
+        people={PEOPLE}
+        profiles={PROFILES}
+      />,
+    );
+    expect(
+      screen.getByText('No cardholder column in TD Chequing/Debit: every row goes to a person rule, else the household.'),
+    ).toBeTruthy();
+  });
+
+  it('counts the linked card values when the pinned mapping has a cardholder column', () => {
+    render(
+      <AccountsManager
+        accounts={[account({ importProfileId: 11, importProfileName: 'TD Visa', cardholder: { column: true, linked: 2 } })]}
+        people={PEOPLE}
+        profiles={PROFILES}
+      />,
+    );
+    expect(screen.getByText('Cardholder column in TD Visa · 2 linked.')).toBeTruthy();
+  });
+
+  it('says nothing for an account with no readable mapping or a SimpleFIN one', () => {
+    const { container } = render(
+      <AccountsManager
+        accounts={[
+          account({ id: 1, name: 'First', cardholder: { column: null, linked: 0 } }),
+          account({ id: 2, name: 'Second', isSimplefinManaged: true, cardholder: { column: null, linked: 1 } }),
+        ]}
+        people={PEOPLE}
+        profiles={PROFILES}
+      />,
+    );
+    expect(container.textContent).not.toMatch(/cardholder column/i);
+  });
+});
+
 // 2026-08-30 Settings disclosure sweep: "Add an account" folds behind a button, same shape as
 // "Add a type" / "New category" / "Save rule" / "Add a user".
 describe('AccountsManager — "Add an account" is a disclosure (2026-08-30 Settings sweep)', () => {

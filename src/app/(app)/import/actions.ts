@@ -144,7 +144,7 @@ export async function saveMappingAction(_prev: SaveMappingState, formData: FormD
   return { message: `Updated "${resultName}", and pointed this account at it.` };
 }
 
-/** '' = unassigned, which just means "fall back to the account owner" (MUST-6.2) — not an error. */
+/** '' = unassigned, which means "a person rule, else the account owner" (MUST-6.2) — not an error. */
 const personField = z.string().refine((value) => value === '' || /^\d+$/.test(value), 'Pick a person, or the account owner.');
 
 const cardPersonSchema = z.object({
@@ -182,7 +182,7 @@ export async function setCardPersonAction(_prev: CardPersonState, formData: Form
   if (parsed.data.person === '') {
     deleteAccountCardPerson(parsed.data.accountId, parsed.data.cardValue);
     revalidatePath('/import');
-    return { message: 'Unassigned. These rows fall back to the account owner at import.' };
+    return { message: 'Unassigned. A person rule decides these rows at import, else the account owner.' };
   }
 
   const userId = Number(parsed.data.person);
@@ -190,7 +190,8 @@ export async function setCardPersonAction(_prev: CardPersonState, formData: Form
 
   upsertAccountCardPerson({ accountId: parsed.data.accountId, cardValue: parsed.data.cardValue, userId });
   revalidatePath('/import');
-  return { message: 'Saved. This assignment is remembered for every future import into this account too.' };
+  // The card value is never stored on a transaction, so nothing already imported can follow it.
+  return { message: 'Saved. Future imports into this account use it; rows already imported keep their person.' };
 }
 
 /**

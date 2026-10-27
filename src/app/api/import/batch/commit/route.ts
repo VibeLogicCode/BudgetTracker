@@ -45,6 +45,9 @@ export interface BatchCommitResult {
   rowsError?: number;
   needsReview?: number;
   importId?: number;
+  /** v1.59.0. Present when ok: CommitFlowResult's two attribution sentences, each null when silent. */
+  attributionSummary?: string | null;
+  unlinkedCardSummary?: string | null;
   /** Present when it failed, in the household's words rather than the exception's. */
   error?: string;
 }
@@ -97,6 +100,8 @@ export async function POST(request: Request): Promise<Response> {
         rowsDuplicate: result.rowsDuplicate,
         rowsError: result.rowsError,
         needsReview: result.needsReview,
+        attributionSummary: result.attributionSummary,
+        unlinkedCardSummary: result.unlinkedCardSummary,
       });
     } catch (error) {
       if (error instanceof ImportLimitError || error instanceof StagingError) {

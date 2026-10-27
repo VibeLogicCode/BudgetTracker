@@ -88,6 +88,23 @@ export interface CommitResult {
    * announce; the pre-existing rows keep whatever they already had).
    */
   attributionSummary: string | null;
+  /**
+   * v1.59.0. Every normalized card value among the rows this call INSERTED that no person is linked
+   * to on this account, with how many inserted rows carried it, most rows first (ties by value). A
+   * blank cell is not a value and never appears. `[]` whenever there is no cardholder column, and
+   * for an all-duplicate commit. The card value is never stored on a transaction, so this is the
+   * only moment the app can name them.
+   */
+  unlinkedCardValues: { value: string; rowCount: number }[];
+  /** The sentence for `unlinkedCardValues`, or null when it is empty. */
+  unlinkedCardSummary: string | null;
+}
+
+/** `Not linked to anyone yet: CARD 2002 (2 rows), CARD 3003 (1 row). Link them under ...` */
+function unlinkedCardSentence(values: { value: string; rowCount: number }[]): string | null {
+  if (values.length === 0) return null;
+  const list = values.map(({ value, rowCount }) => `${value} (${rowCount} ${rowCount === 1 ? 'row' : 'rows'})`).join(', ');
+  return `Not linked to anyone yet: ${list}. Link them under Cardholder assignments before the next import.`;
 }
 
 export function commitImport(input: CommitInput): CommitResult {
@@ -136,27 +153,31 @@ export function commitImport(input: CommitInput): CommitResult {
    *  summary would file them under "no card match" and say they went to the account owner, which
    *  is the one thing that did not happen to them. */
   let ruleCount = 0;
+  /** v1.59.0: inserted rows per card value nobody is linked to, for `unlinkedCardValues`. */
+  const unlinkedTally = new Map<string, number>();
 
   /**
-   * The card half of MUST-3.3's chain: no cardCol/no map -> null; index beyond this row's cells,
-   * or the cell normalizes to empty -> null; normalized value not in the map -> null; otherwise
-   * the mapped person. `userName` is non-null only on the last case, so the caller can tally
-   * "matched a real person" separately from every flavour of fallback.
+   * The card half of MUST-3.3's chain: no cardCol/no map -> nothing; index beyond this row's
+   * cells, or the cell normalizes to empty -> nothing; normalized value not in the map -> the
+   * value with no person; otherwise the value and the mapped person. `userName` is non-null only
+   * on the last case, and `value` is non-null on the last two, so the caller can tell "linked to a
+   * real person" from "a value nobody is linked to yet" from "no value at all".
    *
    * The ORDER this feeds into lives in src/lib/attribution.ts (ruling P17), not here: it is the
-   * sentence the import, the rules page and the authoring dialog all have to agree on, and it was
-   * written inline in this closure when there were only two candidates to order.
+   * sentence the import, the rules page and the authoring dialog all have to agree on. Since
+   * v1.59.0 a linked card comes first, so the tally below counts by the source that order
+   * reports rather than by whether a card matched.
    */
-  function cardPerson(cells: string[]): { userId: number | null; userName: string | null } {
-    const none = { userId: null, userName: null };
+  function cardPerson(cells: string[]): { value: string | null; userId: number | null; userName: string | null } {
+    const none = { value: null, userId: null, userName: null };
     if (cardCol === null || cardMap === null) return none;
     const raw = cells[cardCol];
     if (raw === undefined) return none;
     const value = normalizeCardValue(raw);
     if (value.length === 0) return none;
     const match = cardMap.get(value);
-    if (!match) return none;
-    return { userId: match.userId, userName: match.userName };
+    if (!match) return { value, userId: null, userName: null };
+    return { value, userId: match.userId, userName: match.userName };
   }
 
   const existing = findExistingByHashes(
@@ -228,12 +249,17 @@ export function commitImport(input: CommitInput): CommitResult {
         cardUserId: card.userId,
         ownerUserId,
       });
-      if (attribution.source === 'rule') {
-        ruleCount += 1;
-      } else if (card.userName !== null) {
+      if (attribution.source === 'card' && card.userName !== null) {
         matchedTally.set(card.userName, (matchedTally.get(card.userName) ?? 0) + 1);
+      } else if (attribution.source === 'rule') {
+        ruleCount += 1;
       } else if (cardCol !== null) {
         fallbackCount += 1;
+      }
+      // Counted whoever the row went to: a rule or the owner may have decided it, and the value
+      // is still unlinked for the next import.
+      if (card.value !== null && card.userId === null) {
+        unlinkedTally.set(card.value, (unlinkedTally.get(card.value) ?? 0) + 1);
       }
 
       const inserted = tx
@@ -310,6 +336,10 @@ export function commitImport(input: CommitInput): CommitResult {
       attributionSummary = parts.length > 0 ? parts.join(', ') : null;
     }
 
+    const unlinkedCardValues = [...unlinkedTally.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([value, rowCount]) => ({ value, rowCount }));
+
     return {
       importId: importRow.id,
       rowsAdded: insertedTransactionIds.length,
@@ -318,6 +348,8 @@ export function commitImport(input: CommitInput): CommitResult {
       insertedTransactionIds,
       duplicateTransactionIds,
       attributionSummary,
+      unlinkedCardValues,
+      unlinkedCardSummary: unlinkedCardSentence(unlinkedCardValues),
     };
   });
 }
