@@ -22,8 +22,12 @@ Next.js build. Docker pulls a ready-to-run multi-arch image (linux/amd64 + linux
    folder as `docker-compose.yml`. It works unchanged on Synology Container Manager, QNAP,
    Unraid, TrueNAS SCALE, or any plain Linux/Windows/macOS Docker host — nothing in it is
    Synology-specific.
-3. `docker compose up -d`, then open `http://<host>:3000`. Nothing else to configure — the app
-   generates its own SECRET_KEY at first boot (see the note under Prerequisites). Want to
+3. Next to it, create a `.env` file with `WATCHTOWER_TOKEN=<a long random value>` (for example from
+   `openssl rand -hex 32`); [`install/synology-pull.env.example`](install/synology-pull.env.example)
+   is the template. The project will not start without it.
+4. `docker compose up -d`, then open `http://<host>:3000`. The setup page asks for a setup token
+   that the app prints once in its log: `docker logs budget-tracker`. Nothing else to configure —
+   the app generates its own SECRET_KEY at first boot (see the note under Prerequisites). Want to
    manage the key yourself instead? Uncomment the `SECRET_KEY:` line in the compose file first.
 
 **Updates are driven from inside the app with this path, and start off.** `install/synology-compose-pull.yml`
@@ -78,12 +82,14 @@ taken verbatim, so stray leading/trailing whitespace in `.env` is significant th
 > encryption keys are derived from it. If it is lost or changed, everyone who turned on two-factor
 > authentication has to re-enroll their authenticator app. Transactions, budgets, goals and
 > passwords are unaffected. `data/secret.key` is deliberately excluded from backup archives (see
-> "Keeping backups on a separate NAS" below), so back it up separately once — a password manager
-> entry works well.
+> "Keeping backups on a separate NAS" below). Back it up separately once (a password manager entry
+> works well), keep it readable only by its owner, and do not store it next to backup archives or
+> whole copies of the data folder.
 
 **`WATCHTOWER_URL` and `WATCHTOWER_TOKEN` are optional, and only for the prebuilt-image install.**
 `install/synology-compose-pull.yml` sets both for you; a build-from-source install does not need
-them and leaves them unset. They are what lets Settings → About ask Watchtower to update on
+them and leaves them unset. The token has no default: put your own long random value in a `.env`
+file next to the compose file (see `install/synology-pull.env.example`). They are what lets Settings → About ask Watchtower to update on
 request instead of Watchtower polling on its own timer. The Watchtower endpoint sits on the
 compose project's private network and is never published to the host, so it is not a fourth
 egress destination beyond the three named above.
@@ -216,8 +222,9 @@ anything, with the setting named for both Intel and AMD. Docker Desktop runs the
 lightweight VM, so there is no way around that setting — on a locked-down work laptop, run Budget
 Tracker on a NAS or another machine instead.
 
-Your data lives in `%LOCALAPPDATA%\BudgetTracker\data`. Back that folder up: it holds the database
-**and** `secret.key`, and without the key everyone using two-factor sign-in has to enroll again.
+Your data lives in `%LOCALAPPDATA%\BudgetTracker\data`. Back the database up, and keep a separate copy of
+`secret.key` (without it everyone using two-factor sign-in has to enroll again; see the note under
+Prerequisites for where not to store it).
 
 ### Build it from source
 
@@ -275,7 +282,10 @@ something valid on your system, and start it — no SECRET_KEY to set.
 
 ## After the install
 
-1. Open the URL the installer printed. You land on the **setup wizard**.
+1. Open the URL the installer printed. You land on the **setup wizard**, which asks for a
+   **setup token**. The installer prints it when it finds one; otherwise read it from the app log
+   (`docker logs budget-tracker`, or the container's Log in Synology Container Manager). Setting
+   `SETUP_TOKEN` (16 characters or more) in `.env` or the compose file replaces the random one.
 2. The account you create there is the **administrator**. Creating it also seeds the category
    list and the seven built-in bank import profiles.
 3. The wizard then offers an optional **"add your bank accounts"** step. Skip it if you like —
@@ -409,7 +419,7 @@ The archive does **not** contain `data/secret.key`, and that is deliberate. Your
 SMTP password, SimpleFIN access URL and two-factor secrets are stored encrypted in the database and
 are derived from that key, so an archive on its own cannot yield them. The other side of the same
 coin: **restoring an archive onto a different machine will not bring those settings back unless you
-copy `data/secret.key` across too.** Everything else — transactions, budgets, receipts, accounts,
+have the same `data/secret.key` in place — two-factor and connection secrets need the same key.** Everything else — transactions, budgets, receipts, accounts,
 passwords — restores normally either way.
 
 **Settings → Backups → Restore** is the normal way to restore a backup — pick a row, tick the box
@@ -486,8 +496,9 @@ history. If you copy them off the NAS, turn on your backup tool's client-side en
 your TOTP secrets, the SMTP password or any Telegram bot token on its own. Those credentials
 live inside `budget.db` in encrypted form, exactly like the SimpleFIN access URL, so the
 archive itself is safe to copy off-site; it is `secret.key` that must never travel with it.
-Back up `data/secret.key` separately, once, somewhere safe (a password manager entry works
-well).
+Back up `data/secret.key` separately, once (a password manager entry works well), keep it
+readable only by its owner, and do not store it next to backup archives or whole copies of the
+data folder.
 
 ### Option A — mount the NAS share at `/data/backups`
 
@@ -572,8 +583,8 @@ docker compose exec budget-tracker node --experimental-strip-types \
 ```
 
 It sets the new password (minimum 10 characters), reactivates the account if it was deactivated,
-signs out every one of that user's sessions, and clears the failed-login lockout so the new
-password works immediately. Run it with no arguments to see the usage text and the list of known
+signs out every one of that user's sessions, and clears the recorded failed sign-ins (the
+per-username backoff and any per-browser counts) so the new password works immediately. Run it with no arguments to see the usage text and the list of known
 usernames.
 
 **It does not touch two-factor authentication.** If that account has an authenticator enrolled,

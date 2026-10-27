@@ -262,9 +262,24 @@ wait_for_health() {
   return 1
 }
 
+# v1.58.1: the first-run setup token is printed in the container log at start. Print the most
+# recent one so the person does not have to go and find it; nothing extra on an install that
+# already has users (no token is printed then).
+setup_token_hint() {
+  [ "$DRY_RUN" -eq 1 ] && return 0
+  local token
+  token="$(docker logs budget-tracker 2>&1 | sed -n 's/.*Budget Tracker setup token: \([^[:space:]]*\).*/\1/p' | tail -n 1)" || true
+  if [ -n "$token" ]; then
+    printf '%s
+' " Setup token (the wizard asks for it): ${token}"
+  fi
+}
+
 print_success() {
   local port="$1"
   local host
+  local token_line
+  token_line="$(setup_token_hint)" || true
   # "|| true" matters here: on hosts where "hostname -I" is unsupported (BusyBox,
   # some macOS/BSD variants), pipefail would otherwise propagate its failure into
   # this assignment and, under set -e, kill the script before printing the URL.
@@ -279,7 +294,9 @@ print_success() {
    http://localhost:${port}
 
  First run:
-   1. Open the URL above. You will land on the setup wizard.
+   1. Open the URL above. You will land on the setup wizard, which asks for the
+      setup token printed in the app log: docker logs ${SERVICE}
+${token_line}
    2. Create the first account — it becomes the administrator.
    3. Add the rest of the household under Settings -> Users.
    4. Import a bank CSV from the Import page.

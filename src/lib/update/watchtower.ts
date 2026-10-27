@@ -23,6 +23,17 @@ export const WATCHTOWER_BAD_URL_ERROR = 'The WATCHTOWER_URL in your compose file
 export const WATCHTOWER_TOKEN_ERROR =
   'Watchtower rejected the token. Check that WATCHTOWER_TOKEN matches WATCHTOWER_HTTP_API_TOKEN in your compose file.';
 
+/**
+ * v1.58.1: the shared default that older compose files shipped for both WATCHTOWER_TOKEN and
+ * WATCHTOWER_HTTP_API_TOKEN. Still accepted (updates keep working); only recognised so Settings
+ * can tell an admin to replace it.
+ */
+export const LEGACY_WATCHTOWER_TOKEN = 'budget-tracker-local-update';
+
+export function usesLegacyWatchtowerToken(env: { watchtowerToken: string | null } = readEnv()): boolean {
+  return env.watchtowerToken === LEGACY_WATCHTOWER_TOKEN;
+}
+
 export interface WatchtowerConfig {
   url: string;
   token: string;

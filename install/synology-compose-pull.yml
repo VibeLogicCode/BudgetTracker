@@ -12,6 +12,14 @@
 #      -> Properties -> Permission -> Create -> grant Read/Write to Everyone, or your
 #      `docker` group user). Skipping this leaves the container crash-looping on an
 #      unwritable /data.
+#   2. Set the update token. Put a long random value in a file named `.env` next to this
+#      compose file, for example generated with `openssl rand -hex 32`:
+#          WATCHTOWER_TOKEN=<the long random value>
+#      (install/synology-pull.env.example is a starting point; its value is empty on purpose, so
+#      the project will not start until you fill it in.) Or skip the `.env` file and replace both
+#      `${WATCHTOWER_TOKEN...}` lines below with the same long random value.
+#   3. After the first start, the setup page asks for a setup token. The app prints it once in
+#      its log: `docker logs budget-tracker`, or the container's Log tab in Container Manager.
 #
 # ZERO-CONFIG otherwise: nothing else needs editing. The app generates its own key on first
 # boot at data/secret.key and reuses it from then on. Want to manage the key yourself instead?
@@ -79,9 +87,9 @@ services:
       # In-app updates (v1.3.1). `watchtower` is the compose service name and resolves only on
       # this project's private network -- it is not an internet address, and the app refuses to
       # send this request to any host that is not a bare service label, localhost, or a private
-      # IP literal. Both values are literal here and must match Watchtower's own, below.
+      # IP literal. The token comes from your `.env` file and must match Watchtower's own, below.
       WATCHTOWER_URL: "http://watchtower:8080/v1/update"
-      WATCHTOWER_TOKEN: "budget-tracker-local-update"
+      WATCHTOWER_TOKEN: "${WATCHTOWER_TOKEN:?Set WATCHTOWER_TOKEN in the .env file next to this compose file}"
     volumes:
       # Relative to this compose file's folder (the Container Manager project
       # path). Works on any volume, /volume1 or otherwise.
@@ -108,6 +116,7 @@ services:
       start_period: 20s
 
   watchtower:
+    # The upstream project is no longer maintained, so this tag is not pinned.
     image: containrrr/watchtower:latest
     container_name: budget-tracker-watchtower
     restart: unless-stopped
@@ -122,7 +131,7 @@ services:
       WATCHTOWER_HTTP_API_UPDATE: "true"
       # This token is a fence between the two containers, not a secret from the internet: the
       # port below is never published to the host, so nothing outside this project's network can
-      # reach the endpoint at all. Change it if you like -- it must match WATCHTOWER_TOKEN on the
-      # budget-tracker service above, and nowhere else.
-      WATCHTOWER_HTTP_API_TOKEN: "budget-tracker-local-update"
+      # reach the endpoint at all. It is the same value as WATCHTOWER_TOKEN on the budget-tracker
+      # service above (both read it from your `.env` file) and nowhere else.
+      WATCHTOWER_HTTP_API_TOKEN: "${WATCHTOWER_TOKEN:?Set WATCHTOWER_TOKEN in the .env file next to this compose file}"
       TZ: "America/Toronto"

@@ -141,3 +141,49 @@ describe('backlog item 17 / Part 4: the Updates card carries the preset-pack lin
     }
   });
 });
+
+// v1.58.1: while the app still sees the shared default update token from older compose files, an
+// admin is told how to change it. Updates stay allowed; this only warns.
+describe('v1.58.1: the legacy update token notice', () => {
+  const NOTICE_TITLE = 'Change the update token';
+  const originalToken = process.env.WATCHTOWER_TOKEN;
+  const originalUrl = process.env.WATCHTOWER_URL;
+
+  afterEach(() => {
+    if (originalToken === undefined) delete process.env.WATCHTOWER_TOKEN;
+    else process.env.WATCHTOWER_TOKEN = originalToken;
+    if (originalUrl === undefined) delete process.env.WATCHTOWER_URL;
+    else process.env.WATCHTOWER_URL = originalUrl;
+  });
+
+  async function renderAs(role: 'admin' | 'member', token: string) {
+    const t = createTestDb();
+    try {
+      process.env.WATCHTOWER_URL = 'http://watchtower:8080/v1/update';
+      process.env.WATCHTOWER_TOKEN = token;
+      currentUser.value.role = role;
+      const { default: SettingsPage } = await import('@/app/(app)/settings/page');
+      render(await SettingsPage());
+    } finally {
+      currentUser.value.role = 'member';
+      t.cleanup();
+    }
+  }
+
+  it('shows an admin the notice for the old shared value', async () => {
+    const { LEGACY_WATCHTOWER_TOKEN } = await import('@/lib/update/watchtower');
+    await renderAs('admin', LEGACY_WATCHTOWER_TOKEN);
+    expect(screen.getByText(NOTICE_TITLE)).toBeTruthy();
+  });
+
+  it('shows nothing for another value', async () => {
+    await renderAs('admin', 'f3a9c1d27b8e4a6f90b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d');
+    expect(screen.queryByText(NOTICE_TITLE)).toBeNull();
+  });
+
+  it('shows a member nothing, even for the old shared value', async () => {
+    const { LEGACY_WATCHTOWER_TOKEN } = await import('@/lib/update/watchtower');
+    await renderAs('member', LEGACY_WATCHTOWER_TOKEN);
+    expect(screen.queryByText(NOTICE_TITLE)).toBeNull();
+  });
+});

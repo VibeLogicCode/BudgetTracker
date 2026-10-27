@@ -1,7 +1,8 @@
 import { canadianPackState } from '@/lib/canadian-pack';
 import { classify, parseSemver, type UpdateSeverity } from '@/lib/update/semver';
 import { readUpdateState } from '@/lib/update/state';
-import { watchtowerConfig, watchtowerConfigError } from '@/lib/update/watchtower';
+import { Notice } from '@/components/ui/Notice';
+import { usesLegacyWatchtowerToken, watchtowerConfig, watchtowerConfigError } from '@/lib/update/watchtower';
 import { APP_VERSION } from '@/lib/version';
 import { UpdatesClient } from './updates-client';
 
@@ -37,7 +38,20 @@ export function UpdatesCard() {
   // inherits that same gate for free.
   const pack = canadianPackState();
 
+  // v1.58.1: warn only. Updates are never refused because of the token's value.
+  const legacyToken = usesLegacyWatchtowerToken();
+
   return (
+    <>
+      {legacyToken ? (
+        <Notice tone="warning" title="Change the update token">
+          <p>
+            The update token is still the shared default from older compose files. Choose a long random value, set it as
+            both WATCHTOWER_TOKEN and WATCHTOWER_HTTP_API_TOKEN in the compose file, and recreate both containers.
+            Updates keep working until then.
+          </p>
+        </Notice>
+      ) : null}
     <UpdatesClient
       currentVersion={APP_VERSION}
       enabled={state.enabled}
@@ -68,5 +82,6 @@ export function UpdatesCard() {
           : null
       }
     />
+    </>
   );
 }

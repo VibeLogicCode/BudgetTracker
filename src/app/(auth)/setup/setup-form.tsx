@@ -20,6 +20,13 @@ export function SetupForm() {
       <form action={action} className="flex flex-col gap-4">
         <FormError message={state.error} />
 
+        <Field
+          label="Setup token"
+          hint="Printed in the server log when the app starts. Run docker logs budget-tracker, or open the container's Log in Synology Container Manager."
+        >
+          <input name="setupToken" required autoComplete="off" spellCheck={false} className={inputClass} />
+        </Field>
+
         <Field label="Your name">
           <input name="name" required className={inputClass} />
         </Field>

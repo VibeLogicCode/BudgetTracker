@@ -273,6 +273,21 @@ Invoke-Step 'docker' @('compose', 'up', '-d')
 
 $effectivePort = Get-EffectivePort
 if (Wait-Healthy -EffectivePort $effectivePort) {
+  # v1.58.1: the first-run setup token is in the container log; the last match is the current one.
+  $setupLine = ''
+  if (-not $DryRun) {
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+      $logText = (& docker logs budget-tracker 2>&1 | ForEach-Object { "$_" }) -join "`n"
+      $found = [regex]::Matches($logText, 'Budget Tracker setup token: (\S+)')
+      if ($found.Count -gt 0) {
+        $setupLine = " Setup token (the wizard asks for it): $($found[$found.Count - 1].Groups[1].Value)`n"
+      }
+    }
+    catch { $setupLine = '' }
+    finally { $ErrorActionPreference = $previousPreference }
+  }
   @"
 
 ============================================================
@@ -281,8 +296,9 @@ if (Wait-Healthy -EffectivePort $effectivePort) {
    http://localhost:$effectivePort
 
  First run:
-   1. Open the URL above. You will land on the setup wizard.
-   2. Create the first account - it becomes the administrator.
+   1. Open the URL above. You will land on the setup wizard, which asks for a
+      setup token. The app prints it in its log: docker logs budget-tracker
+$setupLine   2. Create the first account - it becomes the administrator.
    3. Add the rest of the household under Settings -> Users.
 
  Useful commands (run from $ProjectDir):

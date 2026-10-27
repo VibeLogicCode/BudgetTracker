@@ -399,6 +399,39 @@ describe('the Windows quick start pulls what the NAS pulls', () => {
     expect(sent).toBe(token);
   });
 
+  // v1.58.1: no install ships a token that every other install shares.
+  it('requires the operator own update token in the pull compose, in both places', () => {
+    expect(nas).not.toContain('budget-tracker-local-update');
+    const required = /"\$\{WATCHTOWER_TOKEN:\?[^}]+\}"/;
+    expect(new RegExp(`WATCHTOWER_TOKEN: ${required.source}`).test(nas)).toBe(true);
+    expect(new RegExp(`WATCHTOWER_HTTP_API_TOKEN: ${required.source}`).test(nas)).toBe(true);
+  });
+
+  it('ships an env example whose token value is empty', () => {
+    const example = read('install/synology-pull.env.example');
+    expect(/^WATCHTOWER_TOKEN=$/m.test(example)).toBe(true);
+    expect(example).not.toMatch(/^WATCHTOWER_TOKEN=\S/m);
+  });
+
+  it('generates a random token per install and no longer writes the shared literal', () => {
+    const yaml = quickstart.slice(quickstart.indexOf('$yaml = @"'), quickstart.indexOf('"@', quickstart.indexOf('$yaml = @"') + 10));
+    expect(yaml).not.toContain('budget-tracker-local-update');
+    expect(yaml).toContain('WATCHTOWER_TOKEN: "${WatchtowerToken}"');
+    expect(yaml).toContain('WATCHTOWER_HTTP_API_TOKEN: "${WatchtowerToken}"');
+    expect(quickstart).toContain('System.Security.Cryptography.RandomNumberGenerator');
+  });
+
+  it('prints the first-run setup token it finds in the container log', () => {
+    expect(quickstart).toContain(String.raw`Budget Tracker setup token: (\S+)`);
+    expect(quickstart).toContain('docker logs');
+  });
+
+  it('notes the upstream watchtower project is unmaintained beside the image, in both files', () => {
+    for (const source of [nas, quickstart]) {
+      expect(source).toMatch(/upstream project is no longer maintained[^\n]*\n\s*image: containrrr\/watchtower:latest/);
+    }
+  });
+
   it('keeps the label scope on, so watchtower only ever touches this app', () => {
     expect(quickstart).toContain('WATCHTOWER_LABEL_ENABLE: "true"');
     expect(quickstart).toContain('com.centurylinklabs.watchtower.enable: "true"');

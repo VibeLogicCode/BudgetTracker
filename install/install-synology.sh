@@ -119,6 +119,19 @@ generate_secret() {
   die "Could not generate a SECRET_KEY: neither openssl nor /dev/urandom is available."
 }
 
+# v1.58.1: the first-run setup token is printed in the container log at start. Print the most
+# recent one so the person does not have to go and find it; nothing extra on an install that
+# already has users (no token is printed then).
+setup_token_hint() {
+  [ "$DRY_RUN" -eq 1 ] && return 0
+  local token
+  token="$(docker logs budget-tracker 2>&1 | sed -n 's/.*Budget Tracker setup token: \([^[:space:]]*\).*/\1/p' | tail -n 1)" || true
+  if [ -n "$token" ]; then
+    printf '%s
+' " Setup token (the wizard asks for it): ${token}"
+  fi
+}
+
 wait_for_health() {
   step "Waiting for /api/health"
   local url="http://127.0.0.1:${PORT}/api/health"
@@ -251,6 +264,7 @@ say "Running: docker compose up -d"
 run docker compose up -d
 
 if wait_for_health; then
+  token_line="$(setup_token_hint)" || true
   cat <<EOF
 
 ============================================================
@@ -258,8 +272,12 @@ if wait_for_health; then
 
    http://<your-nas-address>:${PORT}
 
- Next: open the URL, create the first (administrator) account,
- then add the rest of the household under Settings -> Users.
+ Next: open the URL. The setup page asks for a setup token, printed in the
+ app log: docker logs budget-tracker (or the container's Log tab in
+ Container Manager).
+${token_line}
+ Then create the first (administrator) account and add the rest of the
+ household under Settings -> Users.
 
  Recommended: put an HTTPS reverse proxy in front of it
  (Control Panel -> Login Portal -> Advanced -> Reverse Proxy)

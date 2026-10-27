@@ -27,7 +27,9 @@ to fill in before starting.
   and it matters just as much here: skip it and the container crash-loops until you fix it.
 - Use [`install/synology-compose-pull.yml`](../install/synology-compose-pull.yml) instead of
   `install/synology-compose.yml` when you get to **Create the Project** (step 5): paste its
-  contents there as-is.
+  contents there, then replace both `${WATCHTOWER_TOKEN...}` lines with the same long random value
+  (or keep them and add a `.env` file next to the project with `WATCHTOWER_TOKEN=<value>`; see
+  `install/synology-pull.env.example`).
 - Skip step 3 (uploading the source) entirely — the pull compose has no `build:` line, so
   Container Manager never needs the project files.
 - Skip step 4 (generating a SECRET_KEY) too — it's optional. Want to manage the key yourself
@@ -131,7 +133,9 @@ with the walkthrough below.
    ```
    (Find the IP in Control Panel → Network → Network Interface.)
 
-8. **Create the first account.** The setup wizard appears automatically. The account you create
+8. **Create the first account.** The setup wizard appears automatically and asks for a setup
+   token. The app prints it once in its log: Container Manager → **Container** → `budget-tracker`
+   → **Log**, or `docker logs budget-tracker`. The account you create
    here is the administrator. It also seeds the category list and the four built-in bank import
    profiles, then offers an optional step to add your bank accounts (you can skip it and do it
    later under **Settings → Bank accounts**).

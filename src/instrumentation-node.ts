@@ -8,6 +8,7 @@
 import { closeDb, getDb } from '@/db/client';
 import { RESTART_EXIT_CODE, applyStagedRestoreOnBoot } from '@/lib/backup/restore';
 import { raiseRestoreOutcome } from '@/lib/notify/raise';
+import { issueSetupTokenOnBoot } from '@/lib/auth/setup-token';
 import { startScheduler } from '@/lib/scheduler';
 import { reconcileApplyOnBoot } from '@/lib/update/state';
 import { clearOcrInFlightMarkerOnShutdown } from '@/lib/warranty/ocr/onnx/probe';
@@ -64,6 +65,14 @@ try {
   console.error('==============================================================================');
   console.error('');
   process.exit(1);
+}
+
+// v1.58.1: right after the database opens. While no user exists this prints a one-time setup
+// token for /setup; with users it only removes any stored hash. It must never stop the boot.
+try {
+  issueSetupTokenOnBoot();
+} catch (error) {
+  console.error('[setup] could not issue the setup token', error);
 }
 
 // MUST-7.6: one line, either way. Missing assets DO NOT crash the app. Receipts still

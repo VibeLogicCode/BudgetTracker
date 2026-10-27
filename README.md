@@ -90,8 +90,10 @@ secret becomes undecryptable and each user with two-factor authentication has to
 their authenticator app; the same goes for the SMTP password and every Telegram bot token stored
 under Settings → Notifications, which likewise become unreadable and must be re-entered. Nothing
 else is affected and no notification is lost, because the outbox rows themselves are plaintext.
-`data/secret.key` is deliberately excluded from backup archives, so back it up separately once
-(a password manager entry works well).
+`data/secret.key` is deliberately excluded from backup archives. Back it up separately once (a
+password manager entry works well), keep it readable only by its owner, and do not store it next to
+backup archives or whole copies of the data folder. Restoring onto another install needs the same
+key for two-factor and connection secrets.
 
 ---
 
@@ -145,8 +147,11 @@ build-elsewhere path above is the default.
 
 ### First run
 
-Open `http://<nas-address>:3000`. The setup wizard creates the first account as the
-administrator and seeds the category list plus the four built-in bank import profiles.
+Open `http://<nas-address>:3000`. The setup page asks for a **setup token**, which the app prints
+once in its log when it starts with no accounts yet (`docker logs budget-tracker`, or the
+container's Log in Synology Container Manager); each restart before setup prints a new one. To
+choose your own instead, set `SETUP_TOKEN` (16 characters or more). The setup wizard then creates
+the first account as the administrator and seeds the category list plus the four built-in bank import profiles.
 Registration is closed after that: the admin creates the other family members under
 **Settings → Users** and hands out a temporary password. Because the admin knows that password,
 the app **requires the new person to replace it** — their first sign-in lands on a
@@ -285,6 +290,7 @@ This app is not designed for exposure to the public internet. Do not port-forwar
 | `TRUST_PROXY` | `0` | When `1`, trust `X-Forwarded-Proto` and `X-Forwarded-For`. Only behind a proxy you control. |
 | `TZ` | `America/Toronto` | Timezone for date handling and the nightly job. |
 | `PORT` | `3000` | Listening port inside the container. |
+| `SETUP_TOKEN` | *(unset)* | Optional first-run token for `/setup`, 16 characters or more. When unset, a random token is printed in the app log at start while no account exists. |
 | `DATA_DIR` | `/data` | Where `budget.db`, `backups/`, `tmp/` and `receipts/` live. |
 
 `data/receipts/` holds the receipt files. They are part of the nightly backup archive, and an
@@ -292,7 +298,9 @@ image update never touches them.
 
 **`WATCHTOWER_URL` and `WATCHTOWER_TOKEN` are optional, and only matter for the prebuilt-image
 install.** `install/synology-compose-pull.yml` sets both of these for you; a build-from-source
-install (this `docker-compose.yml`) never needs them and leaves them unset. They let the app ask
+install (this `docker-compose.yml`) never needs them and leaves them unset. The token has no default: put a long random value (for
+example `openssl rand -hex 32`) in a `.env` file next to the compose file, using
+`install/synology-pull.env.example` as the starting point. They let the app ask
 its Watchtower companion to update on your say-so from Settings → About, instead of Watchtower
 polling on a timer. The Watchtower endpoint lives on the compose project's private network and is
 never published to the host, so it is not a fourth egress destination — see the note above.
@@ -331,9 +339,14 @@ comparison. Set `TRUST_PROXY=1` (so the app honours `X-Forwarded-Host`) and make
 the browser's hostname — nginx: `proxy_set_header X-Forwarded-Host $host;`. Only do this behind a
 proxy you control.
 
-**A user is locked out.** Failed sign-ins lock an account for 15 minutes, doubling on repeat
-bursts. Either wait it out, or have an admin reset that user's password under
-**Settings → Users**, which clears the lockout.
+**A user is locked out.** A per-address limit (5 failures in 15 minutes) applies only behind a
+trusted proxy (`TRUST_PROXY=1`), where the real client address is known. Otherwise, ten failed
+sign-ins for a username in 15 minutes back that username off for 15 minutes, doubling on repeat
+bursts up to 24 hours, for any browser that has not signed in as that user before. A browser that
+has signed in before keeps its own allowance (the same thresholds, counted separately) through a
+signed cookie that never signs anyone in. Either wait it out, or reset the password: an admin's
+**Reset password** under **Settings → Users**, or `npm run reset-password` on the host (see
+INSTALL.md for the `docker exec` form). Both clear the recorded attempts.
 
 **Someone lost their phone and their recovery codes.** An admin can clear their two-factor
 enrollment with **Reset MFA** under **Settings → Users**.

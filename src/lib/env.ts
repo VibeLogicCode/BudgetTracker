@@ -19,6 +19,8 @@ export interface AppEnv {
    */
   watchtowerUrl: string | null;
   watchtowerToken: string | null;
+  /** v1.58.1: optional operator-chosen first-run setup token; length is checked where it is used. */
+  setupToken: string | null;
   /**
    * v1.5.0 defect fix. Absent by default, in which case the hardware probe (and its cache)
    * decides — see src/lib/warranty/ocr/onnx/probe.ts. When present it OVERRIDES both of
@@ -187,6 +189,7 @@ export function readEnv(source: Partial<NodeJS.ProcessEnv> = process.env): AppEn
     dataDir,
     watchtowerUrl: (source.WATCHTOWER_URL ?? '').trim().length > 0 ? (source.WATCHTOWER_URL as string).trim() : null,
     watchtowerToken: (source.WATCHTOWER_TOKEN ?? '').trim().length > 0 ? (source.WATCHTOWER_TOKEN as string).trim() : null,
+    setupToken: (source.SETUP_TOKEN ?? '').trim().length > 0 ? (source.SETUP_TOKEN as string).trim() : null,
     ocrEngineOverride,
   };
 }

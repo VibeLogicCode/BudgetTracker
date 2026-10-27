@@ -50,6 +50,7 @@ describe('readEnv', () => {
       dataDir: DEFAULT_DATA_DIR,
       watchtowerUrl: null,
       watchtowerToken: null,
+      setupToken: null,
       ocrEngineOverride: null,
     });
   });

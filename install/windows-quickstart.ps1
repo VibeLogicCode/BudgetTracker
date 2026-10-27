@@ -54,6 +54,9 @@ if ([string]::IsNullOrWhiteSpace($InstallDir)) {
 $Service = 'budget-tracker'
 $Registry = 'ghcr.io/vibelogiccode/budgettracker'
 $ShortcutName = 'Budget Tracker.url'
+# v1.58.1: older versions of this script wrote this shared value into every compose file. It is
+# kept here only to recognise (and warn about) such a file; it is never written any more.
+$LegacyWatchtowerToken = 'budget-tracker-local-update'
 
 function Show-Usage {
   @'
@@ -352,8 +355,19 @@ function Get-IanaTimeZone {
   pins that agreement, because two install paths that quietly diverge on hardening is how a
   Windows install ends up the weak one.
 #>
+# v1.58.1: a fresh 64-hex-character update token per install (32 random bytes), from the
+# operating system's random number generator. Works on Windows PowerShell 5.1.
+function New-WatchtowerToken {
+  $bytes = New-Object 'byte[]' 32
+  $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+  try { $rng.GetBytes($bytes) }
+  finally { $rng.Dispose() }
+  return (($bytes | ForEach-Object { $_.ToString('x2') }) -join '')
+}
+
 function Write-ComposeFile {
   param([string]$Path, [string]$Tag, [string]$TimeZone)
+  $WatchtowerToken = New-WatchtowerToken
   <#
     A second fence behind the streams fix above. An IANA zone is letters, digits, underscore,
     plus, minus and slash -- nothing else. Anything carrying a space or a backslash is not a time
@@ -389,7 +403,7 @@ services:
       PORT: "3000"
       DATA_DIR: /data
       WATCHTOWER_URL: "http://watchtower:8080/v1/update"
-      WATCHTOWER_TOKEN: "budget-tracker-local-update"
+      WATCHTOWER_TOKEN: "${WatchtowerToken}"
     volumes:
       - ./data:/data
     labels:
@@ -413,6 +427,7 @@ services:
       start_period: 20s
 
   watchtower:
+    # The upstream project is no longer maintained, so this tag is not pinned.
     image: containrrr/watchtower:latest
     container_name: budget-tracker-watchtower
     restart: unless-stopped
@@ -422,7 +437,7 @@ services:
       WATCHTOWER_LABEL_ENABLE: "true"
       WATCHTOWER_CLEANUP: "true"
       WATCHTOWER_HTTP_API_UPDATE: "true"
-      WATCHTOWER_HTTP_API_TOKEN: "budget-tracker-local-update"
+      WATCHTOWER_HTTP_API_TOKEN: "${WatchtowerToken}"
       TZ: "${TimeZone}"
 "@
   if ($DryRun) {
@@ -432,6 +447,24 @@ services:
   # UTF8 without a BOM: docker compose reads the file as YAML and a BOM is a parse error on it.
   [System.IO.File]::WriteAllText($Path, $yaml, (New-Object System.Text.UTF8Encoding($false)))
   Write-Info "wrote $Path"
+}
+
+# v1.58.1: the first-run setup token is printed once in the container log when the app starts
+# with no users. Take the LAST one (a restart before setup issues a new one). Empty when there is
+# none, which is the normal answer on an install that already has users. A string, never a
+# collection, and quiet like the engine probe: a failed read is an answer, not an error.
+function Get-SetupToken {
+  if ($DryRun) { return '' }
+  $previous = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $text = (& docker logs $Service 2>&1 | ForEach-Object { "$_" }) -join "`n"
+    $found = [regex]::Matches($text, 'Budget Tracker setup token: (\S+)')
+    if ($found.Count -eq 0) { return '' }
+    return [string]$found[$found.Count - 1].Groups[1].Value
+  }
+  catch { return '' }
+  finally { $ErrorActionPreference = $previous }
 }
 
 # Quiet, like the engine probe: an unreadable file is an answer, not an error to throw on.
@@ -591,6 +624,12 @@ $rewrite = $Force
 if ((Test-Path $ComposeFile) -and -not $Force) {
   if (Test-ComposeFileValid -Path $ComposeFile) {
     Write-Info "$ComposeFile already exists - leaving it untouched (use -Force to rewrite it)."
+    if (Select-String -Path $ComposeFile -SimpleMatch $LegacyWatchtowerToken -Quiet) {
+      Write-Warn 'This compose file still uses the shared default update token from older versions.'
+      Write-Info '  To change it: pick a long random value, set it as BOTH WATCHTOWER_TOKEN (budget-tracker)'
+      Write-Info '  and WATCHTOWER_HTTP_API_TOKEN (watchtower) in that file, then run this script again'
+      Write-Info '  with -Update so both containers are recreated. Updates keep working until then.'
+    }
   }
   else {
     Write-Warn "$ComposeFile is not valid YAML; replacing it."
@@ -609,6 +648,8 @@ Write-Step 'Starting'
 Invoke-Compose @('up', '-d')
 
 if (Wait-Healthy -EffectivePort $effectivePort) {
+  $setupToken = Get-SetupToken
+  $setupLine = if ($setupToken -ne '') { " Setup token (the wizard asks for it): $setupToken`n" } else { '' }
   Add-Shortcut -EffectivePort $effectivePort
   if (-not $DryRun -and -not $Update) { Start-Process "http://localhost:$effectivePort/" | Out-Null }
   @"
@@ -619,8 +660,9 @@ if (Wait-Healthy -EffectivePort $effectivePort) {
    http://localhost:$effectivePort
 
  First run:
-   1. Open the URL above. You will land on the setup wizard.
-   2. Create the first account - it becomes the administrator.
+   1. Open the URL above. You will land on the setup wizard, which asks for a
+      setup token. The app prints it in its log: docker logs budget-tracker
+$setupLine   2. Create the first account - it becomes the administrator.
    3. Add the rest of the household under Settings -> Users.
 
  It starts with Windows, because Docker Desktop starts with Windows and the

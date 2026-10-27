@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { isSetupRequired, runSetup } from '@/lib/auth/login';
 import { passwordSchema } from '@/lib/auth/password';
+import { clearSetupToken, verifySetupToken } from '@/lib/auth/setup-token';
 import { setSessionCookie, shouldUseSecureCookie } from '@/lib/auth/session';
 import { usernameSchema } from '@/lib/auth/users';
 
@@ -14,6 +15,7 @@ export interface SetupFormState {
 }
 
 const CROSS_ORIGIN_ERROR = 'Cross-origin request rejected';
+const SETUP_TOKEN_ERROR = 'That setup token does not match. Copy the current token from the server log.';
 
 const setupSchema = z.object({
   name: z.string().trim().min(1, 'Name is required').max(80),
@@ -32,6 +34,11 @@ export async function setupAction(_prev: SetupFormState, formData: FormData): Pr
   if (!isSetupRequired()) {
     redirect('/login');
   }
+  // v1.58.1: the first-run token gates account creation; checked before anything is validated or written.
+  const setupToken = formData.get('setupToken');
+  if (typeof setupToken !== 'string' || !verifySetupToken(setupToken)) {
+    return { error: SETUP_TOKEN_ERROR };
+  }
   const parsed = setupSchema.safeParse({
     name: formData.get('name') ?? '',
     username: formData.get('username') ?? '',
@@ -43,6 +50,7 @@ export async function setupAction(_prev: SetupFormState, formData: FormData): Pr
 
   try {
     const result = await runSetup(parsed.data);
+    clearSetupToken();
     // Controller ruling: pass 'http:' unconditionally — see the matching note in
     // src/app/(auth)/login/actions.ts. shouldUseSecureCookie's own TRUST_PROXY +
     // X-Forwarded-Proto branch is the sole HTTPS signal; a direct-HTTPS-without-
