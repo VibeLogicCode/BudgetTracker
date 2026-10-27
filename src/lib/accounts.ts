@@ -2,7 +2,7 @@ import { and, asc, eq, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '@/db/client';
 import { accounts } from '@/db/schema';
-import { ownerScope, type Viewer } from '@/lib/auth/viewer';
+import { NOT_YOURS_ERROR, ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { nowIso } from '@/lib/clock';
 
 /**
@@ -79,6 +79,19 @@ export function listAccounts(opts: { includeInactive?: boolean }, viewer: Viewer
  */
 export function getAccount(id: number): AccountRecord | null {
   return getDb().select().from(accounts).where(eq(accounts.id, id)).get() ?? null;
+}
+
+/**
+ * v1.58.1: the one check for "may this viewer write a transaction into this account". Returns the
+ * refusal sentence, or null when the account is usable. Order matches the entry form: a missing
+ * account, an asset account, then an account outside a self viewer's own list.
+ */
+export function transactionAccountError(accountId: number, viewer: Viewer): string | null {
+  const account = getAccount(accountId);
+  if (!account) return 'Choose an account.';
+  if (!acceptsTransactions(account.type)) return 'That account only holds a balance you type in.';
+  if (ownerScope(viewer) !== null && !listAccounts({}, viewer).some((a) => a.id === accountId)) return NOT_YOURS_ERROR;
+  return null;
 }
 
 export function createAccount(input: {

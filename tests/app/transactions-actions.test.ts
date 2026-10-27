@@ -52,6 +52,7 @@ import {
   acceptAllGuessesAction,
   acceptGuessAction,
   applyToAllMatchingAction,
+  assignToBillAction,
   assignToLoanAction,
   bulkAssignToLoanAction,
   bulkCategorizeAction,
@@ -2912,5 +2913,99 @@ describe('card-row fixes revalidate every page whose figures they change', () =>
     const result = await sendBackToReviewAction({}, formData({ ruleId: String(saved.ruleId) }));
     expect('error' in result).toBe(false);
     expect(revalidated()).toEqual(expect.arrayContaining([...FIGURE_PAGES, '/settings/merchant-rules']));
+  });
+});
+
+// v1.58.1: a self-scoped viewer's bill link and rule writes stay inside what that viewer may touch.
+describe('v1.58.1: assignToBillAction resolves the bill through the viewer', () => {
+  function seedBill(ownerUserId: number, name: string): { itemId: number; installmentId: number } {
+    const billType = createItemType(`Bill ${randomUUID()}`, 'bill');
+    const itemId = createWarrantyItem({
+      name,
+      vendor: null,
+      model: null,
+      serial: null,
+      purchaseDate: '2026-01-01',
+      warrantyMonths: null,
+      isLifetime: false,
+      priceCents: null,
+      ownerUserId,
+      transactionId: null,
+      typeId: billType.id,
+      notes: null,
+    });
+    const installmentId = current!.db.get<{ id: number }>(sql`
+      insert into bill_installments (item_id, due_date, amount_cents, created_at)
+      values (${itemId}, '2026-03-05', 5000, ${nowIso()}) returning id`).id;
+    return { itemId, installmentId };
+  }
+
+  function setupTwoMembers(visibility: 'self' | 'household') {
+    const { db, userId } = setup(); // Alice (admin) owns the bill's household
+    const alexId = insertTestUser(db, { name: 'Alex', username: 'alex', role: 'member' });
+    const samId = insertTestUser(db, { name: 'Sam', username: 'sam', role: 'member' });
+    db.run(sql`update users set visibility = ${visibility} where id = ${samId}`);
+    const samAccount = insertTestAccount(db, { name: 'Sam Cash', type: 'cash', ownerUserId: samId });
+    const txnId = db.get<{ id: number }>(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, attributed_user_id, created_by, created_at, updated_at)
+      values (${samAccount}, '2026-03-02', 'FUEL STOP 12', ${normalizeMerchant('FUEL STOP 12')}, -5000, ${samId}, ${samId}, ${nowIso()}, ${nowIso()})
+      returning id`).id;
+    currentUser = { id: samId, name: 'Sam', username: 'sam', role: 'member', visibility };
+    return { db, alexId, samId, txnId, adminId: userId };
+  }
+
+  const paid = (installmentId: number) =>
+    current!.db.get<{ paidAt: string | null; paidTxnId: number | null }>(
+      sql`select paid_at as paidAt, paid_txn_id as paidTxnId from bill_installments where id = ${installmentId}`,
+    );
+
+  it("a self member cannot link their own row to another member's bill, named or nearest installment", async () => {
+    const { alexId, txnId } = setupTwoMembers('self');
+    const { itemId, installmentId } = seedBill(alexId, 'Alex Secret Bill');
+
+    const nearest = await assignToBillAction(formData({ transactionId: String(txnId), itemId: String(itemId) }));
+    expect(nearest.error).toBe('That item no longer exists.');
+    const named = await assignToBillAction(
+      formData({ transactionId: String(txnId), itemId: String(itemId), installmentId: String(installmentId) }),
+    );
+    expect(named.error).toBe('That item no longer exists.');
+    expect(paid(installmentId)).toEqual({ paidAt: null, paidTxnId: null });
+  });
+
+  it("a household member can still link to another member's bill", async () => {
+    const { alexId, txnId } = setupTwoMembers('household');
+    const { itemId, installmentId } = seedBill(alexId, 'Alex Shared Bill');
+
+    const result = await assignToBillAction(formData({ transactionId: String(txnId), itemId: String(itemId) }));
+    expect(result.error).toBeUndefined();
+    expect(paid(installmentId).paidTxnId).toBe(txnId);
+  });
+});
+
+describe('v1.58.1: renameTransactionAction scope all is household-wide', () => {
+  it('refuses a self viewer, writes no rule and renames no other row', async () => {
+    const { db, sqlite, addTxn } = setup();
+    const samId = insertTestUser(db, { name: 'Sam', username: 'sam', role: 'member' });
+    db.run(sql`update users set visibility = 'self' where id = ${samId}`);
+    const own = addTxn('MAPLE GROCER', -900);
+    const other = addTxn('MAPLE GROCER', -1200);
+    db.run(sql`update transactions set attributed_user_id = ${samId} where id = ${own}`);
+    currentUser = { id: samId, name: 'Sam', username: 'sam', role: 'member', visibility: 'self' };
+    // The viewer must see the row they rename: put it in their own account.
+    const samAccount = insertTestAccount(db, { name: 'Sam Cash', type: 'cash', ownerUserId: samId });
+    db.run(sql`update transactions set account_id = ${samAccount} where id = ${own}`);
+
+    const result = await renameTransactionAction(
+      {},
+      formData({ transactionId: String(own), displayName: 'Grocer Co-op', scope: 'all' }),
+    );
+
+    expect(result.error).toBe('Rules are set up for the whole household, so this is not available here.');
+    expect((sqlite.prepare('select count(*) as c from merchant_rules').get() as { c: number }).c).toBe(0);
+    const row = sqlite.prepare('select display_description as d from transactions where id = ?').get(other) as { d: string | null };
+    expect(row.d).toBeNull();
+
+    const one = await renameTransactionAction({}, formData({ transactionId: String(own), displayName: 'Mine', scope: 'one' }));
+    expect(one.error).toBeUndefined();
   });
 });

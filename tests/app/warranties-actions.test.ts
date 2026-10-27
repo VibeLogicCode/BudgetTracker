@@ -1496,6 +1496,31 @@ describe('recordLoanPaymentAction: a payment entered by hand', () => {
     expect((await recordLoanPaymentAction({}, payment(warrantyId))).error).toBe('Only a loan takes payments this way.');
   });
 
+  it("v1.58.1: a self member cannot record a payment against an account they do not own, and no row is written", async () => {
+    const itemId = loanWithLedger();
+    currentUser = { ...currentUser, visibility: 'self' };
+    const fd = payment(itemId); // an unowned (household) account
+    const own = insertTestAccount(current!.db, { name: 'Own Cash', type: 'cash', ownerUserId: ownerId });
+
+    const refused = await recordLoanPaymentAction({}, fd);
+    expect(refused.error).toBe(NOT_YOURS_ERROR);
+    expect(current!.db.get<{ n: number }>(sql`select count(*) as n from transactions`).n).toBe(0);
+
+    const accepted = await recordLoanPaymentAction({}, payment(itemId, { accountId: String(own) }));
+    expect(accepted.error).toBeUndefined();
+    expect(current!.db.get<{ n: number }>(sql`select count(*) as n from transactions`).n).toBe(1);
+  });
+
+  it('v1.58.1: an account that only holds a typed balance is refused for everyone', async () => {
+    const itemId = loanWithLedger();
+    const asset = insertTestAccount(current!.db, { name: 'Family Home', type: 'asset' });
+
+    const result = await recordLoanPaymentAction({}, payment(itemId, { accountId: String(asset) }));
+
+    expect(result.error).toBe('That account only holds a balance you type in.');
+    expect(current!.db.get<{ n: number }>(sql`select count(*) as n from transactions`).n).toBe(0);
+  });
+
   /** Money lent OUT: a repayment received is money in, so the transaction is positive (ruling P4). */
   it('records a repayment on a lent loan as money coming in', async () => {
     const itemId = loanWithLedger();
@@ -1507,5 +1532,93 @@ describe('recordLoanPaymentAction: a payment entered by hand', () => {
       current!.db.get<{ amount: number }>(sql`select amount_cents as amount from transactions order by id desc limit 1`)
         .amount,
     ).toBe(45_000);
+  });
+});
+
+describe('v1.58.1: updateWarrantyAction owner changes', () => {
+  async function seedItemOwnedByAlice(): Promise<number> {
+    const to = await redirectPath(() => createWarrantyAction({}, formData(baseFields())));
+    return Number(to.split('/').pop());
+  }
+
+  it('a household member who does not own the item cannot reassign it, but can edit other fields', async () => {
+    const id = await seedItemOwnedByAlice();
+    const samId = insertTestUser(current!.db, { name: 'Sam', username: 'sam', role: 'member' });
+    currentUser = { id: samId, name: 'Sam', username: 'sam', role: 'member', visibility: 'household' };
+
+    const reassign = await updateWarrantyAction({}, formData(baseFields({ itemId: String(id), ownerUserId: String(samId) })));
+    expect(reassign.error).toBe(NOT_YOURS_ERROR);
+    expect(getWarrantyItem(id, ADMIN)!.ownerUserId).toBe(ownerId);
+
+    const rename = await updateWarrantyAction({}, formData(baseFields({ itemId: String(id), name: 'Dishwasher' })));
+    expect(rename.error).toBeUndefined();
+    expect(getWarrantyItem(id, ADMIN)!.name).toBe('Dishwasher');
+    expect(getWarrantyItem(id, ADMIN)!.ownerUserId).toBe(ownerId);
+  });
+
+  it('the owner and an admin can reassign it', async () => {
+    const id = await seedItemOwnedByAlice();
+    const samId = insertTestUser(current!.db, { name: 'Sam', username: 'sam', role: 'member' });
+
+    const byOwner = await updateWarrantyAction({}, formData(baseFields({ itemId: String(id), ownerUserId: String(samId) })));
+    expect(byOwner.error).toBeUndefined();
+    expect(getWarrantyItem(id, ADMIN)!.ownerUserId).toBe(samId);
+
+    const adminId = insertTestUser(current!.db, { name: 'Root', username: 'root', role: 'admin' });
+    currentUser = { id: adminId, name: 'Root', username: 'root', role: 'admin', visibility: 'household' };
+    const byAdmin = await updateWarrantyAction({}, formData(baseFields({ itemId: String(id), ownerUserId: String(ownerId) })));
+    expect(byAdmin.error).toBeUndefined();
+    expect(getWarrantyItem(id, ADMIN)!.ownerUserId).toBe(ownerId);
+  });
+});
+
+describe('v1.58.1: retractLoanAnchorAction binds the anchor to the gated item', () => {
+  it("own item id with another member's anchor id withdraws nothing", async () => {
+    const own = seedLoanItem({ balanceCents: 1_000_000 });
+    const otherOwner = insertTestUser(current!.db, { name: 'Sam', username: 'sam', role: 'member' });
+    const otherLoanType = createItemType(`Loan ${randomUUID()}`, 'loan');
+    const other = createWarrantyItem({
+      name: 'Boat Loan', vendor: null, model: null, serial: null, purchaseDate: '2026-01-01', warrantyMonths: null,
+      isLifetime: false, priceCents: null, ownerUserId: otherOwner, transactionId: null, typeId: otherLoanType.id, notes: null,
+      principalCents: 3_000_000, interestRateBps: null, interestRateBasis: null,
+      currentBalanceCents: 2_000_000, balanceUpdatedAt: nowIso(),
+    });
+    setLoanAnchor({ itemId: other, asOfDate: '2026-03-01', balanceCents: 900_000, source: 'reconcile', actorUserId: otherOwner });
+    const anchorId = listLoanAnchors(other)[0]!.id;
+    const balance = () =>
+      current!.db.get<{ b: number }>(sql`select current_balance_cents as b from warranty_items where id = ${other}`).b;
+    const before = balance();
+
+    const result = await retractLoanAnchorAction({}, formData({ itemId: String(own), anchorId: String(anchorId) }));
+
+    expect(result.error).toBe('That statement has already been withdrawn.');
+    expect(listLoanAnchors(other)[0]!.retractedAt).toBeNull();
+    expect(balance()).toBe(before);
+  });
+});
+
+describe('v1.58.1: saveLoanRuleAction account scope for a self-scoped viewer', () => {
+  it('refuses an account outside the viewer\'s own list and writes no rule; own account and no account pass', async () => {
+    const itemId = seedLoanItem();
+    currentUser = { ...currentUser, visibility: 'self' };
+    const foreign = insertTestAccount(current!.db, { name: 'Joint Chequing' });
+    const own = insertTestAccount(current!.db, { name: 'Own Cash', type: 'cash', ownerUserId: ownerId });
+    const rules = () => current!.db.get<{ n: number }>(sql`select count(*) as n from loan_matcher_rules`).n;
+
+    const refused = await saveLoanRuleAction(
+      {},
+      formData({ itemId: String(itemId), merchantContains: 'FUEL STOP', accountId: String(foreign) }),
+    );
+    expect(refused.error).toBe(NOT_YOURS_ERROR);
+    expect(rules()).toBe(0);
+
+    const ownRule = await saveLoanRuleAction(
+      {},
+      formData({ itemId: String(itemId), merchantContains: 'FUEL STOP', accountId: String(own) }),
+    );
+    expect(ownRule.error).toBeUndefined();
+    const anyRule = await saveLoanRuleAction({}, formData({ itemId: String(itemId), merchantContains: 'MAPLE GROCER' }));
+    expect(anyRule.error).toBeUndefined();
+    expect(rules()).toBe(2);
   });
 });

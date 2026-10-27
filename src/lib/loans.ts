@@ -251,15 +251,24 @@ export function ruleLinkedPayments(days: number, now: Date = new Date()): RuleLi
 
 const AMOUNT_BAND = { low: 0.5, high: 2 };
 
+/**
+ * v1.58.1: the item owner's own id when that owner is self-scoped (what ownerScope returns for the
+ * same user), otherwise null. A rule on such an item only considers transactions attributed to that
+ * owner; null keeps the household-wide match.
+ */
+const itemOwnerScopeSql = sql<number | null>`case when ${users.visibility} = 'self' and ${users.role} <> 'admin' then ${users.id} else null end`;
+
 export function loanRuleReach(input: { itemId: number; merchantContains: string; accountId: number | null }): number {
   const needle = input.merchantContains.trim().toUpperCase();
   if (needle.length === 0) return 0;
   const db = getDb();
   const item = db
-    .select({ billingAmountCents: warrantyItems.billingAmountCents })
+    .select({ billingAmountCents: warrantyItems.billingAmountCents, ownerScopeId: itemOwnerScopeSql })
     .from(warrantyItems)
+    .innerJoin(users, eq(users.id, warrantyItems.ownerUserId))
     .where(eq(warrantyItems.id, input.itemId))
     .get();
+  const ownerScopeId = item?.ownerScopeId ?? null;
 
   const rows = db
     .select({ amountCents: transactions.amountCents })
@@ -272,6 +281,7 @@ export function loanRuleReach(input: { itemId: number; merchantContains: string;
         lt(transactions.amountCents, 0),
         like(transactions.normalizedMerchant, `%${needle}%`),
         ...(input.accountId === null ? [] : [eq(transactions.accountId, input.accountId)]),
+        ...(ownerScopeId === null ? [] : [eq(transactions.attributedUserId, ownerScopeId)]),
       ),
     )
     .all();
@@ -343,6 +353,8 @@ interface ActiveRule {
   /** R27a: what the item is recorded as billing, or null when nobody has said. See
    *  amountPlausibleFor below for why a null means "no amount check" rather than "no match". */
   billingAmountCents: number | null;
+  /** v1.58.1: the item owner's id when that owner is self-scoped, else null (household-wide). */
+  ownerScopeId: number | null;
 }
 
 /**
@@ -403,9 +415,11 @@ function activeRules(tx: ReturnType<typeof getDb>): ActiveRule[] {
       // R27a: what this item is RECORDED as billing. Null on an item nobody has told, in which
       // case there is nothing to compare a payment against and the amount check does not apply.
       billingAmountCents: warrantyItems.billingAmountCents,
+      ownerScopeId: itemOwnerScopeSql,
     })
     .from(loanMatcherRules)
     .innerJoin(warrantyItems, eq(warrantyItems.id, loanMatcherRules.itemId))
+    .innerJoin(users, eq(users.id, warrantyItems.ownerUserId))
     .innerJoin(warrantyItemTypes, eq(warrantyItemTypes.id, warrantyItems.typeId))
     .where(
       and(
@@ -1367,14 +1381,15 @@ export function postAllDueInterest(
  * is a record of what was seen -- but every balance read skips it, so the statement before it takes
  * over. The postings that ran from the withdrawn date are re-cut on the way out.
  */
-export function retractLoanAnchor(input: { anchorId: number; actorUserId: number | null; at?: Date }): boolean {
+export function retractLoanAnchor(input: { anchorId: number; itemId: number; actorUserId: number | null; at?: Date }): boolean {
   const at = input.at ?? new Date();
   const stamp = nowIso(at);
   const itemId = getDb().transaction((tx) => {
     const row = tx
       .select({ itemId: loanAnchors.itemId, asOfDate: loanAnchors.asOfDate, retractedAt: loanAnchors.retractedAt })
       .from(loanAnchors)
-      .where(eq(loanAnchors.id, input.anchorId))
+      // v1.58.1: the anchor must belong to the item the caller was cleared to act on.
+      .where(and(eq(loanAnchors.id, input.anchorId), eq(loanAnchors.itemId, input.itemId)))
       .get();
     if (!row || row.retractedAt !== null) return null;
 
@@ -1511,6 +1526,8 @@ interface Candidate {
   isTransfer: boolean;
   /** v1.12.1 (item BD / MON-7, ruling R2): the bill branch needs the transaction's OWN date. */
   date: string;
+  /** v1.58.1: a self-scoped item owner's rule only matches rows attributed to that owner. */
+  attributedUserId: number | null;
 }
 
 function candidates(tx: ReturnType<typeof getDb>, txnIds: number[]): Candidate[] {
@@ -1525,6 +1542,7 @@ function candidates(tx: ReturnType<typeof getDb>, txnIds: number[]): Candidate[]
           amountCents: transactions.amountCents,
           isTransfer: transactions.isTransfer,
           date: transactions.date,
+          attributedUserId: transactions.attributedUserId,
         })
         .from(transactions)
         .where(inArray(transactions.id, chunk))
@@ -1844,6 +1862,7 @@ export function applyPaymentMatchers(txnIds: number[], at: Date = new Date(), re
           (rule) =>
             txn.normalizedMerchant.includes(rule.merchantContains) &&
             (rule.accountId === null || rule.accountId === txn.accountId) &&
+            (rule.ownerScopeId === null || rule.ownerScopeId === txn.attributedUserId) &&
             amountPlausibleFor(rule, txn.amountCents),
         );
         if (match === undefined) continue;
@@ -1926,6 +1945,7 @@ export function backfillLoanRule(
             sql`${transactions.amountCents} < 0`,
             sql`instr(${transactions.normalizedMerchant}, ${rule.merchantContains}) > 0`,
             rule.accountId === null ? sql`1 = 1` : eq(transactions.accountId, rule.accountId),
+            rule.ownerScopeId === null ? sql`1 = 1` : eq(transactions.attributedUserId, rule.ownerScopeId),
             sql`not exists (select 1 from ${loanPayments} lp where lp.txn_id = ${transactions.id})`,
           ),
         )

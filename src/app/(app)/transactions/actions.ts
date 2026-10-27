@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireUser, type SessionUser } from '@/lib/auth/session';
 import { isSelfScoped, NOT_YOURS_ERROR, ownerScope } from '@/lib/auth/viewer';
-import { acceptsTransactions, getAccount, getOrCreateCashAccount, listAccounts } from '@/lib/accounts';
+import { getOrCreateCashAccount, transactionAccountError } from '@/lib/accounts';
 import { setLastAccountId } from '@/lib/auth/users';
 import {
   assignTransactionToBill,
@@ -190,23 +190,11 @@ export async function manualEntryAction(_prev: ActionState, formData: FormData):
 
   const accountRaw = String(formData.get('accountId') ?? '');
   const accountId = accountRaw === 'cash' ? getOrCreateCashAccount(user.id, user.name) : Number(accountRaw);
-  const account = getAccount(accountId);
-  if (!account) return { error: 'Choose an account.' };
-  // Ruling R10: an asset account holds a typed balance and nothing else. The picker already
-  // filters them out (page.tsx / QuickAddTransaction only ever list accounts that
-  // acceptsTransactions()); this is the second gate, because a select is a suggestion and a POST
-  // is a fact.
-  if (!acceptsTransactions(account.type)) return { error: 'That account only holds a balance you type in.' };
-
-  // v1.13.0 ruling R2 fix round 3 (item I3). getAccount() above is UNSCOPED (it is the internal
-  // resolver micro-ruling M3 documents, meant for ids this codebase produced itself) -- so
-  // without this, a self viewer could POST any accountId and write a manual transaction into an
-  // account (and therefore a household) they cannot even see. listAccounts({}, user) is the same
-  // scoped read every page already trusts for "which accounts can this viewer act through".
+  // Ruling R10 (asset accounts hold a typed balance only) and the v1.13.0 self-viewer account
+  // scope (item I3), as one shared check: a select is a suggestion and a POST is a fact.
+  const accountError = transactionAccountError(accountId, user);
+  if (accountError !== null) return { error: accountError };
   const scope = ownerScope(user);
-  if (scope !== null && !listAccounts({}, user).some((a) => a.id === accountId)) {
-    return { error: NOT_YOURS_ERROR };
-  }
 
   const date = String(formData.get('date') ?? '');
   if (!isIsoDate(date)) return { error: 'Date must be YYYY-MM-DD.' };
@@ -974,6 +962,8 @@ export async function renameTransactionAction(_prev: ActionState, formData: Form
     return { message: 'Renamed this transaction only.' };
   }
 
+  // v1.58.1: a rename rule covers every matching row in the household.
+  if (isSelfScoped(user)) return { error: RULES_ARE_HOUSEHOLD_WIDE };
   if (row.normalizedMerchant.length === 0) {
     return { error: 'This transaction has no merchant to match on — use "this transaction only".' };
   }
@@ -1373,6 +1363,8 @@ export async function assignToBillAction(formData: FormData): Promise<ActionStat
   // R2/R3: the viewer must be able to see the row it is about to link. getTransaction returns
   // null for a row this viewer may not see, which is the same gate every other row action uses.
   if (getTransaction(parsed.data.transactionId, user) === null) return { error: 'That transaction no longer exists.' };
+  // v1.58.1: the bill must be one this viewer may see, with the same words as a bill that is gone.
+  if (getWarrantyItem(parsed.data.itemId, user) === null) return { error: 'That item no longer exists.' };
 
   const result = assignTransactionToBill({
     txnId: parsed.data.transactionId,

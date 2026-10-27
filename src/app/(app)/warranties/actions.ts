@@ -12,7 +12,8 @@ import BetterSqlite3 from 'better-sqlite3';
 import { appendAudit } from '@/lib/audit';
 import { CROSS_ORIGIN_ERROR, isSameOrigin } from '@/lib/auth/csrf';
 import { requireUser } from '@/lib/auth/session';
-import { NOT_YOURS_ERROR, canActOnOwner } from '@/lib/auth/viewer';
+import { NOT_YOURS_ERROR, canActOnOwner, isSelfScoped } from '@/lib/auth/viewer';
+import { listAccounts, transactionAccountError } from '@/lib/accounts';
 import { nowIso } from '@/lib/clock';
 import { isIsoDate, todayIso } from '@/lib/dates';
 import {
@@ -497,8 +498,12 @@ export async function updateWarrantyAction(
 
   let savedKind: ItemKind = 'warranty';
   try {
-    const parsed = readItemInput(formData, 0, { cents: existing.currentBalanceCents, updatedAt: existing.balanceUpdatedAt });
+    const parsed = readItemInput(formData, existing.ownerUserId, { cents: existing.currentBalanceCents, updatedAt: existing.balanceUpdatedAt });
     if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Could not save that item.' };
+    // v1.58.1: handing an item to someone else is the owner's (or an admin's) call. Other fields stay open.
+    if (parsed.data.ownerUserId !== existing.ownerUserId && !canActOnOwner(existing.ownerUserId, user)) {
+      return { error: NOT_YOURS_ERROR };
+    }
     if (!typeExistsOrNull(parsed.data.typeId)) return { error: ITEM_TYPE_MISSING_ERROR };
     // The type is fixed once the item exists. It decides which fields the form even offers --
     // a model and a serial for a purchase, a principal and a balance for a loan -- so changing
@@ -677,6 +682,9 @@ export async function recordLoanPaymentAction(
   const item = getWarrantyItem(parsed.data.itemId, user);
   if (!item) return { error: NOT_YOURS_ERROR };
   if (item.kind !== 'loan') return { error: 'Only a loan takes payments this way.' };
+  // v1.58.1: the account is checked the way the quick-add form checks it.
+  const accountError = transactionAccountError(parsed.data.accountId, user);
+  if (accountError !== null) return { error: accountError };
 
   const date = str(formData, 'paidOn').trim();
   if (!isIsoDate(date)) return { error: 'Enter the payment date as YYYY-MM-DD.' };
@@ -895,6 +903,14 @@ export async function saveLoanRuleAction(_prev: WarrantyActionState, formData: F
 
   const item = getWarrantyItem(parsed.data.itemId, user);
   if (!item) return { error: 'That item no longer exists.' };
+  // v1.58.1: a rule scoped to one account must name an account this self-scoped viewer can use.
+  if (
+    isSelfScoped(user) &&
+    parsed.data.accountId !== null &&
+    !listAccounts({}, user).some((a) => a.id === parsed.data.accountId)
+  ) {
+    return { error: NOT_YOURS_ERROR };
+  }
   // v1.12.0: bills carry matching rules too -- a match marks their earliest unpaid installment
   // paid instead of moving a balance. MUST-19.11: the sentence lives in constants.ts now.
   if (!matchingAllowedForKind(item.kind)) return { error: MATCHING_KIND_ERROR };
@@ -1229,7 +1245,7 @@ export async function retractLoanAnchorAction(
   if (!getWarrantyItem(parsed.data.itemId, user)) return { error: NOT_YOURS_ERROR };
 
   try {
-    if (!retractLoanAnchor({ anchorId: parsed.data.anchorId, actorUserId: user.id })) {
+    if (!retractLoanAnchor({ anchorId: parsed.data.anchorId, itemId: parsed.data.itemId, actorUserId: user.id })) {
       return { error: 'That statement has already been withdrawn.' };
     }
   } catch (error) {

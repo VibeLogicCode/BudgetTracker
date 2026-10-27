@@ -206,14 +206,14 @@ describe('withdrawing a statement', () => {
   it('puts the balance back to the statement before it', () => {
     const { itemId, user, typoId } = withTypo();
     expect(balanceOf(itemId)).toBe(50_000_000);
-    expect(retractLoanAnchor({ anchorId: typoId, actorUserId: user })).toBe(true);
+    expect(retractLoanAnchor({ anchorId: typoId, itemId, actorUserId: user })).toBe(true);
     expect(balanceOf(itemId)).toBe(20_000_000);
   });
 
   /** Withdrawn, not deleted: the reconciliation history is a record of what somebody saw. */
   it('keeps the row in the history, marked', () => {
     const { itemId, user, typoId } = withTypo();
-    retractLoanAnchor({ anchorId: typoId, actorUserId: user });
+    retractLoanAnchor({ anchorId: typoId, itemId, actorUserId: user });
     const anchors = listLoanAnchors(itemId);
     expect(anchors).toHaveLength(2);
     expect(anchors.find((row) => row.id === typoId)!.retractedAt).not.toBeNull();
@@ -232,18 +232,35 @@ describe('withdrawing a statement', () => {
     const typoId = listLoanAnchors(itemId).find((row) => row.asOfDate === '2027-06-01')!.id;
     expect(balanceOf(itemId)).toBe(50_000_000);
 
-    retractLoanAnchor({ anchorId: typoId, actorUserId: user });
+    retractLoanAnchor({ anchorId: typoId, itemId, actorUserId: user });
     expect(balanceOf(itemId)).toBe(19_900_000);
   });
 
   it('refuses to withdraw the same statement twice', () => {
-    const { user, typoId } = withTypo();
-    expect(retractLoanAnchor({ anchorId: typoId, actorUserId: user })).toBe(true);
-    expect(retractLoanAnchor({ anchorId: typoId, actorUserId: user })).toBe(false);
+    const { itemId, user, typoId } = withTypo();
+    expect(retractLoanAnchor({ anchorId: typoId, itemId, actorUserId: user })).toBe(true);
+    expect(retractLoanAnchor({ anchorId: typoId, itemId, actorUserId: user })).toBe(false);
   });
 
   it('is false for a statement that does not exist', () => {
-    makeLoan();
-    expect(retractLoanAnchor({ anchorId: 9_999, actorUserId: null })).toBe(false);
+    const { itemId } = makeLoan();
+    expect(retractLoanAnchor({ anchorId: 9_999, itemId, actorUserId: null })).toBe(false);
+  });
+
+  // v1.58.1: the anchor must belong to the item the caller is acting on.
+  it("does not withdraw another loan's statement when named with a different item id", () => {
+    const { itemId, user, typoId } = withTypo();
+    const otherItem = createWarrantyItem({
+      name: 'Car Loan', vendor: null, model: null, serial: null, purchaseDate: '2026-01-01', warrantyMonths: null,
+      isLifetime: false, priceCents: null, ownerUserId: user, transactionId: null, typeId: loanTypeId(), notes: null,
+    } as Parameters<typeof createWarrantyItem>[0]);
+    const before = balanceOf(itemId);
+    const postingsBefore = current!.sqlite.prepare('select count(*) as c from loan_postings where item_id = ?').get(itemId);
+
+    expect(retractLoanAnchor({ anchorId: typoId, itemId: otherItem, actorUserId: user })).toBe(false);
+
+    expect(listLoanAnchors(itemId).find((row) => row.id === typoId)!.retractedAt).toBeNull();
+    expect(balanceOf(itemId)).toBe(before);
+    expect(current!.sqlite.prepare('select count(*) as c from loan_postings where item_id = ?').get(itemId)).toEqual(postingsBefore);
   });
 });
