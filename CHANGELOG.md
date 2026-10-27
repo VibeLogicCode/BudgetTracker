@@ -21,6 +21,27 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.59.0] - 2026-10-27
+
+No migration. Rows imported before this release keep the person they were filed to: the card a row
+came from was never stored, so nothing is re-attributed.
+
+### Changed
+
+- Import: a card linked to a person now decides who a charge belongs to, ahead of a person rule. The
+  order is the linked card holder, then a person rule, then the account's owner; a rule that names
+  Household still keeps a row off the owner. Apply now and Create a rule work as before and re-file
+  matching past rows.
+- Import results, Import all and the preview name the card values that are not linked to anyone,
+  and Settings, Accounts shows which import profiles have no cardholder column.
+- Budgets: an income line under the header shows money in, spent and net for the month, with
+  typical income from the last three complete months and a sentence when the month's limits add up
+  to more than that. Household compares household figures; a person compares their own limits with
+  the income attributed to them, and when none is, the line points to person rules for a paycheque.
+- Budgets: each section's actions share one button style and fold into an Actions menu on a phone.
+- Show and hide toggles, back links and card footer actions share one look across the app: accent
+  text, an arrow on back links and a chevron that turns when a section opens.
+
 ## [1.58.1] - 2026-10-27
 
 Migration 0029. Existing installs keep working and are not asked for a setup token. Synology pull
