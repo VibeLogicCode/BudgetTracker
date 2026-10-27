@@ -21,6 +21,38 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.58.1] - 2026-10-27
+
+Migration 0029. Existing installs keep working and are not asked for a setup token. Synology pull
+compose: add WATCHTOWER_TOKEN=<a long random value> to the .env file next to the compose file (see
+install/synology-pull.env.example) before pulling the new compose file.
+
+### Security
+
+- Members who see only their own money can no longer link a charge to someone else's bill, withdraw
+  a statement on another loan, record a loan payment into an account outside their list, hand an
+  item to another person, or rename every matching row in the household.
+- A payment rule on such a member's bill or loan now only matches that member's own transactions,
+  at import, bank sync and when the rule is saved.
+- The price-rise alert and the needs-review count no longer show household-wide figures to those
+  members (dashboard, transactions page and their weekly digest).
+- Sign-in lockout: a browser that has signed in to an account before keeps its own failure count,
+  so someone guessing the password elsewhere no longer locks the owner out. An unrecognised browser
+  keeps the same backoff as before.
+- Replacing two-factor sign-in that is already on needs the current password and a current code,
+  ends your other sessions and sends the account-security notice.
+- A restore signs everyone out. Settings, Backups says that users, passwords, two-factor settings
+  and deactivations go back to the backup's state.
+- New installs: the first-run setup page needs a one-time setup token printed in the server log
+  (or the value of SETUP_TOKEN when you set one).
+- The pull compose file needs your own WATCHTOWER_TOKEN. Settings shows a notice while the old
+  shared value is still in use; updates keep working until you change it.
+- Bank sync requests time out, refuse redirects and stop reading an oversized response.
+- The release workflow publishes only from main or a version tag, every workflow action is pinned
+  to a commit, and the image build checks the OCR language file against its checksum.
+- Install docs: back up data/secret.key separately and keep it readable by the owner only; a
+  restore onto another install needs the same key for two-factor and saved connection secrets.
+
 ## [1.58.0] - 2026-10-21
 
 ### Changed
