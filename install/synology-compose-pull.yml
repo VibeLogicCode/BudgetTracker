@@ -84,6 +84,9 @@ services:
       # receipt reader regardless of the hardware probe or its cache. Accepted values are
       # exactly "tesseract" or "onnx"; restart the project after changing this.
       # OCR_ENGINE: "tesseract"
+      # Optional (v1.58.1): your own first-run setup token, 16 characters or more, set as
+      # SETUP_TOKEN in the same `.env` file. Left unset, the app prints a random one in its log.
+      SETUP_TOKEN: "${SETUP_TOKEN:-}"
       # In-app updates (v1.3.1). `watchtower` is the compose service name and resolves only on
       # this project's private network -- it is not an internet address, and the app refuses to
       # send this request to any host that is not a bare service label, localhost, or a private

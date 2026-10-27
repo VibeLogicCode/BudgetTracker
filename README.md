@@ -339,12 +339,13 @@ comparison. Set `TRUST_PROXY=1` (so the app honours `X-Forwarded-Host`) and make
 the browser's hostname — nginx: `proxy_set_header X-Forwarded-Host $host;`. Only do this behind a
 proxy you control.
 
-**A user is locked out.** A per-address limit (5 failures in 15 minutes) applies only behind a
-trusted proxy (`TRUST_PROXY=1`), where the real client address is known. Otherwise, ten failed
-sign-ins for a username in 15 minutes back that username off for 15 minutes, doubling on repeat
-bursts up to 24 hours, for any browser that has not signed in as that user before. A browser that
-has signed in before keeps its own allowance (the same thresholds, counted separately) through a
-signed cookie that never signs anyone in. Either wait it out, or reset the password: an admin's
+**A user is locked out.** For a browser that has not signed in as that user before, five failed
+sign-ins in 15 minutes lock the username for 15 minutes (counted per address behind a trusted proxy,
+`TRUST_PROXY=1`, where the real client address is known), and ten in 15 minutes from any mix of
+addresses back it off for 15 minutes, doubling on repeat bursts up to 24 hours. A browser that has
+signed in before keeps its own allowance (ten failures in 15 minutes, counted separately) through a
+signed cookie that never signs anyone in; signing in there does not lift a lock other browsers
+earned. Either wait it out, or reset the password: an admin's
 **Reset password** under **Settings → Users**, or `npm run reset-password` on the host (see
 INSTALL.md for the `docker exec` form). Both clear the recorded attempts.
 

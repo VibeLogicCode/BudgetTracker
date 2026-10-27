@@ -72,46 +72,46 @@ describe('v1.58.1: payment rules respect a self-scoped item owner', () => {
     const itemId = makeItem('loan', alex);
     const mine = spend(alex);
     const theirs = spend(sam);
-    const ruleId = saveLoanRule({ itemId, merchantContains: 'FUEL STOP', accountId: null, enabled: true });
+    const ruleId = saveLoanRule({ itemId, merchantContains: 'FUEL STOP', accountId: null, enabled: true, at: new Date(NOW) });
 
-    expect(backfillLoanRule(ruleId, { at: new Date('2026-08-18T12:00:00Z') }).linked).toBe(1);
+    expect(backfillLoanRule(ruleId, { at: new Date(NOW) }).linked).toBe(1);
     expect(loanLinks()).toEqual([mine]);
     expect(loanLinks()).not.toContain(theirs);
   });
 
   it('(c) applyPaymentMatchers links only the owner\'s row for a loan', () => {
     const itemId = makeItem('loan', alex);
-    saveLoanRule({ itemId, merchantContains: 'FUEL STOP', accountId: null, enabled: true });
+    saveLoanRule({ itemId, merchantContains: 'FUEL STOP', accountId: null, enabled: true, at: new Date(NOW) });
     const theirs = spend(sam);
     const mine = spend(alex);
 
-    expect(applyPaymentMatchers([theirs, mine])).toBe(1);
+    expect(applyPaymentMatchers([theirs, mine], new Date(NOW))).toBe(1);
     expect(loanLinks()).toEqual([mine]);
   });
 
   it('(c) applyPaymentMatchers marks a bill installment paid only from the owner\'s row', () => {
     const itemId = makeItem('bill', alex);
-    const installmentId = addInstallment({ itemId, dueDate: '2026-08-12', amountCents: 45_000 });
-    saveLoanRule({ itemId, merchantContains: 'FUEL STOP', accountId: null, enabled: true });
+    const installmentId = addInstallment({ itemId, dueDate: '2026-08-12', amountCents: 45_000, at: NOW });
+    saveLoanRule({ itemId, merchantContains: 'FUEL STOP', accountId: null, enabled: true, at: new Date(NOW) });
     const theirs = spend(sam);
 
-    expect(applyPaymentMatchers([theirs])).toBe(0);
+    expect(applyPaymentMatchers([theirs], new Date(NOW))).toBe(0);
     const paidBefore = t.sqlite.prepare('select paid_txn_id as p from bill_installments where id = ?').get(installmentId) as { p: number | null };
     expect(paidBefore.p).toBeNull();
 
     const mine = spend(alex);
-    expect(applyPaymentMatchers([mine])).toBe(1);
+    expect(applyPaymentMatchers([mine], new Date(NOW))).toBe(1);
     const paidAfter = t.sqlite.prepare('select paid_txn_id as p from bill_installments where id = ?').get(installmentId) as { p: number | null };
     expect(paidAfter.p).toBe(mine);
   });
 
   it('(d) a household-owned item still matches any member\'s row', () => {
     const itemId = makeItem('loan', sam);
-    saveLoanRule({ itemId, merchantContains: 'FUEL STOP', accountId: null, enabled: true });
+    saveLoanRule({ itemId, merchantContains: 'FUEL STOP', accountId: null, enabled: true, at: new Date(NOW) });
     const fromAlex = spend(alex, '2026-08-10');
     const unattributed = spend(null, '2026-08-11');
 
     expect(loanRuleReach({ itemId, merchantContains: 'FUEL STOP', accountId: null })).toBe(2);
-    expect(applyPaymentMatchers([fromAlex, unattributed])).toBe(2);
+    expect(applyPaymentMatchers([fromAlex, unattributed], new Date(NOW))).toBe(2);
   });
 });

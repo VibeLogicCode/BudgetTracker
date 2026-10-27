@@ -111,17 +111,34 @@ describe('loginAction — v1.58.1: sign-in lockout with no trustworthy address',
     }
   }
 
-  it('does not lock on 5 failures with TRUST_PROXY off, and locks an unrecognised browser after 10', async () => {
+  it('locks an unrecognised browser on the 6th attempt with TRUST_PROXY off, whatever address each failure claimed', async () => {
     await withoutTrustProxy(async () => {
       current = createTestDb();
       await createUser({ name: 'Alex', username: 'alex', password: PASSWORD, role: 'admin' });
       await failTimes(5);
       mockHeaders = headersWithForgedIp(50);
-      const sixth = await loginAction({}, formData({ username: 'alex', password: 'wrong password' }));
-      expect(sixth.error).toBe(GENERIC_LOGIN_ERROR);
-      await failTimes(4);
-      const eleventh = await loginAction({}, formData({ username: 'alex', password: PASSWORD }));
-      expect(eleventh.error).toMatch(/Too many attempts\. Try again in \d+ minutes?\./);
+      const sixth = await loginAction({}, formData({ username: 'alex', password: PASSWORD }));
+      expect(sixth.error).toMatch(/Too many attempts\. Try again in \d+ minutes?\./);
+    });
+  });
+
+  it('keeps the unrecognised browser locked after a recognised browser signs in', async () => {
+    await withoutTrustProxy(async () => {
+      current = createTestDb();
+      await createUser({ name: 'Alex', username: 'alex', password: PASSWORD, role: 'admin' });
+      mockHeaders = SAME_ORIGIN_HEADERS;
+      await expect(loginAction({}, formData({ username: 'alex', password: PASSWORD }))).rejects.toThrow(/NEXT_REDIRECT/);
+      const known = fakeCookies.get('bt_device')!.value;
+
+      fakeCookies.clear();
+      await failTimes(5);
+      expect((await loginAction({}, formData({ username: 'alex', password: PASSWORD }))).error).toMatch(/Too many attempts/);
+
+      fakeCookies.set('bt_device', known);
+      await expect(loginAction({}, formData({ username: 'alex', password: PASSWORD }))).rejects.toThrow(/NEXT_REDIRECT/);
+
+      fakeCookies.clear();
+      expect((await loginAction({}, formData({ username: 'alex', password: PASSWORD }))).error).toMatch(/Too many attempts/);
     });
   });
 
@@ -139,7 +156,7 @@ describe('loginAction — v1.58.1: sign-in lockout with no trustworthy address',
     });
   });
 
-  it('lets a recognised browser sign in while an unrecognised one is backed off, and locks that device after its own 10 failures', async () => {
+  it('lets a recognised browser sign in while an unrecognised one is locked, and locks that device after its own 10 failures', async () => {
     await withoutTrustProxy(async () => {
       current = createTestDb();
       await createUser({ name: 'Alex', username: 'alex', password: PASSWORD, role: 'admin' });
@@ -149,7 +166,7 @@ describe('loginAction — v1.58.1: sign-in lockout with no trustworthy address',
 
       // another browser (no cookie) is guessing
       fakeCookies.clear();
-      await failTimes(10);
+      await failTimes(5);
       const guesser = await loginAction({}, formData({ username: 'alex', password: PASSWORD }));
       expect(guesser.error).toMatch(/Too many attempts/);
 

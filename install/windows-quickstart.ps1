@@ -404,6 +404,8 @@ services:
       DATA_DIR: /data
       WATCHTOWER_URL: "http://watchtower:8080/v1/update"
       WATCHTOWER_TOKEN: "${WatchtowerToken}"
+      # Optional: your own first-run setup token (16+ characters) from a .env file beside this one.
+      SETUP_TOKEN: "`${SETUP_TOKEN:-}"
     volumes:
       - ./data:/data
     labels:

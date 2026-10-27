@@ -1573,6 +1573,8 @@ describe('v1.58.1: updateWarrantyAction owner changes', () => {
 });
 
 describe('v1.58.1: retractLoanAnchorAction binds the anchor to the gated item', () => {
+  const NOW = '2026-03-10T12:00:00.000Z';
+
   it("own item id with another member's anchor id withdraws nothing", async () => {
     const own = seedLoanItem({ balanceCents: 1_000_000 });
     const otherOwner = insertTestUser(current!.db, { name: 'Sam', username: 'sam', role: 'member' });
@@ -1581,7 +1583,7 @@ describe('v1.58.1: retractLoanAnchorAction binds the anchor to the gated item', 
       name: 'Boat Loan', vendor: null, model: null, serial: null, purchaseDate: '2026-01-01', warrantyMonths: null,
       isLifetime: false, priceCents: null, ownerUserId: otherOwner, transactionId: null, typeId: otherLoanType.id, notes: null,
       principalCents: 3_000_000, interestRateBps: null, interestRateBasis: null,
-      currentBalanceCents: 2_000_000, balanceUpdatedAt: nowIso(),
+      currentBalanceCents: 2_000_000, balanceUpdatedAt: NOW,
     });
     setLoanAnchor({ itemId: other, asOfDate: '2026-03-01', balanceCents: 900_000, source: 'reconcile', actorUserId: otherOwner });
     const anchorId = listLoanAnchors(other)[0]!.id;

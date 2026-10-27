@@ -1045,3 +1045,17 @@ describe('v1.12.1: INSTALL.md says what a backup archive really contains (item B
     expect(section).toMatch(/will not bring those settings back/i);
   });
 });
+
+// v1.58.1: compose passes only the variables it names, so SETUP_TOKEN set in `.env` reaches the
+// app only where the environment block lists it. Unset, it arrives empty and the app ignores it.
+describe('v1.58.1: SETUP_TOKEN reaches the container from .env', () => {
+  it('is listed, empty when unset, in every compose file that reads .env', () => {
+    expect(read('docker-compose.yml')).toMatch(/^ {6}SETUP_TOKEN: \$\{SETUP_TOKEN:-\}\r?$/m);
+    expect(read('install/synology-compose-pull.yml')).toMatch(/^ {6}SETUP_TOKEN: "\$\{SETUP_TOKEN:-\}"\r?$/m);
+    const quickstart = read('install/windows-quickstart.ps1');
+    const start = quickstart.indexOf('$yaml = @"');
+    const yaml = quickstart.slice(start, quickstart.indexOf('"@', start + 10));
+    // The backtick keeps PowerShell from expanding it, so the written file holds the compose variable.
+    expect(yaml).toMatch(/^ {6}SETUP_TOKEN: "`\$\{SETUP_TOKEN:-\}"\r?$/m);
+  });
+});

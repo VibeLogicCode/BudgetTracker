@@ -19,6 +19,9 @@ services:
       # Optional escape hatch (v1.5.0) -- see INSTALL.md's OCR section. Forces one receipt
       # reader regardless of the hardware probe or its cache; "tesseract" or "onnx" only.
       OCR_ENGINE: ${OCR_ENGINE:-}
+      # Optional (v1.58.1). Your own first-run setup token, 16 characters or more; when unset (or
+      # blank) the app prints a random one in its log while no account exists. Set it in .env.
+      SETUP_TOKEN: ${SETUP_TOKEN:-}
     volumes:
       - ./data:/data
     # Container hardening (spec section 6).

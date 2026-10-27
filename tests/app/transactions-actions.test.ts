@@ -2918,6 +2918,8 @@ describe('card-row fixes revalidate every page whose figures they change', () =>
 
 // v1.58.1: a self-scoped viewer's bill link and rule writes stay inside what that viewer may touch.
 describe('v1.58.1: assignToBillAction resolves the bill through the viewer', () => {
+  const NOW = '2026-03-10T12:00:00.000Z';
+
   function seedBill(ownerUserId: number, name: string): { itemId: number; installmentId: number } {
     const billType = createItemType(`Bill ${randomUUID()}`, 'bill');
     const itemId = createWarrantyItem({
@@ -2936,7 +2938,7 @@ describe('v1.58.1: assignToBillAction resolves the bill through the viewer', () 
     });
     const installmentId = current!.db.get<{ id: number }>(sql`
       insert into bill_installments (item_id, due_date, amount_cents, created_at)
-      values (${itemId}, '2026-03-05', 5000, ${nowIso()}) returning id`).id;
+      values (${itemId}, '2026-03-05', 5000, ${NOW}) returning id`).id;
     return { itemId, installmentId };
   }
 
@@ -2948,7 +2950,7 @@ describe('v1.58.1: assignToBillAction resolves the bill through the viewer', () 
     const samAccount = insertTestAccount(db, { name: 'Sam Cash', type: 'cash', ownerUserId: samId });
     const txnId = db.get<{ id: number }>(sql`
       insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, attributed_user_id, created_by, created_at, updated_at)
-      values (${samAccount}, '2026-03-02', 'FUEL STOP 12', ${normalizeMerchant('FUEL STOP 12')}, -5000, ${samId}, ${samId}, ${nowIso()}, ${nowIso()})
+      values (${samAccount}, '2026-03-02', 'FUEL STOP 12', ${normalizeMerchant('FUEL STOP 12')}, -5000, ${samId}, ${samId}, ${NOW}, ${NOW})
       returning id`).id;
     currentUser = { id: samId, name: 'Sam', username: 'sam', role: 'member', visibility };
     return { db, alexId, samId, txnId, adminId: userId };

@@ -1,4 +1,4 @@
-import { and, eq, lt, sql } from 'drizzle-orm';
+import { and, eq, isNull, lt, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { loginAttempts } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
@@ -16,7 +16,10 @@ export const USERNAME_HISTORY_MS = 24 * 60 * 60 * 1000;
 
 export const ATTEMPT_RETENTION_DAYS = 30;
 
-/** v1.58.1: the address a request carries when no trustworthy one exists; it never gets a per-address bucket. */
+/**
+ * v1.58.1: the address a request carries when no trustworthy one exists. It never gets a per-address
+ * bucket; layer A counts that username's failures from unrecognised browsers instead.
+ */
 export const UNKNOWN_IP = 'unknown';
 
 export type LockoutReason = 'none' | 'user_ip' | 'username' | 'device';
@@ -52,20 +55,29 @@ export function recordLoginAttempt(input: {
     .run();
 }
 
-function lastSuccessIso(username: string): string | null {
+/** v1.58.1: a null deviceId selects rows from unrecognised browsers; a device id selects that device's rows. */
+function deviceCondition(deviceId: string | null) {
+  return deviceId === null ? isNull(loginAttempts.deviceId) : eq(loginAttempts.deviceId, deviceId);
+}
+
+/** Newest success for the username from unrecognised browsers (deviceId null) or from one device. */
+function lastSuccessIso(username: string, deviceId: string | null): string | null {
   const row = getDb()
     .select({ createdAt: sql<string>`max(${loginAttempts.createdAt})` })
     .from(loginAttempts)
-    .where(and(eq(loginAttempts.username, username), eq(loginAttempts.success, true)))
+    .where(and(eq(loginAttempts.username, username), eq(loginAttempts.success, true), deviceCondition(deviceId)))
     .get();
   return row?.createdAt ?? null;
 }
 
-/** Failure timestamps (ms, newest first) since the given floor. */
-function failuresSince(username: string, ip: string | null, floorIso: string, deviceId: string | null = null): number[] {
+/**
+ * Failure timestamps (ms, newest first) since the given floor. `ip` keeps one address; `deviceId`
+ * keeps one device, or only unrecognised browsers when null; an omitted filter keeps every row.
+ */
+function failuresSince(username: string, floorIso: string, filter: { ip?: string; deviceId?: string | null } = {}): number[] {
   const conditions = [eq(loginAttempts.username, username), eq(loginAttempts.success, false), sql`${loginAttempts.createdAt} > ${floorIso}`];
-  if (ip !== null) conditions.push(eq(loginAttempts.ip, ip));
-  if (deviceId !== null) conditions.push(eq(loginAttempts.deviceId, deviceId));
+  if (filter.ip !== undefined) conditions.push(eq(loginAttempts.ip, filter.ip));
+  if (filter.deviceId !== undefined) conditions.push(deviceCondition(filter.deviceId));
   const rows = getDb()
     .select({ createdAt: loginAttempts.createdAt })
     .from(loginAttempts)
@@ -119,32 +131,38 @@ function backoffUntil(failuresDesc: number[]): number | null {
 export function checkLockout(input: { username: string; ip: string; deviceId?: string | null; at?: Date }): LockoutStatus {
   const username = normalizeUsername(input.username);
   const now = (input.at ?? new Date()).getTime();
-  const success = lastSuccessIso(username);
-  const historyFloor = laterIso(success, new Date(now - USERNAME_HISTORY_MS).toISOString());
+  const historyStart = new Date(now - USERNAME_HISTORY_MS).toISOString();
 
   // ---- Device bucket: a recognised browser (deviceId already verified by the caller) is judged only
-  // on its own failures, with the username-wide thresholds. ----
+  // on its own failures, with the username-wide thresholds, floored at its own last success. ----
   if (input.deviceId) {
-    const until = backoffUntil(failuresSince(username, null, historyFloor, input.deviceId));
+    const deviceFloor = laterIso(lastSuccessIso(username, input.deviceId), historyStart);
+    const until = backoffUntil(failuresSince(username, deviceFloor, { deviceId: input.deviceId }));
     if (until !== null && now < until) return { locked: true, reason: 'device', retryAfterMs: until - now };
     return UNLOCKED;
   }
 
-  // ---- Layer A: (username, ip), 5 failures / 15 min -> 15 min lockout. Real addresses only. ----
+  // Layers A and B are floored at the last success from an unrecognised browser, so a recognised
+  // browser signing in leaves their counts (and the backoff's doubling) in place.
+  const success = lastSuccessIso(username, null);
+  const historyFloor = laterIso(success, historyStart);
+
+  // ---- Layer A: 5 failures / 15 min -> 15 min lockout, per (username, ip) for a real address. With
+  // no trustworthy address it counts the username's failures from unrecognised browsers instead, so
+  // 'unknown' is never one bucket shared across usernames. ----
   // Floor is bounded to now-(WINDOW+LOCKOUT): any failure old enough that even its
   // own 15-min lockout would already have expired can never contribute to a still-
   // active or newly-forming lockout, so it's safe (and keeps the query bounded for
   // never-successful usernames) to exclude it up front.
-  if (input.ip !== UNKNOWN_IP) {
-    const layerAFloor = laterIso(success, new Date(now - (USER_IP_WINDOW_MS + USER_IP_LOCKOUT_MS)).toISOString());
-    const layerACandidate = layerACandidateUntil(failuresSince(username, input.ip, layerAFloor));
-    if (layerACandidate !== null && now < layerACandidate) {
-      return { locked: true, reason: 'user_ip', retryAfterMs: layerACandidate - now };
-    }
+  const layerAFloor = laterIso(success, new Date(now - (USER_IP_WINDOW_MS + USER_IP_LOCKOUT_MS)).toISOString());
+  const layerAFilter = input.ip === UNKNOWN_IP ? { deviceId: null } : { ip: input.ip };
+  const layerACandidate = layerACandidateUntil(failuresSince(username, layerAFloor, layerAFilter));
+  if (layerACandidate !== null && now < layerACandidate) {
+    return { locked: true, reason: 'user_ip', retryAfterMs: layerACandidate - now };
   }
 
   // ---- Layer B: username only (every failure, device rows included), 10 failures / 15 min burst ----
-  const until = backoffUntil(failuresSince(username, null, historyFloor));
+  const until = backoffUntil(failuresSince(username, historyFloor));
   if (until !== null && now < until) return { locked: true, reason: 'username', retryAfterMs: until - now };
 
   return UNLOCKED;

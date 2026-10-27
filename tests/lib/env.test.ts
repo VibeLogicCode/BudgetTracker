@@ -280,6 +280,16 @@ describe('MUST-7.2: the two optional Watchtower variables', () => {
   });
 });
 
+describe('v1.58.1: SETUP_TOKEN', () => {
+  it('is null when absent, empty (an unset compose ${SETUP_TOKEN:-}) or blank, and trimmed otherwise', () => {
+    const base = { SECRET_KEY: 'x'.repeat(40), DATA_DIR: '/tmp/bt-env-test' };
+    expect(readEnv(base).setupToken).toBeNull();
+    expect(readEnv({ ...base, SETUP_TOKEN: '' }).setupToken).toBeNull();
+    expect(readEnv({ ...base, SETUP_TOKEN: '   ' }).setupToken).toBeNull();
+    expect(readEnv({ ...base, SETUP_TOKEN: ' first-run-token-value ' }).setupToken).toBe('first-run-token-value');
+  });
+});
+
 describe('OCR_ENGINE override (v1.5.0 defect fix)', () => {
   const base = { SECRET_KEY: 'x'.repeat(40), DATA_DIR: '/tmp/bt-env-test' };
 

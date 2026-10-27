@@ -281,14 +281,34 @@ describe('v1.12.1: x-real-ip is untrusted unless TRUST_PROXY is on (item AB / SE
   });
 });
 
-describe('v1.58.1: per-address layer applies only to a real address', () => {
-  it('never locks on the shared unknown address after 5 failures, and layer B still locks after 10', () => {
+describe('v1.58.1: layer A with and without a real address', () => {
+  it('locks an unrecognised browser on the unknown address after 5 failures, as before', () => {
     current = createTestDb();
-    for (let i = 0; i < USER_IP_MAX_FAILURES; i += 1) fail('alex', UNKNOWN_IP, i);
+    for (let i = 0; i < USER_IP_MAX_FAILURES - 1; i += 1) fail('alex', UNKNOWN_IP, i);
+    expect(checkLockout({ username: 'alex', ip: UNKNOWN_IP, deviceId: null, at: at(4) }).locked).toBe(false);
+    fail('alex', UNKNOWN_IP, 4);
+    const status = checkLockout({ username: 'alex', ip: UNKNOWN_IP, deviceId: null, at: at(5) });
+    expect(status).toMatchObject({ locked: true, reason: 'user_ip' });
+    expect(status.retryAfterMs).toBe(USER_IP_LOCKOUT_MS - 60_000);
+  });
+
+  it('never shares the unknown address across usernames', () => {
+    current = createTestDb();
+    for (let i = 0; i < USER_IP_MAX_FAILURES; i += 1) fail('sam', UNKNOWN_IP, i);
+    expect(checkLockout({ username: 'sam', ip: UNKNOWN_IP, deviceId: null, at: at(5) }).locked).toBe(true);
     expect(checkLockout({ username: 'alex', ip: UNKNOWN_IP, deviceId: null, at: at(5) }).locked).toBe(false);
-    for (let i = 5; i < USERNAME_MAX_FAILURES; i += 1) fail('alex', UNKNOWN_IP, i);
-    const status = checkLockout({ username: 'alex', ip: UNKNOWN_IP, deviceId: null, at: at(10) });
-    expect(status).toMatchObject({ locked: true, reason: 'username' });
+  });
+
+  it('leaves recognised browsers out of it, both their failures and their sign-ins', () => {
+    current = createTestDb();
+    for (let i = 0; i < USER_IP_MAX_FAILURES; i += 1) {
+      recordLoginAttempt({ username: 'alex', ip: UNKNOWN_IP, success: false, at: at(i), deviceId: 'dev-a' });
+    }
+    expect(checkLockout({ username: 'alex', ip: UNKNOWN_IP, deviceId: null, at: at(5) }).locked).toBe(false);
+
+    for (let i = 0; i < USER_IP_MAX_FAILURES; i += 1) fail('sam', UNKNOWN_IP, i);
+    expect(checkLockout({ username: 'sam', ip: UNKNOWN_IP, deviceId: null, at: at(5) }).reason).toBe('user_ip');
+    expect(checkLockout({ username: 'sam', ip: UNKNOWN_IP, deviceId: 'dev-b', at: at(5) }).locked).toBe(false);
   });
 
   it('still locks a real address after 5 failures', () => {
@@ -321,9 +341,16 @@ describe('v1.58.1: device bucket', () => {
 
   it('does not let username-wide failures from other browsers lock a recognised device', () => {
     current = createTestDb();
-    for (let i = 0; i < USERNAME_MAX_FAILURES; i += 1) failDevice('alex', null, i);
-    expect(checkLockout({ username: 'alex', ip: UNKNOWN_IP, deviceId: null, at: at(10) }).reason).toBe('username');
+    for (let i = 0; i < USERNAME_MAX_FAILURES; i += 1) fail('alex', `10.0.0.${i + 1}`, i);
+    expect(checkLockout({ username: 'alex', ip: '10.0.0.200', deviceId: null, at: at(10) }).reason).toBe('username');
     expect(checkLockout({ username: 'alex', ip: UNKNOWN_IP, deviceId: 'dev-a', at: at(10) }).locked).toBe(false);
+  });
+
+  it("is cleared only by that device's own sign-in, not another device's", () => {
+    current = createTestDb();
+    for (let i = 0; i < USERNAME_MAX_FAILURES; i += 1) failDevice('alex', 'dev-a', i);
+    recordLoginAttempt({ username: 'alex', ip: UNKNOWN_IP, success: true, at: at(10), deviceId: 'dev-b' });
+    expect(checkLockout({ username: 'alex', ip: UNKNOWN_IP, deviceId: 'dev-a', at: at(11) })).toMatchObject({ locked: true, reason: 'device' });
   });
 
   it('device failures count toward the username-wide bucket for unrecognised browsers', () => {
@@ -336,5 +363,34 @@ describe('v1.58.1: device bucket', () => {
     current = createTestDb();
     for (let i = 0; i < USERNAME_MAX_FAILURES; i += 1) failDevice('alex', 'dev-a', i);
     expect(checkLockout({ username: 'alex', ip: UNKNOWN_IP, deviceId: 'dev-b', at: at(10) }).locked).toBe(false);
+  });
+});
+
+describe('v1.58.1: a recognised browser signing in leaves the unrecognised-browser layers in place', () => {
+  const signInOnDevice = (minutes: number) =>
+    recordLoginAttempt({ username: 'alex', ip: UNKNOWN_IP, success: true, at: at(minutes), deviceId: 'dev-a' });
+
+  it('keeps the username backoff and its doubling', () => {
+    current = createTestDb();
+    for (let i = 0; i < USERNAME_MAX_FAILURES; i += 1) fail('alex', `10.0.0.${i + 1}`, i);
+    signInOnDevice(10);
+    const status = checkLockout({ username: 'alex', ip: '10.0.0.200', deviceId: null, at: at(11) });
+    expect(status).toMatchObject({ locked: true, reason: 'username' });
+    expect(status.retryAfterMs).toBe(USERNAME_BASE_LOCKOUT_MS - 2 * 60_000);
+    expect(checkLockout({ username: 'alex', ip: UNKNOWN_IP, deviceId: 'dev-a', at: at(11) }).locked).toBe(false);
+
+    // the next burst is round 2 (30 minutes), not a fresh round 1
+    for (let i = 0; i < USERNAME_MAX_FAILURES; i += 1) fail('alex', `10.0.1.${i + 1}`, 30 + i);
+    const second = checkLockout({ username: 'alex', ip: '10.0.0.200', deviceId: null, at: at(40) });
+    expect(second.retryAfterMs).toBe(USERNAME_BASE_LOCKOUT_MS * 2 - 60_000);
+  });
+
+  it('keeps layer A, on a real address and on the unknown one', () => {
+    current = createTestDb();
+    for (let i = 0; i < USER_IP_MAX_FAILURES; i += 1) fail('alex', '10.0.0.5', i);
+    for (let i = 0; i < USER_IP_MAX_FAILURES; i += 1) fail('alex', UNKNOWN_IP, i);
+    signInOnDevice(5);
+    expect(checkLockout({ username: 'alex', ip: '10.0.0.5', deviceId: null, at: at(6) }).reason).toBe('user_ip');
+    expect(checkLockout({ username: 'alex', ip: UNKNOWN_IP, deviceId: null, at: at(6) }).reason).toBe('user_ip');
   });
 });
