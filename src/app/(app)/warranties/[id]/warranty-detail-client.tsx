@@ -94,6 +94,7 @@ import {
   type WarrantyActionState,
 } from '../actions';
 import { buttonClass } from '@/components/ui/Button';
+import { BackLink } from '@/components/ui/BackLink';
 import { LoanLedgerCard } from '@/components/LoanLedgerCard';
 import type { Ledger } from '@/lib/loans/ledger';
 import { ReconcileLoanForm } from './reconcile-loan-form';
@@ -617,13 +618,13 @@ export function WarrantyDetailClient({
 
   return (
     <div className="flex flex-col gap-4 sm:gap-5">
+      <BackLink href="/warranties">Back to Loans &amp; Coverage</BackLink>
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
         <div className="flex min-w-0 flex-wrap items-center gap-3">
           <h1 className="text-2xl font-semibold tracking-tight text-ink">{item.name}</h1>
           <StatusBadge status={status} expiryDate={item.expiryDate} today={today} kind={item.kind} />
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Link href="/warranties" className={buttonClass('ghost', 'sm')}>Back to Loans &amp; Coverage</Link>
           {/*
             Always "Edit". It used to read "Cancel edit" while the form was open, which made sense
             when the form replaced the page; now the form is a dialog and this button sits behind

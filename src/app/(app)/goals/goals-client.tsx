@@ -16,6 +16,7 @@ import { Pill } from '@/components/ui/Pill';
 import type { ContributionRecord, GoalWithProgress } from '@/lib/goals';
 import { addContributionAction, archiveGoalAction, deleteContributionAction, type GoalActionState } from './actions';
 import { buttonClass } from '@/components/ui/Button';
+import { DisclosureSummary } from '@/components/ui/Disclosure';
 
 const initial: GoalActionState = {};
 
@@ -145,8 +146,8 @@ export function GoalsClient({
                   </form>
 
                   {contributions.length > 0 ? (
-                    <details className="text-xs">
-                      <summary className="cursor-pointer text-muted">{contributions.length} contributions</summary>
+                    <details className="group/disclosure text-xs">
+                      <DisclosureSummary>{contributions.length} contributions</DisclosureSummary>
                       <ul className="mt-2 flex flex-col gap-1.5">
                         {contributions.map((contribution) => (
                           <li key={contribution.id} className="flex items-center justify-between gap-2">

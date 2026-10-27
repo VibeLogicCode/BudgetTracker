@@ -81,7 +81,8 @@ describe('GuidePanel: the shared shell', () => {
     expect(details?.className).toContain('border-line');
     // The reserved colour: a guide must never look like a statement about the reader's money.
     expect(details?.className).not.toContain('info-soft');
-    expect(container.querySelector('summary')?.className).toContain('cursor-pointer');
+    expect(container.querySelector('summary')?.className).toContain('text-accent-text');
+    expect(container.querySelector('summary svg')?.getAttribute('aria-hidden')).toBe('true');
   });
 
   it('renders no clickable address, so the zero-egress claim stays auditable', () => {

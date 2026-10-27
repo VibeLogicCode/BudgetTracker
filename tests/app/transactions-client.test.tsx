@@ -3739,6 +3739,7 @@ function renderGrouped(overrides: Partial<CategoryGroupPage> = {}, currentQuery 
 describe('v1.26.0 Lane 3a item 2: the grouped-by-category view', () => {
   it('renders one header per cluster, each with its name, row count and subtotal', () => {
     const { container } = renderGrouped();
+    expect(container.querySelector('ul[data-category-groups] summary')?.className).toContain('text-accent-text');
     const headers = Array.from(container.querySelectorAll('ul[data-category-groups] summary')).map((node) =>
       (node.textContent ?? '').replace(/\s+/g, ' ').trim(),
     );
@@ -3927,7 +3928,8 @@ describe('the grouped view: the way back out of a drill-down', () => {
   it('offers a back link whose href restores the grouped view and drops the drill-down filter', () => {
     const { container } = renderDrilled('import=7&source=rule&category=42&exact=1&via=groups');
     const back = container.querySelector('[data-groups-breadcrumb] a');
-    expect((back?.textContent ?? '').trim()).toBe('← All categories');
+    expect((back?.textContent ?? '').trim()).toBe('All categories');
+    expect(back?.hasAttribute('data-back')).toBe(true);
     const href = back?.getAttribute('href') ?? '';
     expect(href).toContain('group=category');
     // The three params that made this a drill-down all go; everything else that was filtering
@@ -3998,7 +4000,8 @@ describe('Back to Budgets (spec 2026-10-21, fix from Budgets §2.6)', () => {
   it('links back to the month, the person and the top-level card, and names the category and month as text', () => {
     const { container } = renderFromBudgets('range=custom&from=2026-03-01&to=2026-03-31&person=7&category=43&exact=1&spend=1&via=budgets', { preset: 'custom', from: '2026-03-01', to: '2026-03-31' });
     const back = container.querySelector('[data-budgets-breadcrumb] a');
-    expect((back?.textContent ?? '').trim()).toBe('← Back to Budgets');
+    expect((back?.textContent ?? '').trim()).toBe('Back to Budgets');
+    expect(back?.hasAttribute('data-back')).toBe(true);
     expect(back?.getAttribute('href')).toBe('/budgets?month=2026-03&person=7#budget-card-personal-7-42');
     expect(container.querySelector('[data-budgets-breadcrumb]')?.textContent).toContain('Produce — March 2026');
     expect(container.querySelector('[data-budgets-breadcrumb]')?.className).not.toContain('hidden');

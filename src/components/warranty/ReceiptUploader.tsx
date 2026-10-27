@@ -9,6 +9,7 @@ import { candidateLabel, type AmountCandidate, type DateCandidate } from '@/lib/
 import { isIsoDate } from '@/lib/dates';
 import { formatCents } from '@/lib/money';
 import { buttonClass } from '@/components/ui/Button';
+import { DisclosureSummary } from '@/components/ui/Disclosure';
 import { InUseIcon } from '@/components/ui/icons';
 
 /**
@@ -262,8 +263,8 @@ function ReadFigures({
         </dl>
       ) : null}
       {others > 0 ? (
-        <details>
-          <summary className="cursor-pointer text-subtle">Other figures ({others})</summary>
+        <details className="group/disclosure">
+          <DisclosureSummary>Other figures ({others})</DisclosureSummary>
           <div className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] items-baseline gap-x-2 gap-y-1.5">
             {amounts.length > 0 ? (
               <>
@@ -734,8 +735,8 @@ export function ReceiptUploader({
                 {/* Spec 2026-09-30 §2.3: what the reader saw, so a wrong or missing figure can be
                     checked against it. Text from an arbitrary receipt: text nodes only (MUST-13.3). */}
                 {file.lines && file.lines.length > 0 ? (
-                  <details>
-                    <summary className="cursor-pointer text-subtle">What was read</summary>
+                  <details className="group/disclosure">
+                    <DisclosureSummary>What was read</DisclosureSummary>
                     <ol className="mt-1 flex max-h-48 flex-col gap-0.5 overflow-y-auto break-words text-muted">
                       {file.lines.map((line, index) => (
                         <li key={index}>{line}</li>

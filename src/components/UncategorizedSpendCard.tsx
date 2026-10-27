@@ -1,5 +1,4 @@
-import Link from 'next/link';
-import { buttonClass } from '@/components/ui/Button';
+import { CardActionRow } from '@/components/ui/CardActionRow';
 import { WarningIcon } from '@/components/ui/icons';
 import { MetricCard } from '@/components/ui/MetricCard';
 import { Pill } from '@/components/ui/Pill';
@@ -30,11 +29,7 @@ export function UncategorizedSpendCard({
       pill={<Pill tone="warning">Needs attention</Pill>}
       value={formatCents(spend.totalCents)}
       status={spend.count === 1 ? '1 transaction' : `${spend.count} transactions`}
-      action={
-        <Link href={href} className={buttonClass('ghost', 'sm', 'w-fit px-0 text-xs')}>
-          Categorize
-        </Link>
-      }
+      action={<CardActionRow href={href}>Categorize</CardActionRow>}
     />
   );
 }

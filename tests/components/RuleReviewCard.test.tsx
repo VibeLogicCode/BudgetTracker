@@ -64,6 +64,7 @@ describe('RuleReviewCard (v1.26.0 Lane 3b)', () => {
     expect(details).not.toBeNull();
     const summary = details!.querySelector('summary');
     expect(summary?.textContent).toBe('+4 more to check');
+    expect(summary?.className).toContain('text-accent-text');
 
     // The first five sit outside the disclosure, the other four inside it -- each with the same
     // Check link and Dismiss control as the rows above.

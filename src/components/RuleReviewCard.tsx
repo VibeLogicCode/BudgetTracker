@@ -5,6 +5,7 @@ import { DismissAllImportsForm } from '@/components/DismissAllImportsForm';
 import { DismissImportForm } from '@/components/DismissImportForm';
 import { ListRow } from '@/components/ui/ListRow';
 import { buttonClass } from '@/components/ui/Button';
+import { DisclosureSummary } from '@/components/ui/Disclosure';
 
 /**
  * v1.26.0 Lane 3b. The standing notice for an import whose rules ran and whose results nobody
@@ -91,11 +92,9 @@ export function RuleReviewCard({ imports }: { imports: UnreviewedImportRow[] }) 
         // check, so a link away would land somewhere with nothing to do. A native <details> so the
         // card stays a server component and needs no script; React does not own its `open`
         // attribute, so a Dismiss inside it re-renders the card without closing it. The summary
-        // keeps `display: list-item` so the browser's marker survives.
-        <details className="border-t border-line text-sm">
-          <summary className="min-h-11 cursor-pointer px-4 py-3 font-medium text-accent-text marker:text-subtle sm:min-h-0 sm:px-5">
-            {`+${hidden.length} more to check`}
-          </summary>
+        // is the shared DisclosureSummary, whose chevron follows the open state.
+        <details className="group/disclosure border-t border-line text-sm">
+          <DisclosureSummary className="min-h-11 px-4 py-3 sm:min-h-0 sm:px-5">{`+${hidden.length} more to check`}</DisclosureSummary>
           <ul className="border-t border-line">
             {hidden.map((row) => (
               <ImportRow key={row.importId} row={row} />

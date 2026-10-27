@@ -9,7 +9,7 @@ import { Notice } from '@/components/ui/Notice';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Field, inputClass, selectClass } from '@/components/ui/form';
 import { AutoSaveCheckbox, AutoSaveTextInput } from '@/components/ui/AutoSave';
-import { ExpandIcon } from '@/components/ui/icons';
+import { DisclosureButton } from '@/components/ui/Disclosure';
 import { orderedCategoryRows } from '@/lib/category-order';
 import type { CategoryRecord } from '@/lib/categories';
 import type { ProfileRecord, ProfileUsage } from '@/lib/import/presets';
@@ -180,18 +180,12 @@ function CategoryRow({
     >
       <div style={{ paddingLeft: `${depth * 20}px` }} className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
         {disclosure ? (
-          <button
-            type="button"
-            aria-expanded={disclosure.open}
-            aria-controls={disclosure.controlsId}
-            aria-label={`${disclosure.open ? 'Collapse' : 'Expand'} ${category.name}`}
-            onClick={disclosure.onToggle}
-            className="inline-flex min-h-11 min-w-0 shrink-0 items-center py-1 sm:min-h-0"
-          >
-            {/* Same chevron, same rhythm as budgets-client.tsx's EditRow: closed is the
-                default shape, so only the OPEN state rotates. */}
-            <ExpandIcon className={`h-4 w-4 shrink-0 text-muted transition-transform ${disclosure.open ? 'rotate-90' : ''}`} />
-          </button>
+          <DisclosureButton
+            open={disclosure.open}
+            onToggle={disclosure.onToggle}
+            controls={disclosure.controlsId}
+            label={`${disclosure.open ? 'Collapse' : 'Expand'} ${category.name}`}
+          />
         ) : null}
         <AutoSaveTextInput
           name="name"

@@ -39,6 +39,28 @@ function renderClient(over: { archived?: boolean; showArchived?: boolean } = {})
   );
 }
 
+describe('GoalsClient — contributions disclosure', () => {
+  it('uses the shared disclosure summary', () => {
+    const { container } = render(
+      <GoalsClient
+        today="2026-08-16"
+        showArchived={false}
+        goals={[
+          {
+            goal: goal(),
+            contributions: [
+              { id: 1, goalId: 1, userId: 1, userName: 'Alex', amountCents: 1000, date: '2026-08-01', note: null },
+            ],
+          },
+        ]}
+      />,
+    );
+    const summary = Array.from(container.querySelectorAll('summary')).find((el) => el.textContent === '1 contributions');
+    expect(summary).toBeTruthy();
+    expect(summary!.className).toContain('text-accent-text');
+  });
+});
+
 describe('GoalsClient — polish item 6: archived goals are reachable again', () => {
   it('offers a "Show archived" link when archived goals are hidden', () => {
     const { getByText } = renderClient();

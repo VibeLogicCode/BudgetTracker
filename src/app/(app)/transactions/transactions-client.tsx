@@ -90,6 +90,8 @@ import {
 } from './actions';
 import type { RecurringMark } from '@/lib/categorize/mark-kinds';
 import { buttonClass } from '@/components/ui/Button';
+import { DisclosureSummary } from '@/components/ui/Disclosure';
+import { BackLink } from '@/components/ui/BackLink';
 
 // The table's own <colgroup> below carries one <col> per column: checkbox, date, account,
 // description, amount, category, person, kebab. The note sub-row spans all of them, read off
@@ -2633,9 +2635,7 @@ export function TransactionsClient({
             : landed.name;
     return (
       <div data-groups-breadcrumb className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted">
-        <Link href={backToGroupsHref()} className={buttonClass('ghost', 'sm')}>
-          ← All categories
-        </Link>
+        <BackLink href={backToGroupsHref()}>All categories</BackLink>
         {here !== null ? (
           <>
             <span aria-hidden="true">·</span>
@@ -2667,9 +2667,7 @@ export function TransactionsClient({
     });
     return (
       <div data-budgets-breadcrumb className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted">
-        <Link href={backHref} className={buttonClass('ghost', 'sm')}>
-          ← Back to Budgets
-        </Link>
+        <BackLink href={backHref}>Back to Budgets</BackLink>
         {landed !== undefined ? (
           <>
             <span aria-hidden="true">·</span>
@@ -2747,13 +2745,11 @@ export function TransactionsClient({
         <ul data-category-groups>
           {groupPage.groups.map((group) => (
             <li key={group.categoryId ?? 'uncategorized'} className="border-b border-line last:border-b-0">
-              <details>
-                {/* Left on `display: list-item` (no `flex` on the summary itself) so the browser's
-                    own disclosure triangle survives -- Chrome drops the marker the moment a summary
-                    becomes a flex container, and a disclosure with no marker is one nobody knows to
-                    click. The flex layout lives on the span INSIDE it instead. */}
-                <summary className="min-h-11 cursor-pointer px-4 py-3 marker:text-subtle sm:min-h-0 sm:px-5">
-                  <span className="inline-flex w-[calc(100%-1.5rem)] flex-wrap items-baseline justify-between gap-x-3 gap-y-1 align-middle">
+              <details className="group/disclosure">
+                {/* The shared DisclosureSummary draws the chevron (it replaces the native marker),
+                    so the row's own layout fills the rest of the summary. */}
+                <DisclosureSummary className="min-h-11 px-4 py-3 sm:min-h-0 sm:px-5">
+                  <span className="flex min-w-0 flex-1 flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
                     <span className="font-medium text-ink">{group.categoryName}</span>
                     <span className="flex items-baseline gap-3 text-sm text-muted">
                       <span className="tabnum">
@@ -2762,7 +2758,7 @@ export function TransactionsClient({
                       <Money cents={group.totalCents} className="font-semibold" />
                     </span>
                   </span>
-                </summary>
+                </DisclosureSummary>
                 <div className="border-t border-line bg-surface-2/60">
                   {/* 2026-09-08 (spec §5.2). What the triangle was always promising. READ-ONLY on
                       purpose -- no checkbox, no kebab, no inline editor: the moment a preview row

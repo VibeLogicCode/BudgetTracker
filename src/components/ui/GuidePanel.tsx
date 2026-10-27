@@ -1,3 +1,5 @@
+import { DisclosureSummary } from '@/components/ui/Disclosure';
+
 /**
  * A collapsible info panel: one question the reader can press, and the answer underneath.
  *
@@ -32,8 +34,8 @@ export function GuidePanel({
   children: React.ReactNode;
 }) {
   return (
-    <details open={open} className="rounded-md border border-line bg-surface px-3.5 py-3 text-sm text-muted">
-      <summary className="cursor-pointer font-medium text-ink">{summary}</summary>
+    <details open={open} className="group/disclosure rounded-md border border-line bg-surface px-3.5 py-3 text-sm text-muted">
+      <DisclosureSummary>{summary}</DisclosureSummary>
       <div className="mt-3 flex flex-col gap-3">{children}</div>
     </details>
   );

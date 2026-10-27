@@ -124,6 +124,15 @@ describe('WarrantyDetailClient', () => {
     expect(screen.getByText('Active')).toBeTruthy();
   });
 
+  it('puts the back link above the title in the shared look', () => {
+    const { container } = renderDetail();
+    const back = screen.getByRole('link', { name: 'Back to Loans & Coverage' });
+    expect(back.hasAttribute('data-back')).toBe(true);
+    expect(back.getAttribute('href')).toBe('/warranties');
+    const title = container.querySelector('h1')!;
+    expect(back.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   // --- Bug fix (v1.2.4): edit replaces the view, kind-aware success message ---
 
   /**

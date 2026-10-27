@@ -203,6 +203,7 @@ describe('ComingUpCard record-payment button', () => {
       expect(container.querySelectorAll('li')).toHaveLength(COMING_UP_ROW_LIMIT + 1);
       expect(screen.getByText('+2 more due')).toBeTruthy();
       expect(screen.getByRole('link', { name: /more due/ }).getAttribute('href')).toBe('/warranties');
+      expect(screen.getByRole('link', { name: /more due/ }).className).toContain('justify-between');
     });
 
     it('renders no overflow row when everything fits', () => {
@@ -297,6 +298,7 @@ describe('ComingUpCard expected recurring charges', () => {
     expect(shown.slice(0, 2)).toEqual(['Streaming', 'CEDAR PHONE CO']);
     expect(shown.filter((title) => title !== null && !title.startsWith('+'))).toHaveLength(COMING_UP_ROW_LIMIT);
     expect(screen.getByRole('link', { name: '+2 more expected' }).getAttribute('href')).toBe('/insights/recurring?show=known&sort=next');
+    expect(screen.getByRole('link', { name: '+2 more expected' }).className).toContain('justify-between');
   });
 
   it('says expected rows are estimates outside the totals, only when one is shown', () => {

@@ -12,6 +12,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { ListRow } from '@/components/ui/ListRow';
 import { RecordPaymentForm } from '@/components/RecordPaymentForm';
 import { buttonClass } from '@/components/ui/Button';
+import { CardActionRow } from '@/components/ui/CardActionRow';
 
 /**
  * Item P (ruling P9). The notification evaluator has had a flood guard since v1.4
@@ -256,23 +257,18 @@ export function ComingUpCard({
               );
             })}
             {hiddenBills > 0 ? (
-              <li className="border-b border-line px-5 py-3 last:border-b-0 sm:px-6">
+              <li className="border-b border-line px-5 py-3 text-sm last:border-b-0 sm:px-6">
                 {/* Ruling P10: there is no "+N more" pattern in this app yet and the Card's `action` slot
                     already holds the money total, so the affordance goes in the list. This is the shape
                     the next card copies. */}
-                <Link href="/warranties" className="text-sm font-medium text-accent-text">
-                  +{hiddenBills} more due
-                </Link>
+                <CardActionRow href="/warranties">+{hiddenBills} more due</CardActionRow>
               </li>
             ) : null}
             {hiddenExpected > 0 ? (
-              <li className="border-b border-line px-5 py-3 last:border-b-0 sm:px-6">
-                <Link
-                  href={recurringHref({ person: null, account: null, show: 'known', sort: 'next' })}
-                  className="text-sm font-medium text-accent-text"
-                >
+              <li className="border-b border-line px-5 py-3 text-sm last:border-b-0 sm:px-6">
+                <CardActionRow href={recurringHref({ person: null, account: null, show: 'known', sort: 'next' })}>
                   +{hiddenExpected} more expected
-                </Link>
+                </CardActionRow>
               </li>
             ) : null}
           </ul>

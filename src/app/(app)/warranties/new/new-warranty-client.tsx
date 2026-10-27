@@ -34,6 +34,7 @@ import { computeExpiryDate } from '@/lib/warranty/expiry';
 import { centsToInput, parseAmountToCents } from '@/lib/money';
 import { createWarrantyAction, type WarrantyActionState } from '../actions';
 import { buttonClass } from '@/components/ui/Button';
+import { BackLink } from '@/components/ui/BackLink';
 import { BASIS_LABELS, BASIS_ORDER } from '@/lib/loans/basis-labels';
 
 export interface WarrantyPrefill {
@@ -347,16 +348,8 @@ export function NewWarrantyClient({
 
   return (
     <div className="flex flex-col gap-4 sm:gap-5">
-      <PageHeader
-        eyebrow="Loans & Coverage"
-        title="Add item"
-        description={formDescription(selectedKind)}
-        actions={
-          <Link href="/warranties" className={buttonClass('ghost', 'sm')}>
-            Back to Loans &amp; Coverage
-          </Link>
-        }
-      />
+      <BackLink href="/warranties">Back to Loans &amp; Coverage</BackLink>
+      <PageHeader eyebrow="Loans & Coverage" title="Add item" description={formDescription(selectedKind)} />
       <FormError message={state.error} />
 
       <Card>

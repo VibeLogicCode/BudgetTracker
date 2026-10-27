@@ -173,6 +173,7 @@ describe('ReceiptUploader', () => {
     fireEvent.click(screen.getByText('What was read'));
     // Scoped to the read text's own panel: the chips carry the same words.
     expect(within(screen.getByText('What was read').closest('details')!).getByText('Amount due $312.44')).toBeTruthy();
+    expect(screen.getByText('What was read').closest('summary')!.className).toContain('text-accent-text');
     fireEvent.click(screen.getByRole('button', { name: /\$328\.06/ }));
     expect(onPickAmount).toHaveBeenCalledWith(32806);
     fireEvent.click(screen.getByRole('button', { name: /Nov 24, 2026/ }));

@@ -286,6 +286,8 @@ describe('ManagersClient — the categories list folds like Budgets\' Edit-limit
     const toggle = getByRole('button', { name: /Expand Fees/i });
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(toggle.getAttribute('aria-controls')).toBe('category-row-2');
+    expect(toggle.className).toContain('text-accent-text');
+    expect(toggle.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
     expect(categoryRowFor(container, 'Bank Fees').hidden).toBe(true);
   });
 

@@ -4,6 +4,7 @@ import { memo, useMemo, useState } from 'react';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { AmountCell, TableWrap } from '@/components/ui/Table';
 import { buttonClass } from '@/components/ui/Button';
+import { DisclosureButton } from '@/components/ui/Disclosure';
 import { RowDialog } from '@/components/ui/RowDialog';
 import { formatCents, formatRateBps } from '@/lib/money';
 import { BASIS_LABELS, INTEREST_WORDING, LEDGER_ROW_WORDS } from '@/lib/loans/basis-labels';
@@ -319,14 +320,9 @@ function Row({ row, direction }: { row: LedgerRow; direction: LoanDirection }) {
           {working === null ? (
             describe(row, direction)
           ) : (
-            <button
-              type="button"
-              aria-expanded={open}
-              onClick={() => setOpen(!open)}
-              className="text-left text-accent-text hover:underline"
-            >
+            <DisclosureButton open={open} onToggle={() => setOpen(!open)}>
               {describe(row, direction)}
-            </button>
+            </DisclosureButton>
           )}
         </td>
         <AmountCell data-label="Payment">{money(row.paymentCents)}</AmountCell>

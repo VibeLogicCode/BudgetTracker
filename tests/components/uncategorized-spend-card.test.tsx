@@ -17,6 +17,7 @@ describe('UncategorizedSpendCard', () => {
     expect(screen.getByText('$57.50')).toBeTruthy();
     expect(screen.getByText('2 transactions')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Categorize' }).getAttribute('href')).toBe(HREF);
+    expect(screen.getByRole('link', { name: 'Categorize' }).className).toContain('justify-between');
     expect(container.querySelector('article')!.className).toContain('border-warning');
   });
 

@@ -169,6 +169,7 @@ describe('F5: the working opens instead of hovering', () => {
     render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
     const toggle = screen.getByRole('button', { name: 'Interest posted' });
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.className).toContain('text-accent-text');
 
     fireEvent.click(toggle);
 

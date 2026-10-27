@@ -38,6 +38,13 @@ function renderForm(
 }
 
 describe('NewWarrantyClient', () => {
+  it('shows the shared back link above the page title', () => {
+    renderForm();
+    const back = screen.getByRole('link', { name: 'Back to Loans & Coverage' });
+    expect(back.hasAttribute('data-back')).toBe(true);
+    expect(back.getAttribute('href')).toBe('/warranties');
+  });
+
   it('renders every field of §10.3 and defaults the report to the current user', () => {
     const { container } = renderForm();
     for (const name of ['name', 'vendor', 'model', 'serial', 'purchaseDate', 'warrantyMonths', 'price', 'notes']) {
