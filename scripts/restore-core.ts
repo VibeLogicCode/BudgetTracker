@@ -413,6 +413,34 @@ export interface RestorePlan {
 }
 
 /**
+ * v1.58.1: a restore installs the backup's users, passwords and two-factor settings wholesale, so a
+ * session row carried inside the backup must not keep working. Deletes every session row from the
+ * INCOMING copy under work/, before commit.json exists:
+ *   - the live path is never opened here (opening an absent budget.db creates an empty one, the
+ *     impostor runStep's incoming rule guards against);
+ *   - a failure is a prepare failure, so nothing under dataDir has moved;
+ *   - a resumed commit installs the already-purged file, and a re-run prepare purges a fresh copy.
+ * journal_mode=DELETE folds any WAL content into the main file, so the single-file rename that
+ * installs it carries the deletion and leaves no sidecar behind in work/.
+ */
+function purgeIncomingSessions(incomingDbPath: string): void {
+  try {
+    const db = new Database(incomingDbPath, { fileMustExist: true });
+    try {
+      const mode = db.pragma('journal_mode = DELETE', { simple: true });
+      if (mode !== 'delete') throw new RestoreError(`journal mode stayed ${String(mode)}`);
+      const table = db.prepare("select name from sqlite_master where type = 'table' and name = 'sessions'").get();
+      if (table) db.prepare('delete from sessions').run();
+    } finally {
+      db.close();
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new RestoreError(`Could not sign everyone out of the backup's database (${detail}). Nothing was changed.`);
+  }
+}
+
+/**
  * MUST-20.7: builds a RestorePlan by validating the artifact and constructing the INCOMING
  * files entirely inside scratchDir — `dataDir` is only ever read here (existence checks, to
  * decide which safety-copy renames apply and to compute the report fields below), never
@@ -470,6 +498,7 @@ export function prepareRestore(
   } else {
     fs.copyFileSync(artifactPath, incomingDb);
   }
+  purgeIncomingSessions(incomingDb);
 
   const dbTarget = path.join(dataDir, 'budget.db');
   const receiptsTarget = path.join(dataDir, 'receipts');
@@ -581,22 +610,6 @@ function runStep(step: RestoreStep, now: Date): number {
 }
 
 /**
- * v1.58.1: a restore installs the backup's users, passwords and two-factor settings wholesale, so a
- * session row carried inside the backup (or minted against the database it replaced) must not keep
- * working. Deletes every session row from the restored database; idempotent, so a replayed commit is
- * safe. A failure propagates and the commit is retried, never reported as a finished restore.
- */
-function purgeSessions(databasePath: string): void {
-  const db = new Database(databasePath);
-  try {
-    const table = db.prepare("select name from sqlite_master where type = 'table' and name = 'sessions'").get();
-    if (table) db.prepare('delete from sessions').run();
-  } finally {
-    db.close();
-  }
-}
-
-/**
  * Replays plan.steps in order. Every step is individually idempotent (see runStep), so
  * calling this twice on the same plan — or once after a previous call was interrupted
  * partway through — converges to the same final state. This is the half of the crash-safety
@@ -613,7 +626,6 @@ export function commitRestore(plan: RestorePlan, opts: { dataDir: string; now?: 
   }
   const dbPath = path.join(dataDir, 'budget.db');
   const receiptsPath = path.join(dataDir, 'receipts');
-  purgeSessions(dbPath);
   return {
     kind: plan.kind,
     databaseRestored: true,
