@@ -51,7 +51,12 @@ import { categoryTransactionsAction } from './category-transactions-action';
 // this file's @/-qualified value imports never has a reason to follow it into src/lib/budgets.ts.
 import { categoryHistoryAction, type CategoryHistoryMonth } from './category-history-action';
 import { buttonClass } from '@/components/ui/Button';
+import { CardActionRow } from '@/components/ui/CardActionRow';
+import { DisclosureButton } from '@/components/ui/Disclosure';
+import { HeaderActions, type HeaderAction } from '@/components/ui/HeaderActions';
 import { RowMenu, RowMenuButton, RowMenuLink } from '@/components/ui/RowMenu';
+// Type-only: budget-income.ts reads the database and must never enter the client bundle.
+import type { BudgetIncomeLine } from '@/lib/budget-income';
 import { Sheet } from '@/components/ui/Sheet';
 import { RecategorizeDialog, type RecategorizeRow } from '@/components/transactions/RecategorizeDialog';
 import { AlwaysAskDialog } from '@/components/transactions/AlwaysAskDialog';
@@ -989,6 +994,7 @@ function BudgetCategoryCard({
   const projection = predict !== null ? (predict.projectionOf.get(row.categoryId) ?? null) : null;
   const sinkingFund = sinkingFunds[row.categoryId] ?? null;
   const cardId = budgetCardId(scope, userId, row.categoryId);
+  const breakdownId = `${cardId}-breakdown`;
 
   // Spec 2026-10-21 (fix from Budgets) §2.6. Back to Budgets lands here with this card's id in the
   // URL hash: open a parent's breakdown once after mount. v1.58.0 (design §6): a leaf has nothing
@@ -1055,28 +1061,31 @@ function BudgetCategoryCard({
         </>
       }
       action={
-        <button
-          type="button"
-          className={buttonClass('ghost', 'sm', 'w-fit px-0 text-xs')}
-          {...(hasChildren
-            ? { 'aria-expanded': isOpen, onClick: () => groupState.toggle(row.categoryId) }
-            : {
-                'aria-haspopup': 'dialog' as const,
-                onClick: () =>
-                  openSheet({
-                    scope,
-                    userId,
-                    month,
-                    categoryId: row.categoryId,
-                    title: row.categoryName,
-                    categoryName: row.categoryName,
-                    figure: 'category',
-                    history: true,
-                  }),
-              })}
-        >
-          {hasChildren ? (isOpen ? 'Hide breakdown' : 'View breakdown') : 'View transactions'}
-        </button>
+        // v1.59.0: the shared card footer row. A parent's is a disclosure over its breakdown list; a
+        // leaf's opens the transactions Sheet, so it says so and is no disclosure.
+        hasChildren ? (
+          <CardActionRow expanded={isOpen} controls={breakdownId} onClick={() => groupState.toggle(row.categoryId)}>
+            {isOpen ? 'Hide breakdown' : 'View breakdown'}
+          </CardActionRow>
+        ) : (
+          <CardActionRow
+            opensDialog
+            onClick={() =>
+              openSheet({
+                scope,
+                userId,
+                month,
+                categoryId: row.categoryId,
+                title: row.categoryName,
+                categoryName: row.categoryName,
+                figure: 'category',
+                history: true,
+              })
+            }
+          >
+            View transactions
+          </CardActionRow>
+        )
       }
     >
       {/* F-06: a parent's six-month strip lives INSIDE the breakdown "View breakdown" opens, never a
@@ -1093,7 +1102,7 @@ function BudgetCategoryCard({
         // find-in-page/assistive tech, even before anyone clicks "View breakdown". Unlike a
         // fetch-backed transactions panel, this list costs nothing extra to keep mounted -- it is
         // plain data budgetProgress() already returned.
-        <ul hidden={!isOpen} className="-mx-4 mt-1 flex flex-col divide-y divide-line sm:-mx-5">
+        <ul id={breakdownId} hidden={!isOpen} className="-mx-4 mt-1 flex flex-col divide-y divide-line sm:-mx-5">
           {row.children.map((child) => (
             <ChildBreakdownRow
               key={child.categoryId}
@@ -1295,24 +1304,15 @@ function EditRow({
               its own line under the name instead of fighting it for the same one. */}
           <div style={{ paddingLeft: `${depth * 20}px` }} className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
             {disclosure ? (
-              <button
-                type="button"
-                aria-expanded={disclosure.open}
-                aria-controls={row.children.map((child) => rowId(scope, userId, child.categoryId)).join(' ')}
-                onClick={disclosure.onToggle}
-                // `min-w-0`: a flex item's default `min-width: auto` is its own content size, which
-                // is what forced this button to hold its full width even when the row had no room
-                // left for the pill beside it. Letting it shrink is what gives `flex-wrap` above
-                // something to actually wrap around.
-                className="inline-flex min-h-11 min-w-0 items-center gap-1.5 py-1 text-left font-medium text-ink sm:min-h-0"
+              // v1.59.0: the shared disclosure look (ruling U3's chevron, right at rest and down
+              // when open). The flex-wrap above still drops the pill to its own line on a phone.
+              <DisclosureButton
+                open={disclosure.open}
+                onToggle={disclosure.onToggle}
+                controls={row.children.map((child) => rowId(scope, userId, child.categoryId)).join(' ')}
               >
-                {/* Ruling U3: closed is the page's default shape, so the chevron points at the
-                    direction opening will take it -- ExpandIcon (lucide's ChevronRight) already
-                    points sideways at rest, so only the OPEN state needs a rotation, the reverse
-                    of the hand-drawn ChevronDownIcon this replaces. */}
-                <ExpandIcon className={`h-4 w-4 shrink-0 text-muted transition-transform ${disclosure.open ? 'rotate-90' : ''}`} />
                 {row.categoryName}
-              </button>
+              </DisclosureButton>
             ) : (
               <span className={`min-w-0 ${depth === 0 ? 'font-medium text-ink' : 'text-muted'}`}>{row.categoryName}</span>
             )}
@@ -1507,14 +1507,62 @@ function EditRow({
   );
 }
 
-/** The toggle that switches a section between the card grid and the compact edit list. Identical
- *  in both places it appears (household, and each PersonalCard) -- one implementation, per D1. */
-function EditLimitsToggle({ open, onToggle }: { open: boolean; onToggle: () => void }) {
-  return (
-    <button type="button" className={buttonClass('ghost', 'sm')} onClick={onToggle}>
-      {open ? 'Done editing' : 'Edit limits'}
-    </button>
-  );
+/**
+ * v1.59.0 item 11: a section's header actions, built once for the household and for every person
+ * so the two never drift (ruling D1, which the old EditLimitsToggle carried). HeaderActions gives
+ * them one style and folds them into an "Actions" menu on a phone. The gates are the ones the
+ * buttons always had.
+ */
+function sectionActions({
+  fields,
+  editable,
+  copyTitle,
+  copyAction,
+  applyAllAction,
+  canApplyAll,
+  hasGroups,
+  groupState,
+  editMode,
+  onToggleEdit,
+}: {
+  /** What Copy previous month and Apply all suggestions post: the scope, the person, the month. */
+  fields: Record<string, string>;
+  /** The ownership rule of the limit inputs: no copy where copyPreviousMonthAction would refuse it. */
+  editable: boolean;
+  copyTitle?: string;
+  copyAction: (formData: FormData) => void;
+  applyAllAction: (formData: FormData) => void;
+  /** MUST-15.1: a control that cannot act is not offered, so no apply-all without suggestions. */
+  canApplyAll: boolean;
+  /** Ruling U2/U3: only when something in the section can collapse, and regardless of editing rights. */
+  hasGroups: boolean;
+  groupState: GroupOpenState;
+  editMode: boolean;
+  onToggleEdit: () => void;
+}): HeaderAction[] {
+  const actions: HeaderAction[] = [];
+  if (editable) {
+    actions.push({ key: 'copy', label: 'Copy previous month', title: copyTitle, action: copyAction, fields });
+    if (canApplyAll) {
+      actions.push({
+        key: 'apply-all',
+        label: 'Apply all suggestions',
+        title: 'Only fills in categories with no limit set. Nothing you have typed is changed.',
+        action: applyAllAction,
+        fields,
+      });
+    }
+  }
+  if (hasGroups) {
+    actions.push({
+      key: 'groups',
+      label: groupState.anyCollapsed ? 'Expand all' : 'Collapse all',
+      onSelect: groupState.anyCollapsed ? groupState.expandAll : groupState.collapseAll,
+    });
+  }
+  // Switches the section between the card grid and the compact edit list.
+  actions.push({ key: 'edit', label: editMode ? 'Done editing' : 'Edit limits', onSelect: onToggleEdit });
+  return actions;
 }
 
 /**
@@ -1673,48 +1721,22 @@ function PersonalCard({
           }
           description="Personal limits, on top of the household ones."
           action={
-            <>
-              {/* Same ownership rule as the limit inputs: no copy button where the copy
-                  would be refused server-side by copyPreviousMonthAction. */}
-              {editable ? (
-                <>
-                  <form action={copyAction}>
-                    <input type="hidden" name="scope" value="personal" />
-                    <input type="hidden" name="userId" value={person.userId} />
-                    <input type="hidden" name="month" value={month} />
-                    <button type="submit" className={buttonClass('secondary', 'sm')}>Copy previous month</button>
-                  </form>
-                  {/* Same MUST-15.1 rule as the household section above. */}
-                  {personPredict !== null && personPredict.suggestionOf.size > 0 ? (
-                    <form action={applyAllAction}>
-                      <input type="hidden" name="scope" value="personal" />
-                      <input type="hidden" name="userId" value={person.userId} />
-                      <input type="hidden" name="month" value={month} />
-                      <button
-                        type="submit"
-                        className={buttonClass('secondary', 'sm')}
-                        title="Only fills in categories with no limit set. Nothing you have typed is changed."
-                      >
-                        Apply all suggestions
-                      </button>
-                    </form>
-                  ) : null}
-                </>
-              ) : null}
-              {/* Ruling U3: one control for the whole section, regardless of edit permission --
-                  expanding a group to read its children is not an edit, so even a read-only
-                  viewer of someone else's section gets this. */}
-              {groupIds.length > 0 ? (
-                <button
-                  type="button"
-                  className={buttonClass('ghost', 'sm')}
-                  onClick={groupState.anyCollapsed ? groupState.expandAll : groupState.collapseAll}
-                >
-                  {groupState.anyCollapsed ? 'Expand all' : 'Collapse all'}
-                </button>
-              ) : null}
-              <EditLimitsToggle open={editMode} onToggle={() => setEditMode((open) => !open)} />
-            </>
+            // Ruling U3: Expand all is offered regardless of edit permission -- expanding a group
+            // to read its children is not an edit, so a read-only section keeps it.
+            <HeaderActions
+              menuLabel={`Actions for ${person.name}`}
+              actions={sectionActions({
+                fields: { scope: 'personal', userId: String(person.userId), month },
+                editable,
+                copyAction,
+                applyAllAction,
+                canApplyAll: personPredict !== null && personPredict.suggestionOf.size > 0,
+                hasGroups: groupIds.length > 0,
+                groupState,
+                editMode,
+                onToggleEdit: () => setEditMode((open) => !open),
+              })}
+            />
           }
         />
         {showHistorySentence || personNoAttribution ? (
@@ -1759,6 +1781,70 @@ function PersonalCard({
   );
 }
 
+/** v1.59.0 item 15: the page's income figures for the scope the pill shows, and what to call it. */
+export type BudgetsIncome = BudgetIncomeLine & { scopeLabel: string };
+
+/**
+ * v1.59.0 item 15. The month's money in, spending and net for the scope the pill shows (the
+ * Dashboard's own figures), then typical income and whether this month's budgets run past it.
+ * Owner decision 4: a person's line is that person's own attributed money and never falls back to
+ * the household's, so a person with no income attributed to them gets a pointer to person rules
+ * instead of a comparison against nothing.
+ */
+function IncomeLine({ income, currentUserId, isAdmin }: { income: BudgetsIncome; currentUserId: number; isAdmin: boolean }) {
+  const months = income.typicalMonths.map(shortMonthLabel);
+  const listed = months.length > 1 ? `${months.slice(0, -1).join(', ')} and ${months[months.length - 1]}` : (months[0] ?? '');
+  const span = months.length > 1 ? `${months[0]}-${months[months.length - 1]}` : (months[0] ?? '');
+  const isYou = income.attributedUserId === currentUserId;
+  const figures =
+    `${income.scopeLabel}, ${monthLabel(income.month)}: Money in ${formatCents(income.incomeCents)} · ` +
+    `Spent ${formatCents(income.spendCents)} · Net ${formatCents(income.netCents, { showSign: true })}`;
+
+  let typical: ReactNode;
+  if (income.noAttributedIncome) {
+    typical = (
+      <p className="text-sm text-muted">
+        {`No income is assigned to ${isYou ? 'you' : income.scopeLabel} yet in ${span}. `}
+        {`To count a paycheque as ${isYou ? 'yours' : 'theirs'}, `}
+        {/* Merchant rules is an admin page; a member is told who can do it rather than sent to a refusal. */}
+        {isAdmin ? (
+          <>
+            add a person rule on its description in{' '}
+            <Link href="/settings/merchant-rules" className="font-medium text-accent-text underline underline-offset-2">
+              Settings → Merchant rules
+            </Link>
+            , then use Apply now.
+          </>
+        ) : (
+          'an admin can add a person rule on its description in Settings → Merchant rules and use Apply now.'
+        )}
+      </p>
+    );
+  } else if (income.typicalIncomeCents === null) {
+    typical = <p className="text-sm text-muted">Typical income appears once there are three full calendar months of history.</p>;
+  } else if (income.typicalIncomeCents === 0) {
+    typical = <p className="text-sm text-muted">{`No income was recorded in ${span}.`}</p>;
+  } else {
+    typical = (
+      <p className="text-sm text-muted">{`Typical income ${formatCents(income.typicalIncomeCents)} — the average of ${listed}.`}</p>
+    );
+  }
+
+  return (
+    <Card as="div">
+      <CardBody className="flex flex-col gap-1 pt-4">
+        <p className="text-sm font-medium text-ink">{figures}</p>
+        {typical}
+        {!income.noAttributedIncome && income.overTypicalByCents !== null ? (
+          <p className="text-sm text-warning">
+            {`This month's budgets add up to ${formatCents(income.budgetedLimitCents)}, ${formatCents(income.overTypicalByCents)} more than typical income.`}
+          </p>
+        ) : null}
+      </CardBody>
+    </Card>
+  );
+}
+
 /**
  * Spec 2026-10-21 (fix from Budgets) §2.3. What a card's row panel needs to offer a fix: the
  * category list for the picker, and who may author rules or administer. Provided by BudgetsClient
@@ -1791,6 +1877,7 @@ export function BudgetsClient({
   householdSinkingFunds = {},
   savingsProgress = null,
   categories = [],
+  income = null,
 }: {
   month: string;
   currentUserId: number;
@@ -1848,6 +1935,12 @@ export function BudgetsClient({
    * ones included (v1.57.2) so a row on an archived category's card can show its own.
    */
   categories?: CategoryLike[];
+  /**
+   * v1.59.0 item 15: the income line for the scope the pill shows -- the household's, or the
+   * selected person's own (a self viewer's is always their own; budgets/page.tsx decides). Null
+   * renders no line.
+   */
+  income?: BudgetsIncome | null;
 }) {
   const [copyState, dispatchCopy] = useActionState(copyPreviousMonthAction, initial);
   const [applyState, dispatchApply] = useActionState(applySuggestionAction, initial);
@@ -1993,6 +2086,8 @@ export function BudgetsClient({
         }
       />
 
+      {income !== null ? <IncomeLine income={income} currentUserId={currentUserId} isAdmin={currentUserIsAdmin} /> : null}
+
       {/* Ruling T3/T6: household scope only, so this sits beside the month navigation at the
           top of the page rather than inside the Household card below -- the same reasoning R2
           already applies to that card is why this is gated on the same `household !== null`. */}
@@ -2016,6 +2111,11 @@ export function BudgetsClient({
           is measured against together. Below it, each person gets their own section for limits
           that apply only to the transactions attributed to them — a personal limit sits on top
           of the household one rather than replacing it.
+        </p>
+        <p>
+          The line under the heading shows the month&apos;s money in, spending and net for the scope you
+          picked, the same figures as the dashboard, beside typical income: the average of the last
+          three full calendar months, which for a person counts only income attributed to them.
         </p>
         <p>
           Once there are three full calendar months of history, a suggested figure appears
@@ -2067,50 +2167,27 @@ export function BudgetsClient({
               // names the one thing to actually do, and points at exactly where to do it.
               description={noHouseholdBudgets ? 'Set a limit on any category below to start tracking it.' : undefined}
               action={
-                <>
-                  <form action={copyAction}>
-                    <input type="hidden" name="scope" value="household" />
-                    <input type="hidden" name="month" value={month} />
-                    {/* Lane 3 item 1: this button now also carries the savings target forward
-                        (copySavingsTargetForward, in copyPreviousMonthAction) -- household scope
-                        only, since ruling T3 gives the target no per-person copy of its own. */}
-                    <button
-                      type="submit"
-                      className={buttonClass('secondary', 'sm')}
-                      title="Also brings forward last month's savings target, if one was set."
-                    >
-                      Copy previous month
-                    </button>
-                  </form>
-                  {/* MUST-15.1: a control that cannot act is not offered. There is nothing to apply
-                      when there are no suggestions, whether that is because history is short or
-                      because every category with history failed the suggestion floor. */}
-                  {householdPredict !== null && householdPredict.suggestionOf.size > 0 ? (
-                    <form action={applyAllAction}>
-                      <input type="hidden" name="scope" value="household" />
-                      <input type="hidden" name="month" value={month} />
-                      <button
-                        type="submit"
-                        className={buttonClass('secondary', 'sm')}
-                        title="Only fills in categories with no limit set. Nothing you have typed is changed."
-                      >
-                        Apply all suggestions
-                      </button>
-                    </form>
-                  ) : null}
-                  {/* Ruling U3: one control for the whole section. Absent when nothing in it can
-                      collapse in the first place (every household row is an ordinary one). */}
-                  {householdGroupIds.length > 0 ? (
-                    <button
-                      type="button"
-                      className={buttonClass('ghost', 'sm')}
-                      onClick={householdGroupState.anyCollapsed ? householdGroupState.expandAll : householdGroupState.collapseAll}
-                    >
-                      {householdGroupState.anyCollapsed ? 'Expand all' : 'Collapse all'}
-                    </button>
-                  ) : null}
-                  <EditLimitsToggle open={householdEditMode} onToggle={() => setHouseholdEditMode((open) => !open)} />
-                </>
+                <HeaderActions
+                  menuLabel="Actions for Household"
+                  actions={sectionActions({
+                    fields: { scope: 'household', month },
+                    // Household budgets are editable by every member (spec section 6).
+                    editable: true,
+                    // Lane 3 item 1: Copy previous month also carries the savings target forward
+                    // (copySavingsTargetForward, in copyPreviousMonthAction) -- household scope
+                    // only, since ruling T3 gives the target no per-person copy of its own.
+                    copyTitle: "Also brings forward last month's savings target, if one was set.",
+                    copyAction,
+                    applyAllAction,
+                    // MUST-15.1: nothing to apply when there are no suggestions, whether history is
+                    // short or every category with history failed the suggestion floor.
+                    canApplyAll: householdPredict !== null && householdPredict.suggestionOf.size > 0,
+                    hasGroups: householdGroupIds.length > 0,
+                    groupState: householdGroupState,
+                    editMode: householdEditMode,
+                    onToggleEdit: () => setHouseholdEditMode((open) => !open),
+                  })}
+                />
               }
             />
             <CardBody className="pb-4 pt-0">

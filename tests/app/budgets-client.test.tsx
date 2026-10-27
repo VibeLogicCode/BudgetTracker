@@ -1853,3 +1853,273 @@ describe('BudgetsClient — the transactions sheet (v1.58.0)', () => {
     expect(document.activeElement).toBe(row);
   });
 });
+
+/** v1.59.0 item 11: each section's header actions are one HeaderActions. */
+describe('BudgetsClient — header actions (v1.59.0)', () => {
+  const sectionNamed = (name: string): HTMLElement => {
+    const section = Array.from(document.querySelectorAll('section')).find((node) => node.querySelector('h2')?.textContent?.startsWith(name));
+    if (!section) throw new Error(`no section for ${name}`);
+    return section as HTMLElement;
+  };
+
+  function renderHousehold() {
+    return render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        currentUserIsAdmin
+        household={[housingGroupRow()]}
+        householdTotals={{ budgetedLimitCents: 200000, budgetedSpentCents: 150000, totalSpentCents: 150000 }}
+        personal={[]}
+        predictions={predictionsWith({ household: { suggestions: [{ ...SUGGESTION, categoryId: 10 }], projections: [], noAttribution: false } })}
+      />,
+    );
+  }
+
+  it('Copy previous month, Apply all suggestions, Expand all and Edit limits share one class', () => {
+    renderHousehold();
+    const section = sectionNamed('Household');
+    const names = ['Copy previous month', 'Apply all suggestions', 'Expand all', 'Edit limits'];
+    const classes = names.map((name) => within(section).getByRole('button', { name }).className);
+    expect(new Set(classes).size).toBe(1);
+    expect(classes[0].split(/\s+/)).toEqual(expect.arrayContaining(['btn', 'btn--secondary', 'btn--sm']));
+  });
+
+  it('on a phone the Actions menu holds the same four, and its Edit limits switches the section to editing', () => {
+    renderHousehold();
+    const trigger = screen.getByRole('button', { name: 'Actions for Household' });
+    expect(trigger.textContent).toBe('Actions');
+    fireEvent.click(trigger);
+    const menu = screen.getByRole('menu', { name: 'Actions for Household' });
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'Copy previous month',
+      'Apply all suggestions',
+      'Expand all',
+      'Edit limits',
+    ]);
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Edit limits' }));
+    expect(screen.getByRole('button', { name: 'Done editing' })).toBeTruthy();
+    expect(document.querySelector('input[name="amount"]')).not.toBeNull();
+  });
+
+  it('the menu posts Copy previous month with the section and month', async () => {
+    const { copyPreviousMonthAction } = await import('@/app/(app)/budgets/actions');
+    const copy = vi.mocked(copyPreviousMonthAction);
+    copy.mockClear();
+    renderHousehold();
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Household' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy previous month' }));
+    await waitFor(() => expect(copy).toHaveBeenCalledTimes(1));
+    const posted = copy.mock.calls[0][1] as FormData;
+    expect(Object.fromEntries(posted.entries())).toEqual({ scope: 'household', month: '2026-03' });
+  });
+
+  it("a person's section is Actions for that person; a read-only one offers only Expand all and Edit limits", () => {
+    render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        currentUserIsAdmin={false}
+        selectedPersonId={2}
+        household={[]}
+        householdTotals={{ budgetedLimitCents: 0, budgetedSpentCents: 0, totalSpentCents: 0 }}
+        personal={[
+          { userId: 1, name: 'Alex', rows: [makeRow()] },
+          { userId: 2, name: 'Sam', rows: [housingGroupRow()] },
+        ]}
+      />,
+    );
+    const sam = sectionNamed('Sam');
+    const buttons = within(sam)
+      .getAllByRole('button')
+      .filter((button) => button.closest('article') === null)
+      .map((button) => button.getAttribute('aria-label') ?? button.textContent);
+    expect(buttons).toEqual(['Expand all', 'Edit limits', 'Actions for Sam']);
+    fireEvent.click(within(sam).getByRole('button', { name: 'Actions for Sam' }));
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Expand all', 'Edit limits']);
+
+    // Alex's own section, no groups: Copy previous month and Edit limits.
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+    fireEvent.click(within(sectionNamed('Alex')).getByRole('button', { name: 'Actions for Alex' }));
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Copy previous month', 'Edit limits']);
+  });
+
+  it('a section with a single action shows that one button and no menu', () => {
+    render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        currentUserIsAdmin={false}
+        selectedPersonId={2}
+        household={[]}
+        householdTotals={{ budgetedLimitCents: 0, budgetedSpentCents: 0, totalSpentCents: 0 }}
+        personal={[
+          { userId: 1, name: 'Alex', rows: [makeRow()] },
+          { userId: 2, name: 'Sam', rows: [makeRow()] },
+        ]}
+      />,
+    );
+    const sam = sectionNamed('Sam');
+    expect(within(sam).getByRole('button', { name: 'Edit limits' }).className.split(/\s+/)).toContain('btn--secondary');
+    expect(within(sam).queryByRole('button', { name: 'Actions for Sam' })).toBeNull();
+  });
+});
+
+/** v1.59.0 item 12: Budgets' own affordance sites use the shared components. */
+describe('BudgetsClient — card footer and group toggle (v1.59.0)', () => {
+  function renderGroup() {
+    return render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[housingGroupRow(), makeRow()]}
+        householdTotals={{ budgetedLimitCents: 220000, budgetedSpentCents: 155000, totalSpentCents: 155000 }}
+        personal={[]}
+      />,
+    );
+  }
+
+  it("a parent card's footer is a full-width accent row whose chevron and aria-expanded follow the breakdown it controls", () => {
+    renderGroup();
+    const footer = screen.getByRole('button', { name: 'View breakdown' });
+    expect(footer.className.split(/\s+/)).toEqual(expect.arrayContaining(['w-full', 'text-accent-text']));
+    expect(footer.getAttribute('aria-expanded')).toBe('false');
+    const list = document.getElementById(footer.getAttribute('aria-controls')!)!;
+    expect(list.tagName.toLowerCase()).toBe('ul');
+    expect(list.hidden).toBe(true);
+    const icon = footer.querySelector('svg')!;
+    expect(icon.getAttribute('aria-hidden')).toBe('true');
+    expect(icon.getAttribute('class')).not.toContain('rotate-90');
+    fireEvent.click(footer);
+    const open = screen.getByRole('button', { name: 'Hide breakdown' });
+    expect(open.getAttribute('aria-expanded')).toBe('true');
+    expect(open.querySelector('svg')!.getAttribute('class')).toContain('rotate-90');
+    expect(list.hidden).toBe(false);
+  });
+
+  it("a leaf card's footer opens a dialog and is no disclosure", () => {
+    renderGroup();
+    const footer = screen.getByRole('button', { name: 'View transactions' });
+    expect(footer.className.split(/\s+/)).toContain('text-accent-text');
+    expect(footer.getAttribute('aria-haspopup')).toBe('dialog');
+    expect(footer.hasAttribute('aria-expanded')).toBe(false);
+  });
+
+  it("Edit limits' group toggle is the shared disclosure button, keeping its name and aria-controls", () => {
+    const { container } = renderGroup();
+    openEditLimits(container);
+    const toggle = screen.getByRole('button', { name: 'Housing' });
+    expect(toggle.className.split(/\s+/)).toContain('text-accent-text');
+    expect(toggle.getAttribute('aria-controls')).toBe('budget-row-household-h-11 budget-row-household-h-12');
+    expect(toggle.querySelector('svg')!.getAttribute('aria-hidden')).toBe('true');
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(toggle.querySelector('svg')!.getAttribute('class')).toContain('rotate-90');
+  });
+});
+
+/** v1.59.0 item 15: the income line under the page header. */
+describe('BudgetsClient — the income line (v1.59.0)', () => {
+  type Income = NonNullable<Parameters<typeof BudgetsClient>[0]['income']>;
+  function incomeLine(over: Partial<Income> = {}): Income {
+    return {
+      month: '2026-10',
+      attributedUserId: null,
+      incomeCents: 612000,
+      spendCents: 401050,
+      netCents: 210950,
+      typicalMonths: ['2026-07', '2026-08', '2026-09'],
+      typicalIncomeCents: 598000,
+      budgetedLimitCents: 450000,
+      overTypicalByCents: null,
+      noAttributedIncome: false,
+      scopeLabel: 'Household',
+      ...over,
+    };
+  }
+  function renderIncome(income: Income | null, opts: { currentUserIsAdmin?: boolean } = {}) {
+    return render(
+      <BudgetsClient
+        month="2026-10"
+        currentUserId={1}
+        currentUserIsAdmin={opts.currentUserIsAdmin ?? true}
+        household={[makeRow()]}
+        householdTotals={{ budgetedLimitCents: 20000, budgetedSpentCents: 5000, totalSpentCents: 5000 }}
+        personal={[
+          { userId: 1, name: 'Alex', rows: [makeRow()] },
+          { userId: 2, name: 'Sam', rows: [makeRow()] },
+        ]}
+        income={income}
+      />,
+    );
+  }
+
+  it('names the scope and month with money in, spent and a signed net, then typical income and its months', () => {
+    renderIncome(incomeLine());
+    expect(screen.getByText('Household, October 2026: Money in $6,120.00 · Spent $4,010.50 · Net +$2,109.50')).toBeTruthy();
+    expect(screen.getByText('Typical income $5,980.00 — the average of Jul, Aug and Sep.')).toBeTruthy();
+    expect(screen.queryByText(/more than typical income/)).toBeNull();
+  });
+
+  it('a negative net carries its sign', () => {
+    renderIncome(incomeLine({ scopeLabel: 'Sam', attributedUserId: 2, incomeCents: 0, spendCents: 1200, netCents: -1200 }));
+    expect(screen.getByText('Sam, October 2026: Money in $0.00 · Spent $12.00 · Net -$12.00')).toBeTruthy();
+  });
+
+  it('says when typical income will appear, before three full months of history', () => {
+    renderIncome(incomeLine({ typicalIncomeCents: null }));
+    expect(screen.getByText('Typical income appears once there are three full calendar months of history.')).toBeTruthy();
+  });
+
+  it('says no income was recorded when the three months hold none', () => {
+    renderIncome(incomeLine({ typicalIncomeCents: 0 }));
+    expect(screen.getByText('No income was recorded in Jul-Sep.')).toBeTruthy();
+  });
+
+  it('warns when budgets add up to more than typical income', () => {
+    renderIncome(incomeLine({ budgetedLimitCents: 620000, overTypicalByCents: 22000 }));
+    const warning = screen.getByText("This month's budgets add up to $6,200.00, $220.00 more than typical income.");
+    expect(warning.className.split(/\s+/)).toContain('text-warning');
+  });
+
+  it('a person with spending but no attributed income gets the person-rule hint, not the exceed sentence', () => {
+    renderIncome(
+      incomeLine({
+        scopeLabel: 'Sam',
+        attributedUserId: 2,
+        incomeCents: 0,
+        spendCents: 88000,
+        netCents: -88000,
+        typicalIncomeCents: 0,
+        budgetedLimitCents: 90000,
+        noAttributedIncome: true,
+      }),
+    );
+    const hint = screen.getByText(/^No income is assigned to Sam yet/);
+    expect(hint.textContent).toBe(
+      'No income is assigned to Sam yet in Jul-Sep. To count a paycheque as theirs, add a person rule on its description in Settings → Merchant rules, then use Apply now.',
+    );
+    expect(within(hint).getByRole('link', { name: 'Settings → Merchant rules' }).getAttribute('href')).toBe('/settings/merchant-rules');
+    expect(screen.queryByText(/more than typical income/)).toBeNull();
+    expect(screen.queryByText(/No income was recorded/)).toBeNull();
+    expect(screen.queryByText(/^Typical income/)).toBeNull();
+  });
+
+  it('the hint speaks to the viewer about their own line, and sends a member to an admin', () => {
+    renderIncome(
+      incomeLine({ scopeLabel: 'Alex', attributedUserId: 1, typicalIncomeCents: 0, noAttributedIncome: true }),
+      { currentUserIsAdmin: false },
+    );
+    const hint = screen.getByText(/^No income is assigned to you yet/);
+    expect(hint.textContent).toBe(
+      'No income is assigned to you yet in Jul-Sep. To count a paycheque as yours, an admin can add a person rule on its description in Settings → Merchant rules and use Apply now.',
+    );
+    expect(within(hint).queryByRole('link')).toBeNull();
+  });
+
+  it('renders nothing when there is no income line', () => {
+    const { container } = renderIncome(null);
+    expect(container.textContent).not.toContain('Money in');
+    expect(container.textContent).not.toContain('Typical income');
+  });
+});

@@ -1,7 +1,8 @@
 import { requireUser } from '@/lib/auth/session';
-import { isSelfScoped } from '@/lib/auth/viewer';
+import { isSelfScoped, ownerScope } from '@/lib/auth/viewer';
 import { listAttributablePeople } from '@/lib/auth/users';
 import { sinkingFundsFor } from '@/lib/bills';
+import { budgetIncomeLine } from '@/lib/budget-income';
 import { budgetProgress, budgetTotals, rolloverStartMonth, uncategorizedSpend, type BudgetRow, type BudgetScope } from '@/lib/budgets';
 import { listCategories } from '@/lib/categories';
 import { currentMonth, isMonthKey, monthEnd, todayIso } from '@/lib/dates';
@@ -11,7 +12,7 @@ import { isAllNoSpend, suggestionsFor, type ScopeSuggestions } from '@/lib/predi
 import { projectMonthEnd } from '@/lib/predict/pace';
 import type { BudgetPredictions, CategorySuggestion, SectionPredictions } from '@/lib/predict/suggest';
 import { savingsProgress } from '@/lib/savings-target';
-import { BudgetsClient } from './budgets-client';
+import { BudgetsClient, type BudgetsIncome } from './budgets-client';
 
 export const dynamic = 'force-dynamic';
 
@@ -140,10 +141,43 @@ export default async function BudgetsPage({
     };
   });
 
+  const thisMonth = currentMonth(new Date(), tz);
+  const householdTotals = household === null ? null : budgetTotals(household);
+
+  /**
+   * v1.59.0 items 13-14. The income line follows the pill with the Dashboard's own rule
+   * (`scopeUserId = ownerScope(viewer) ?? urlScope`): a self viewer's line is always their own,
+   * whatever the URL says, and budgetIncomeLine resolves ownerScope again before it reads a
+   * figure. Household compares household limits with household income; a person compares their
+   * own limits with what is attributed to them, never with the household's income (owner
+   * decision 4).
+   */
+  const incomeScope = ownerScope(viewer) ?? selectedPersonId;
+  const incomePerson = incomeScope === null ? null : (personal.find((person) => person.userId === incomeScope) ?? null);
+  let income: BudgetsIncome | null = null;
+  if (incomeScope === null && householdTotals !== null) {
+    const line = budgetIncomeLine(
+      { month, currentMonth: thisMonth, attributedUserId: null, budgetedLimitCents: householdTotals.budgetedLimitCents },
+      viewer,
+    );
+    income = { ...line, scopeLabel: 'Household' };
+  } else if (incomePerson !== null) {
+    const line = budgetIncomeLine(
+      {
+        month,
+        currentMonth: thisMonth,
+        attributedUserId: incomePerson.userId,
+        budgetedLimitCents: budgetTotals(incomePerson.rows).budgetedLimitCents,
+      },
+      viewer,
+    );
+    income = { ...line, scopeLabel: incomePerson.name };
+  }
+
   // MUST-14.1: computed ONLY when the viewed month is the current month. A pace projection for
   // July, viewed in August, is not a projection.
   let predictions: BudgetPredictions | null = null;
-  if (month === currentMonth(new Date(), tz)) {
+  if (month === thisMonth) {
     // MUST-16.3 budgets this page at 2 + 2P grouped aggregates, so each scope is read ONCE.
     // Ruling R2: a self viewer never triggers the household-scope query at all -- not even to
     // discard its result -- because sectionFrom() reads its `suggestions` straight off the
@@ -189,7 +223,7 @@ export default async function BudgetsPage({
       selectedPersonId={selectedPersonId}
       household={household}
       householdRolloverIds={householdRolloverIds}
-      householdTotals={household === null ? null : budgetTotals(household)}
+      householdTotals={householdTotals}
       householdUncategorized={householdUncategorized}
       personal={personal}
       predictions={predictions}
@@ -200,6 +234,7 @@ export default async function BudgetsPage({
       // v1.57.2: archived ones too -- the card dialogs show a row's own archived category
       // (categoryOptions' assignment kind keeps every other archived one out of the list).
       categories={listCategories({ includeArchived: true })}
+      income={income}
     />
   );
 }

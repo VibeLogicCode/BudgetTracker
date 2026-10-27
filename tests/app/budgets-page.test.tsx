@@ -207,3 +207,84 @@ describe('BudgetsPage — Not categorized yet', () => {
     expect(container.textContent).not.toContain('$20.00');
   });
 });
+
+/** v1.59.0 items 13-14: the income line, against the real page and a seeded database (clock pinned to 2026-03-18 above). */
+describe('BudgetsPage — the income line', () => {
+  let t: TestDb | null = null;
+  afterEach(() => { t?.cleanup(); t = null; });
+
+  function seed() {
+    t = createSeededTestDb();
+    const db = t.db;
+    const alexId = insertTestUser(db, { name: 'Alex', username: 'alex', role: 'admin' });
+    const samId = insertTestUser(db, { name: 'Sam', username: 'sam', role: 'member' });
+    insertTestAccount(db, { name: 'Joint Chequing', ownerUserId: alexId });
+    const salary = categoryIdByName(db, 'Salary');
+    const groceries = categoryIdByName(db, 'Groceries');
+    const add = (date: string, amountCents: number, categoryId: number, attributedUserId: number | null) =>
+      db.run(sql`
+        insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, category_id, categorization_source, is_transfer, attributed_user_id, created_by, created_at, updated_at)
+        values ((select id from accounts limit 1), ${date}, 'MAPLE GROCER', 'MAPLE GROCER', ${amountCents}, ${categoryId}, 'manual', 0, ${attributedUserId}, ${alexId}, ${nowIso()}, ${nowIso()})`);
+    for (const month of ['2025-12', '2026-01', '2026-02', '2026-03']) {
+      add(`${month}-01`, 400000, salary, alexId);
+      add(`${month}-02`, 50000, salary, null);
+      add(`${month}-05`, -8800, groceries, samId);
+    }
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-03', amountCents: 50000 });
+    upsertBudget({ scope: 'personal', userId: samId, categoryId: groceries, month: '2026-03', amountCents: 30000 });
+    return { alexId, samId };
+  }
+
+  async function incomeProp(params: Record<string, string>) {
+    const { default: BudgetsPage } = await import('@/app/(app)/budgets/page');
+    const element = await BudgetsPage({ searchParams: Promise.resolve(params) });
+    render(element);
+    return (element.props as { income: Record<string, unknown> | null }).income;
+  }
+
+  it('Household compares household limits with household income and spending', async () => {
+    const { alexId } = seed();
+    currentUser.value = { id: alexId, name: 'Alex', username: 'alex', role: 'admin', visibility: 'household' };
+    const income = await incomeProp({ month: '2026-03' });
+    expect(income).toMatchObject({
+      scopeLabel: 'Household',
+      attributedUserId: null,
+      incomeCents: 450000,
+      spendCents: 8800,
+      typicalMonths: ['2025-12', '2026-01', '2026-02'],
+      typicalIncomeCents: 450000,
+      budgetedLimitCents: 50000,
+      noAttributedIncome: false,
+    });
+    expect(screen.getByText('Household, March 2026: Money in $4,500.00 · Spent $88.00 · Net +$4,412.00')).toBeTruthy();
+  });
+
+  it("?person= compares that person's own limits with what is attributed to them, never the household's income", async () => {
+    const { alexId, samId } = seed();
+    currentUser.value = { id: alexId, name: 'Alex', username: 'alex', role: 'admin', visibility: 'household' };
+    const income = await incomeProp({ month: '2026-03', person: String(samId) });
+    expect(income).toMatchObject({
+      scopeLabel: 'Sam',
+      attributedUserId: samId,
+      incomeCents: 0,
+      spendCents: 8800,
+      typicalIncomeCents: 0,
+      budgetedLimitCents: 30000,
+      overTypicalByCents: null,
+      noAttributedIncome: true,
+    });
+    expect(screen.getByText(/^No income is assigned to Sam yet in Dec-Feb\./)).toBeTruthy();
+    expect(screen.queryByText(/more than typical income/)).toBeNull();
+  });
+
+  it("a self viewer's props carry only their own figures, whatever the URL asks for", async () => {
+    const { alexId, samId } = seed();
+    currentUser.value = { id: samId, name: 'Sam', username: 'sam', role: 'member', visibility: 'self' };
+    const income = await incomeProp({ month: '2026-03', person: String(alexId) });
+    expect(income).toMatchObject({ scopeLabel: 'Sam', attributedUserId: samId, incomeCents: 0, spendCents: 8800, budgetedLimitCents: 30000 });
+    const serialized = JSON.stringify(income);
+    expect(serialized).not.toContain('450000');
+    expect(serialized).not.toContain('400000');
+    expect(serialized).not.toContain('50000');
+  });
+});

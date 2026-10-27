@@ -12,6 +12,8 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from 'react';
+import { buttonClass } from '@/components/ui/Button';
+import { MenuOpenIcon } from '@/components/ui/icons';
 
 /**
  * The row kebab (spec 2026-08-23, ruling R2). A row with two or more actions collapses them
@@ -67,9 +69,13 @@ function menuItems(root: HTMLElement | null): HTMLElement[] {
 const ROW_TRIGGER_CLASS =
   'flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:-outline-offset-2 sm:px-5';
 
+/** v1.59.0: the trigger when it is a labelled button ("Actions") rather than the kebab. */
+const LABELLED_TRIGGER_CLASS = buttonClass('secondary', 'sm', 'min-h-11 sm:min-h-0');
+
 export function RowMenu({
   label,
   row,
+  trigger: triggerText,
   children,
 }: {
   label: string;
@@ -79,6 +85,11 @@ export function RowMenu({
    * beside the button, never inside it. `describedBy` is the id of an element inside `content`, read after the label.
    */
   row?: { content: ReactNode; describedBy?: string };
+  /**
+   * v1.59.0. A secondary button showing this text and a chevron, in place of the ⋯ kebab. `label`
+   * stays the accessible name, so it should begin with the visible text ("Actions for Household").
+   */
+  trigger?: ReactNode;
   children: ReactNode;
 }) {
   const trigger = useRef<HTMLButtonElement | null>(null);
@@ -204,11 +215,18 @@ export function RowMenu({
           className={
             row
               ? ROW_TRIGGER_CLASS
-              : 'inline-flex h-11 w-11 items-center justify-center rounded-md text-muted hover:bg-surface-2 hover:text-ink sm:h-8 sm:w-8'
+              : triggerText !== undefined
+                ? LABELLED_TRIGGER_CLASS
+                : 'inline-flex h-11 w-11 items-center justify-center rounded-md text-muted hover:bg-surface-2 hover:text-ink sm:h-8 sm:w-8'
           }
         >
           {row ? (
             row.content
+          ) : triggerText !== undefined ? (
+            <>
+              {triggerText}
+              <MenuOpenIcon aria-hidden="true" className={`size-4 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`.trim()} />
+            </>
           ) : (
             <span aria-hidden="true" className="text-base leading-none">
               ⋯

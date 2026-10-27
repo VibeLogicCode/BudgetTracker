@@ -279,3 +279,35 @@ describe('v1.58.0: the whole row as the trigger', () => {
     expect(document.activeElement).toBe(button);
   });
 });
+
+describe('v1.59.0: a labelled trigger', () => {
+  it('is a secondary small button showing the text and a chevron that flips while open, still named by the label', () => {
+    render(
+      <RowMenu label="Actions for Household" trigger="Actions">
+        <RowMenuButton onSelect={() => {}}>Edit limits</RowMenuButton>
+      </RowMenu>,
+    );
+    const trigger = screen.getByRole('button', { name: 'Actions for Household' });
+    expect(trigger.className.split(/\s+/)).toEqual(expect.arrayContaining(['btn', 'btn--secondary', 'btn--sm']));
+    expect(trigger.textContent).toBe('Actions');
+    expect(trigger.textContent).not.toContain('⋯');
+    const icon = trigger.querySelector('svg')!;
+    expect(icon.getAttribute('aria-hidden')).toBe('true');
+    expect(icon.getAttribute('class')).not.toContain('rotate-180');
+    fireEvent.click(trigger);
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    expect(trigger.querySelector('svg')!.getAttribute('class')).toContain('rotate-180');
+    expect(screen.getByRole('menuitem', { name: 'Edit limits' })).toBeTruthy();
+  });
+
+  it('leaves the kebab and the row trigger as they were', () => {
+    render(
+      <RowMenu label="Actions for CITY TAX OFFICE">
+        <RowMenuButton onSelect={() => {}}>Rename…</RowMenuButton>
+      </RowMenu>,
+    );
+    const kebab = screen.getByRole('button', { name: 'Actions for CITY TAX OFFICE' });
+    expect(kebab.textContent).toBe('⋯');
+    expect(kebab.className).not.toContain('btn--secondary');
+  });
+});
