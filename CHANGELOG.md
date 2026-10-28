@@ -21,6 +21,16 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.59.1] - 2026-10-27
+
+### Changed
+
+- Settings, Updates: the shared update token warning is now one line inside the Updates card
+  instead of a banner. Fix opens a panel with a new token made on your device, each compose line
+  to paste under its own service with a Copy button, and the steps for Synology Container Manager
+  or docker compose. The line goes away once the app sees the new token.
+- Keyboard focus inside a panel or dialog now reaches a folded section's heading.
+
 ## [1.59.0] - 2026-10-27
 
 No migration. Rows imported before this release keep the person they were filed to: the card a row
