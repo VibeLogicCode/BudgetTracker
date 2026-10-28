@@ -827,7 +827,8 @@ describe('UP-2: an accepted apply arms the restart notice, a refused one does no
 describe('v1.59.1: the update token helper', () => {
   // Bytes 0x00..0x1f, so the token is a known 64-character string.
   const TOKEN = Array.from({ length: 32 }, (_, i) => i.toString(16).padStart(2, '0')).join('');
-  const COMPOSE = `WATCHTOWER_TOKEN: "${TOKEN}"\nWATCHTOWER_HTTP_API_TOKEN: "${TOKEN}"`;
+  const APP_LINE = `WATCHTOWER_TOKEN: "${TOKEN}"`;
+  const WATCHTOWER_LINE = `WATCHTOWER_HTTP_API_TOKEN: "${TOKEN}"`;
   const ENV = `WATCHTOWER_TOKEN=${TOKEN}`;
   const LINE = 'Update token: shared default';
   const TITLE = 'Change the update token';
@@ -908,10 +909,11 @@ describe('v1.59.1: the update token helper', () => {
     const token = screen.getByTestId('update-token-value').textContent;
     expect(token).toMatch(/^[0-9a-f]{64}$/);
     expect(token).toBe(TOKEN);
-    expect(screen.getByTestId('update-token-compose').textContent).toBe(COMPOSE);
+    expect(screen.getByTestId('update-token-app-line').textContent).toBe(APP_LINE);
+    expect(screen.getByTestId('update-token-watchtower-line').textContent).toBe(WATCHTOWER_LINE);
     const env = screen.getByTestId('update-token-env');
     expect(env.textContent).toBe(ENV);
-    // The .env route is a secondary disclosure, collapsed until asked for.
+    // The computer route is a secondary disclosure, collapsed until asked for.
     expect((env.closest('details') as HTMLDetailsElement).open).toBe(false);
   });
 
@@ -924,11 +926,83 @@ describe('v1.59.1: the update token helper', () => {
     expect(screen.getByTestId('update-token-value').textContent).toBe(TOKEN);
   });
 
+  it('keeps the same token when update checks are turned on, which moves the line to the other branch', async () => {
+    vi.mocked(enableUpdateChecksAction).mockResolvedValueOnce({
+      message: 'Update checks are on.',
+      enabled: true,
+      severity: 'none',
+      latestVersion: null,
+      resolvedAt: '2026-08-18T09:35:00.000Z',
+    });
+    render(<UpdatesClient {...base} enabled={false} autoApply={false} lastCheckedAt={null} legacyToken />);
+    openHelper();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    submit('Enable update checks');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Check now' })).toBeTruthy());
+    openHelper();
+    expect(getRandomValues).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('update-token-value').textContent).toBe(TOKEN);
+  });
+
+  it('shows each compose line under its service name, with its own Copy, and says both must match', () => {
+    render(<UpdatesClient {...base} legacyToken />);
+    const dialog = openHelper();
+    const app = screen.getByTestId('update-token-app-line');
+    const watchtower = screen.getByTestId('update-token-watchtower-line');
+    expect(app.previousElementSibling?.textContent).toBe('Under budget-tracker');
+    expect(watchtower.previousElementSibling?.textContent).toBe('Under watchtower');
+    expect(app.nextElementSibling).toBe(within(dialog).getByRole('button', { name: 'Copy budget-tracker line' }));
+    expect(watchtower.nextElementSibling).toBe(within(dialog).getByRole('button', { name: 'Copy watchtower line' }));
+    expect(within(dialog).queryByRole('button', { name: 'Copy both lines' })).toBeNull();
+    expect(within(dialog).getByText('Both lines must carry the same value, or updates stop working.')).toBeTruthy();
+  });
+
+  it('Synology steps: copy first, then Stop, then Edit, then Save, Build and start again', () => {
+    render(<UpdatesClient {...base} legacyToken />);
+    const dialog = openHelper();
+    const section = within(dialog).getByRole('region', { name: 'Synology Container Manager' });
+    const steps = Array.from(section.querySelectorAll(':scope > ol > li'), (li) => li.textContent ?? '');
+    expect(steps).toHaveLength(4);
+    expect(steps[0]).toMatch(/^Copy the new token first, or each line below\./);
+    expect(steps[1]).toBe('Open Project, select the project, then Stop.');
+    expect(steps[2]).toBe('Action, Edit. Replace the value of both lines with the new token.');
+    expect(steps[3]).toMatch(/^Save, then Build, then start the project again\./);
+    expect(steps[3]).toContain('the update token line goes away once the app sees the new token');
+  });
+
+  it('the computer route edits the same two lines and runs docker compose up -d; .env only for ${WATCHTOWER_TOKEN…}', () => {
+    render(<UpdatesClient {...base} legacyToken />);
+    const dialog = openHelper();
+    const details = dialog.querySelector('details') as HTMLDetailsElement;
+    expect(details.querySelector('summary')?.textContent).toBe('Docker compose on a computer');
+    const steps = Array.from(details.querySelectorAll(':scope > ol > li'), (li) => li.textContent ?? '');
+    expect(steps).toHaveLength(2);
+    expect(steps[0]).toMatch(/^Open the compose file and replace the value of the same two lines with the new token\./);
+    expect(steps[0]).toContain('If those two lines read ${WATCHTOWER_TOKEN…}');
+    expect(steps[0]).toContain('in the .env file next to the compose file instead');
+    expect(steps[1]).toBe('Run docker compose up -d in that folder, then come back here.');
+    expect(within(details).getByRole('button', { name: 'Copy the .env line' })).toBeTruthy();
+    // The old route that put the .env line first, for every install, is gone.
+    expect(within(dialog).queryByText(/Docker compose with a \.env file/)).toBeNull();
+  });
+
+  it('Tab reaches the collapsed disclosure: Shift+Tab from the panel lands on its summary, Tab wraps back', () => {
+    render(<UpdatesClient {...base} legacyToken />);
+    const dialog = openHelper();
+    const summary = dialog.querySelector('summary') as HTMLElement;
+    expect(document.activeElement).toBe(dialog);
+    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(summary);
+    fireEvent.keyDown(summary, { key: 'Tab' });
+    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Close' }));
+  });
+
   it.each([
-    ['Copy new token', TOKEN],
-    ['Copy both lines', COMPOSE],
-    ['Copy the .env line', ENV],
-  ])('%s writes the right text, announces Copied, and its label returns', async (name, text) => {
+    ['Copy new token', TOKEN, 'New token copied'],
+    ['Copy budget-tracker line', APP_LINE, 'budget-tracker line copied'],
+    ['Copy watchtower line', WATCHTOWER_LINE, 'watchtower line copied'],
+    ['Copy the .env line', ENV, '.env line copied'],
+  ])('%s writes the right text, announces its target, and its label returns', async (name, text, said) => {
     vi.useFakeTimers();
     const writeText = vi.fn(async (_text: string) => {});
     stubClipboard(writeText);
@@ -946,13 +1020,43 @@ describe('v1.59.1: the update token helper', () => {
     expect(within(dialog).getByRole('button', { name })).toBe(button);
     const live = within(dialog).getByRole('status');
     expect(live.getAttribute('aria-live')).toBe('polite');
-    expect(live.textContent).toBe('Copied');
+    expect(live.textContent).toBe(said);
 
     act(() => {
       vi.advanceTimersByTime(2000);
     });
     expect(button.textContent).toBe('Copy');
     expect(live.textContent).toBe('');
+  });
+
+  it('a second copy within the outcome window is announced too: its own target, and a fresh node on a repeat', async () => {
+    vi.useFakeTimers();
+    stubClipboard(async () => {});
+    render(<UpdatesClient {...base} legacyToken />);
+    const dialog = openHelper();
+    const live = within(dialog).getByRole('status');
+
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Copy budget-tracker line' }));
+    });
+    expect(live.textContent).toBe('budget-tracker line copied');
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Copy watchtower line' }));
+    });
+    expect(live.textContent).toBe('watchtower line copied');
+    expect(within(dialog).getByRole('button', { name: 'Copy budget-tracker line' }).textContent).toBe('Copy');
+
+    // The same copy again: the same words, in a new node, so a screen reader reads them again.
+    const before = live.firstElementChild;
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Copy watchtower line' }));
+    });
+    expect(live.textContent).toBe('watchtower line copied');
+    expect(live.firstElementChild).not.toBe(before);
+    expect(live.firstElementChild?.isConnected).toBe(true);
   });
 
   it('without a working clipboard, Copy selects the text and says how to finish', async () => {
@@ -967,7 +1071,7 @@ describe('v1.59.1: the update token helper', () => {
     });
     expect(window.getSelection()?.toString()).toBe(TOKEN);
     expect(button.textContent).toBe('Selected');
-    expect(within(dialog).getByRole('status').textContent).toBe('Selected. Use your device’s Copy to finish.');
+    expect(within(dialog).getByRole('status').textContent).toBe('New token selected. Use your device’s Copy to finish.');
   });
 
   it('MUST-7.3: the server-rendered card carries the line and no token', () => {

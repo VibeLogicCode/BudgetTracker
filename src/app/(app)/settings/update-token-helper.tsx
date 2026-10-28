@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { buttonClass } from '@/components/ui/Button';
 import { CardActionRow } from '@/components/ui/CardActionRow';
 import { DisclosureSummary } from '@/components/ui/Disclosure';
@@ -25,17 +25,35 @@ function newUpdateToken(): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
+/** The page's one new update token, and how to make it. */
+export interface UpdateToken {
+  value: string | null;
+  /** Makes the value when there is none yet; does nothing once there is one. */
+  ensure: () => void;
+}
+
 /**
- * Sits directly under the card's "Last checked" line. The token is made on the first Fix and kept
- * for the life of the page, so closing and reopening the Sheet never hands out a second value after
- * the first was already pasted into one of the two places that must match.
+ * Held by UpdatesClient, above both of its branches, so turning update checks on or off (which
+ * moves the line from one branch to the other and remounts it) keeps the same value. It is made on
+ * the first Fix and kept while the page stays open, so closing and reopening the Sheet, or toggling
+ * checks, never hands out a second value after the first went into one of the places that must match.
  */
-export function UpdateTokenLine() {
-  const [token, setToken] = useState<string | null>(null);
+export function useUpdateToken(): UpdateToken {
+  const [value, setValue] = useState<string | null>(null);
+  return {
+    value,
+    ensure: () => {
+      if (value === null) setValue(newUpdateToken());
+    },
+  };
+}
+
+/** Sits directly under the card's "Last checked" line (or at the top of the card with checks off). */
+export function UpdateTokenLine({ token }: { token: UpdateToken }) {
   const [open, setOpen] = useState(false);
 
   function openSheet() {
-    if (token === null) setToken(newUpdateToken());
+    token.ensure();
     setOpen(true);
   }
 
@@ -48,41 +66,73 @@ export function UpdateTokenLine() {
           Fix
         </CardActionRow>
       </p>
-      {open && token !== null ? <UpdateTokenSheet token={token} onClose={() => setOpen(false)} /> : null}
+      {open && token.value !== null ? <UpdateTokenSheet token={token.value} onClose={() => setOpen(false)} /> : null}
     </>
   );
 }
 
-type CopyTarget = 'token' | 'compose' | 'env';
-type CopyOutcome = 'Copied' | 'Selected';
+type CopyTarget = 'token' | 'app' | 'watchtower' | 'env';
+type CopyResult = 'Copied' | 'Selected';
 
-/** What the live region says. A fallback selection says how to finish, since nothing was copied. */
-const ANNOUNCEMENT: Record<CopyOutcome, string> = {
-  Copied: 'Copied',
-  Selected: 'Selected. Use your device’s Copy to finish.',
+/** What the live region names, so a second copy within the outcome window is still announced. */
+const TARGET_NAME: Record<CopyTarget, string> = {
+  token: 'New token',
+  app: 'budget-tracker line',
+  watchtower: 'watchtower line',
+  env: '.env line',
 };
+
+/** A fallback selection says how to finish, since nothing was copied. */
+function announcement(target: CopyTarget, result: CopyResult): string {
+  return result === 'Copied'
+    ? `${TARGET_NAME[target]} copied`
+    : `${TARGET_NAME[target]} selected. Use your device’s Copy to finish.`;
+}
 
 const BOX = 'block select-all break-all rounded-md bg-surface-2 px-3 py-2 font-mono text-xs text-ink';
 
-/** The visible label shows the outcome for a moment; the accessible name stays the same. */
-function CopyButton({ name, outcome, onCopy }: { name: string; outcome: CopyOutcome | null; onCopy: () => void }) {
+/**
+ * One value to copy: an optional label above it, the value in a selectable box, and its Copy
+ * button. The visible label shows the outcome for a moment; the accessible name stays the same.
+ */
+function CopyBox({
+  label,
+  text,
+  testId,
+  name,
+  outcome,
+  onCopy,
+}: {
+  label?: ReactNode;
+  text: string;
+  testId: string;
+  name: string;
+  outcome: CopyResult | null;
+  onCopy: (box: HTMLElement | null) => void;
+}) {
+  const boxRef = useRef<HTMLElement | null>(null);
   return (
-    <button
-      type="button"
-      aria-label={name}
-      className={buttonClass('secondary', 'sm', 'min-h-11 self-start sm:min-h-0')}
-      onClick={onCopy}
-    >
-      {outcome ?? 'Copy'}
-    </button>
+    <div className="flex flex-col gap-2">
+      {label === undefined ? null : <p className="text-xs text-subtle">{label}</p>}
+      <code ref={boxRef} data-testid={testId} className={BOX}>
+        {text}
+      </code>
+      <button
+        type="button"
+        aria-label={name}
+        className={buttonClass('secondary', 'sm', 'min-h-11 self-start sm:min-h-0')}
+        onClick={() => onCopy(boxRef.current)}
+      >
+        {outcome ?? 'Copy'}
+      </button>
+    </div>
   );
 }
 
 function UpdateTokenSheet({ token, onClose }: { token: string; onClose: () => void }) {
-  const tokenRef = useRef<HTMLElement | null>(null);
-  const composeRef = useRef<HTMLPreElement | null>(null);
-  const envRef = useRef<HTMLElement | null>(null);
-  const [outcome, setOutcome] = useState<{ target: CopyTarget; result: CopyOutcome } | null>(null);
+  // `n` counts copies, so the live region gets a new node even when the same text repeats.
+  const [outcome, setOutcome] = useState<{ target: CopyTarget; result: CopyResult; n: number } | null>(null);
+  const copies = useRef(0);
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(
@@ -92,7 +142,8 @@ function UpdateTokenSheet({ token, onClose }: { token: string; onClose: () => vo
     [],
   );
 
-  const composeLines = `WATCHTOWER_TOKEN: "${token}"\nWATCHTOWER_HTTP_API_TOKEN: "${token}"`;
+  const appLine = `WATCHTOWER_TOKEN: "${token}"`;
+  const watchtowerLine = `WATCHTOWER_HTTP_API_TOKEN: "${token}"`;
   const envLine = `WATCHTOWER_TOKEN=${token}`;
 
   /**
@@ -101,14 +152,15 @@ function UpdateTokenSheet({ token, onClose }: { token: string; onClose: () => vo
    * device's own Copy finishes the job, and the announcement says so rather than claiming a copy.
    */
   async function copy(target: CopyTarget, text: string, box: HTMLElement | null) {
-    let result: CopyOutcome = 'Copied';
+    let result: CopyResult = 'Copied';
     try {
       await navigator.clipboard.writeText(text);
     } catch {
       result = 'Selected';
       if (box !== null) window.getSelection()?.selectAllChildren(box);
     }
-    setOutcome({ target, result });
+    copies.current += 1;
+    setOutcome({ target, result, n: copies.current });
     if (resetTimer.current !== null) clearTimeout(resetTimer.current);
     resetTimer.current = setTimeout(() => setOutcome(null), COPY_OUTCOME_MS);
   }
@@ -127,13 +179,12 @@ function UpdateTokenSheet({ token, onClose }: { token: string; onClose: () => vo
           <h3 id="update-token-new" className="text-sm font-semibold text-ink">
             New token
           </h3>
-          <code ref={tokenRef} data-testid="update-token-value" className={BOX}>
-            {token}
-          </code>
-          <CopyButton
+          <CopyBox
+            text={token}
+            testId="update-token-value"
             name="Copy new token"
             outcome={outcomeOf('token')}
-            onCopy={() => void copy('token', token, tokenRef.current)}
+            onCopy={(box) => void copy('token', token, box)}
           />
           <p className="text-xs text-subtle">Made on this device, and not saved or sent anywhere by the app.</p>
         </section>
@@ -143,48 +194,71 @@ function UpdateTokenSheet({ token, onClose }: { token: string; onClose: () => vo
             Synology Container Manager
           </h3>
           <ol className="flex list-decimal flex-col gap-3 pl-5">
-            <li>Open Project, select the project, then Stop.</li>
-            <li className="flex flex-col gap-2">
+            <li className="flex flex-col gap-3">
               <span>
-                Action, Edit. Replace the value of both lines with the new token: <code>WATCHTOWER_TOKEN</code> sits
-                under budget-tracker, <code>WATCHTOWER_HTTP_API_TOKEN</code> under watchtower.
+                Copy the new token first, or each line below. It goes in two lines of the compose file, one under each
+                service:
               </span>
-              <pre ref={composeRef} data-testid="update-token-compose" className={`${BOX} whitespace-pre-wrap`}>
-                {composeLines}
-              </pre>
-              <CopyButton
-                name="Copy both lines"
-                outcome={outcomeOf('compose')}
-                onCopy={() => void copy('compose', composeLines, composeRef.current)}
+              <CopyBox
+                label={
+                  <>
+                    Under <code>budget-tracker</code>
+                  </>
+                }
+                text={appLine}
+                testId="update-token-app-line"
+                name="Copy budget-tracker line"
+                outcome={outcomeOf('app')}
+                onCopy={(box) => void copy('app', appLine, box)}
               />
+              <CopyBox
+                label={
+                  <>
+                    Under <code>watchtower</code>
+                  </>
+                }
+                text={watchtowerLine}
+                testId="update-token-watchtower-line"
+                name="Copy watchtower line"
+                outcome={outcomeOf('watchtower')}
+                onCopy={(box) => void copy('watchtower', watchtowerLine, box)}
+              />
+              <p>Both lines must carry the same value, or updates stop working.</p>
             </li>
+            <li>Open Project, select the project, then Stop.</li>
+            <li>Action, Edit. Replace the value of both lines with the new token.</li>
             <li>
-              Save, then Build. Then come back here: the update token line goes away once the app sees the new
-              token.
+              Save, then Build, then start the project again. Come back here afterwards: the update token line goes away
+              once the app sees the new token.
             </li>
           </ol>
         </section>
 
         <details className="group/disclosure">
-          <DisclosureSummary className="min-h-11 sm:min-h-0">Docker compose with a .env file</DisclosureSummary>
-          <div className="mt-2 flex flex-col gap-2">
-            <p>Put this line in the .env file next to the compose file, in place of the old one:</p>
-            <code ref={envRef} data-testid="update-token-env" className={BOX}>
-              {envLine}
-            </code>
-            <CopyButton
-              name="Copy the .env line"
-              outcome={outcomeOf('env')}
-              onCopy={() => void copy('env', envLine, envRef.current)}
-            />
-            <p>
-              Then run <code>docker compose up -d</code> in that folder.
-            </p>
-          </div>
+          <DisclosureSummary className="min-h-11 sm:min-h-0">Docker compose on a computer</DisclosureSummary>
+          <ol className="mt-2 flex list-decimal flex-col gap-3 pl-5">
+            <li className="flex flex-col gap-2">
+              <span>Open the compose file and replace the value of the same two lines with the new token.</span>
+              <span>
+                If those two lines read <code>{'${WATCHTOWER_TOKEN…}'}</code>, leave them as they are and put this line
+                in the .env file next to the compose file instead, in place of any old one:
+              </span>
+              <CopyBox
+                text={envLine}
+                testId="update-token-env"
+                name="Copy the .env line"
+                outcome={outcomeOf('env')}
+                onCopy={(box) => void copy('env', envLine, box)}
+              />
+            </li>
+            <li>
+              Run <code>docker compose up -d</code> in that folder, then come back here.
+            </li>
+          </ol>
         </details>
 
         <p role="status" aria-live="polite" className="sr-only">
-          {outcome === null ? '' : ANNOUNCEMENT[outcome.result]}
+          {outcome === null ? null : <span key={outcome.n}>{announcement(outcome.target, outcome.result)}</span>}
         </p>
       </div>
     </Sheet>

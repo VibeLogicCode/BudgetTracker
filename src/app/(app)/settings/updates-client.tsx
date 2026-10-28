@@ -25,7 +25,7 @@ import {
   type UpdateActionState,
 } from './actions';
 import { pendingApplyMessage } from './pending-apply-message';
-import { UpdateTokenLine } from './update-token-helper';
+import { UpdateTokenLine, useUpdateToken } from './update-token-helper';
 import { buttonClass } from '@/components/ui/Button';
 
 export interface UpdatesViewProps {
@@ -163,8 +163,11 @@ export function UpdatesClient(props: UpdatesViewProps) {
     {} as ReviewUpdateState,
   );
   const [panelOpen, setPanelOpen] = useState(false);
+  // v1.59.1: held here, above the "checks are off" branch, so both mounts of UpdateTokenLine share
+  // one value and toggling update checks does not make a second one.
+  const updateToken = useUpdateToken();
 
-  const messages = [enableState, disableState, autoState, checkState, applyState, dismissState, packNotice];
+  const messages =[enableState, disableState, autoState, checkState, applyState, dismissState, packNotice];
   const message = messages.map((s) => s.message).find((m) => m !== undefined);
   const error = messages.map((s) => s.error).find((e) => e !== undefined) ?? review.error;
 
@@ -271,7 +274,7 @@ export function UpdatesClient(props: UpdatesViewProps) {
         <CardBody className="flex flex-col gap-4">
           {/* v1.59.1: shown with checks off too. Watchtower answers the shared default whether or
               not this app ever asks it for an update, and checks start off on a new install. */}
-          {props.legacyToken ? <UpdateTokenLine /> : null}
+          {props.legacyToken ? <UpdateTokenLine token={updateToken} /> : null}
           {canadianPackNotice}
           <p className="text-sm text-muted">
             This app does not check for updates unless you ask it to. Switch this on and once a day it will ask GitHub
@@ -393,7 +396,7 @@ export function UpdatesClient(props: UpdatesViewProps) {
           </p>
           {/* v1.59.1: one quiet line under the stamps, not a banner above the card. Fix opens the
               helper Sheet (update-token-helper.tsx); nothing renders once the default is gone. */}
-          {props.legacyToken ? <UpdateTokenLine /> : null}
+          {props.legacyToken ? <UpdateTokenLine token={updateToken} /> : null}
         </div>
 
         {resolved.lastCheckError === null ? null : <Notice tone="error">{resolved.lastCheckError}</Notice>}

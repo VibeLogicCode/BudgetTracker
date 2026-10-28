@@ -4,13 +4,14 @@ import { ExpandIcon } from '@/components/ui/icons';
 
 const LOOK = 'items-center text-left font-medium text-accent-text hover:underline min-h-11 sm:min-h-0';
 const ROW = `flex w-full justify-between gap-2 ${LOOK}`;
-const INLINE = `inline-flex gap-0.5 ${LOOK}`;
+const INLINE = `inline-flex min-w-11 gap-0.5 sm:min-w-0 ${LOOK}`;
 
 /**
  * A card's footer action: full width, label left, chevron right. Pass `href` for a navigation,
  * or `onClick` for a button. `expanded` (when given) makes it a disclosure and rotates the
  * chevron; `opensDialog` marks a button that opens a dialog. `inline` keeps the same look at the
- * width of its label, chevron right after it, for an action that ends a line of text.
+ * width of its label, chevron right after it, for an action that ends a line of text; below `sm`
+ * it is at least 44px wide as well as tall, so a short label still makes a full touch target.
  */
 export function CardActionRow({
   children,

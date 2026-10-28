@@ -103,6 +103,56 @@ describe('Sheet', () => {
     expect(document.activeElement).toBe(link);
   });
 
+  it('Tab reaches a disclosure summary, and skips what a closed disclosure hides', () => {
+    const { container } = render(
+      <Sheet sheetId="t" title="Groceries" onClose={() => {}}>
+        <button>First row</button>
+        <details>
+          <summary>More ways</summary>
+          <button>Hidden copy</button>
+        </details>
+      </Sheet>,
+    );
+    const dialog = screen.getByRole('dialog');
+    const close = screen.getByText('Close');
+    const summary = screen.getByText('More ways');
+    // Closed: the summary is the last stop, so Shift+Tab from the panel and Tab from it both wrap.
+    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(summary);
+    fireEvent.keyDown(summary, { key: 'Tab' });
+    expect(document.activeElement).toBe(close);
+    fireEvent.keyDown(close, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(summary);
+
+    // Open: what it holds counts again, so the last stop is the control inside.
+    (container.ownerDocument.querySelector('details') as HTMLDetailsElement).open = true;
+    const hidden = screen.getByText('Hidden copy');
+    close.focus();
+    fireEvent.keyDown(close, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(hidden);
+    fireEvent.keyDown(hidden, { key: 'Tab' });
+    expect(document.activeElement).toBe(close);
+  });
+
+  it('a RowDialog whose only stop is a closed disclosure keeps Tab on its summary', () => {
+    render(
+      <RowDialog dialogId="d" title="Over" onClose={() => {}}>
+        <details>
+          <summary>More ways</summary>
+          <button>Hidden copy</button>
+        </details>
+      </RowDialog>,
+    );
+    const summary = screen.getByText('More ways');
+    summary.focus();
+    expect(document.activeElement).toBe(summary);
+    // Prevented (fireEvent returns false): the browser's own Tab never runs, so focus cannot leave.
+    expect(fireEvent.keyDown(summary, { key: 'Tab' })).toBe(false);
+    expect(document.activeElement).toBe(summary);
+    expect(fireEvent.keyDown(summary, { key: 'Tab', shiftKey: true })).toBe(false);
+    expect(document.activeElement).toBe(summary);
+  });
+
   it('Shift+Tab from the focused panel wraps to the last stop instead of leaving it', () => {
     render(<SheetView />);
     const dialog = screen.getByRole('dialog');

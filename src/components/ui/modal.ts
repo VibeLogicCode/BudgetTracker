@@ -15,13 +15,28 @@ import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent, type RefOb
  * list is read fresh on every Tab press (not cached once at open) because a dialog's own
  * "Add a part"/"Remove part"-style buttons can change how many focusable controls exist while it
  * stays open.
+ *
+ * v1.59.1: `summary` is a stop too, since a <details> disclosure's summary takes focus in a real
+ * browser. A control inside a CLOSED <details> (other than its summary) is left out, because the
+ * browser cannot focus it: counted, it would become the "last" stop, Tab from the real last stop
+ * would leave the dialog, and Shift+Tab from the first would aim at something that cannot take focus.
  */
 export const DIALOG_FOCUSABLE_SELECTOR =
-  'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
+
+/** Matches an element that sits inside a closed <details> and is not that details' summary. */
+const INSIDE_CLOSED_DETAILS = 'details:not([open]) > :not(summary)';
+
+/** The dialog's Tab stops in document order, leaving out what a closed disclosure hides. */
+function dialogTabStops(container: HTMLElement): HTMLElement[] {
+  return Array.from(container.querySelectorAll<HTMLElement>(DIALOG_FOCUSABLE_SELECTOR)).filter(
+    (element) => element.closest(INSIDE_CLOSED_DETAILS) === null,
+  );
+}
 
 export function trapDialogTab(container: HTMLElement, event: ReactKeyboardEvent<HTMLElement>): void {
   if (event.key !== 'Tab') return;
-  const focusable = Array.from(container.querySelectorAll<HTMLElement>(DIALOG_FOCUSABLE_SELECTOR));
+  const focusable = dialogTabStops(container);
   if (focusable.length === 0) return;
   const first = focusable[0];
   const last = focusable[focusable.length - 1];

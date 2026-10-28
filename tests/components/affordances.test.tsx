@@ -156,4 +156,20 @@ describe('CardActionRow', () => {
     expect(b.lastElementChild?.tagName.toLowerCase()).toBe('svg');
     expect(svgOf(b).getAttribute('aria-hidden')).toBe('true');
   });
+
+  it('inline: at least 44px wide below sm, like the theme toggle; the full-width row is unchanged', () => {
+    render(
+      <CardActionRow onClick={() => {}} opensDialog inline>
+        Fix
+      </CardActionRow>,
+    );
+    const inline = screen.getByRole('button', { name: 'Fix' }).className.split(/\s+/);
+    expect(inline).toEqual(expect.arrayContaining(['min-w-11', 'sm:min-w-0']));
+    cleanup();
+    render(<CardActionRow onClick={() => {}}>Set limit</CardActionRow>);
+    const row = screen.getByRole('button', { name: 'Set limit' }).className.split(/\s+/);
+    expect(row).not.toContain('min-w-11');
+    expect(row).not.toContain('sm:min-w-0');
+    expect(row).toEqual(expect.arrayContaining(['w-full', 'justify-between', 'min-h-11', 'sm:min-h-0']));
+  });
 });
