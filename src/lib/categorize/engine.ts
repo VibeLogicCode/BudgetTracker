@@ -1,4 +1,5 @@
 import { and, asc, eq, gte, inArray, isNotNull, isNull, lte, ne, notInArray, or, sql, type SQL } from 'drizzle-orm';
+import { cache } from 'react';
 import { getDb } from '@/db/client';
 import { loanPayments, transactions, transactionSplits } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
@@ -2124,10 +2125,16 @@ export function sendAlwaysAskRowsToReview(input: { ruleId: number; at?: Date }):
  * `txn_id` resolve against loan_payments' OWN row instead of this outer transactions row,
  * matching every transaction the moment ANY loan link exists anywhere. Served by
  * loan_payments_txn_idx (migration 0007) -- no new index, no migration needed.
+ *
+ * v1.60.0: the first two terms are literal SQL, word for word the predicate of the partial index
+ * transactions_review_idx (drizzle/0030), so the count the layout runs on every page reads that
+ * index. With the values bound as parameters SQLite could match the index only by planning the
+ * statement a second time once the values were bound, on every call. Same meaning as the
+ * eq/isNull/or form they replace.
  */
 export const REVIEW_WHERE = and(
-  eq(transactions.isTransfer, false),
-  or(isNull(transactions.categoryId), eq(transactions.categorizationSource, 'bayes')),
+  sql`${transactions.isTransfer} = 0`,
+  sql`(${transactions.categoryId} is null or ${transactions.categorizationSource} = 'bayes')`,
   sql`not exists (select 1 from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id})`,
   sql`not exists (select 1 from ${loanPayments} where ${loanPayments.txnId} = ${transactions.id})`,
 );
@@ -2182,14 +2189,18 @@ export function reviewQueueIds(limit = 100, offset = 0): number[] {
     .map((row) => row.id);
 }
 
-export function reviewQueueCount(): number {
+/**
+ * Wrapped in React `cache`, so the app layout and the page under it share one count per server
+ * request. Outside a server render `cache` holds nothing and every call counts afresh.
+ */
+export const reviewQueueCount = cache((): number => {
   const row = getDb()
     .select({ c: sql<number>`count(*)` })
     .from(transactions)
     .where(REVIEW_WHERE)
     .get();
   return row?.c ?? 0;
-}
+});
 
 // ------------------------------------------------- merchant renames (v1.4)
 

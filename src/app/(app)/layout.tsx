@@ -25,7 +25,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // scoping of its own (src/lib/categorize/engine.ts) -- computing it unconditionally serialized
   // a household total into AppShell's props even for a self viewer, whose nav never renders the
   // review badge at all. Same "no household figure leaves this file, even unrendered" reasoning
-  // already applied to budgets/page.tsx and reports/page.tsx.
+  // already applied to budgets/page.tsx and reports/page.tsx. v1.60.0: one count per request --
+  // reviewQueueCount is React-cached, so a page under this layout that asks again reuses it.
   const reviewCount = isSelfScoped(user) ? 0 : reviewQueueCount();
   return (
     <AppShell

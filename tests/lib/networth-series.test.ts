@@ -6,6 +6,7 @@ import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } fr
 import type { Viewer } from '@/lib/auth/viewer';
 import { addDaysIso, monthEnd } from '@/lib/dates';
 import { netWorthHint, netWorthOverTime, recordBalanceSnapshot } from '@/lib/networth';
+import { setAccountActive } from '@/lib/accounts';
 
 /** A household admin sees every account -- every pre-v1.13.0 assertion in this file expects that. */
 const household: Viewer = { id: 1, role: 'admin', visibility: 'household' };
@@ -62,6 +63,7 @@ function seedLoan(
   return row.id;
 }
 
+/** Inactive with no recorded day (deactivated_at stays NULL): counted in no month at all. */
 function deactivateAccount(t: TestDb, accountId: number): void {
   t.sqlite.prepare('update accounts set is_active = 0 where id = ?').run(accountId);
 }
@@ -299,6 +301,101 @@ describe('netWorthOverTime: inactive accounts', () => {
     expect(series[0].assetsCents).toBe(100_000);
     expect(series[0].accountsMissing).toBe(0);
     expect(series[0].accountsStale).toBe(0);
+  });
+});
+
+/**
+ * Item 12 (v1.60.0). Deactivating an account used to drop it from every month, past ones
+ * included. It now counts in each month that ended before the day it was deactivated.
+ */
+describe('netWorthOverTime: deactivating an account keeps its past', () => {
+  function seedTwoAccounts(t: TestDb): { kept: number; closed: number } {
+    const kept = insertTestAccount(t.db, { name: 'Joint chequing' });
+    const closed = insertTestAccount(t.db, { name: 'Old savings', type: 'savings' });
+    for (const date of ['2026-01-01', '2026-02-01', '2026-03-01', '2026-04-01', '2026-05-01']) {
+      recordBalanceSnapshot({ accountId: kept, date, balanceCents: 100_000, source: 'manual' });
+    }
+    recordBalanceSnapshot({ accountId: closed, date: '2026-01-10', balanceCents: 50_000, source: 'manual' });
+    recordBalanceSnapshot({ accountId: closed, date: '2026-02-10', balanceCents: 60_000, source: 'manual' });
+    recordBalanceSnapshot({ accountId: closed, date: '2026-03-10', balanceCents: 70_000, source: 'manual' });
+    return { kept, closed };
+  }
+  const series = () => netWorthOverTime(5, { endMonth: '2026-05', today: '2026-05-15', viewer: household });
+
+  it('leaves January to March as they were and drops the account from April on', () => {
+    current = createSeededTestDb();
+    const { closed } = seedTwoAccounts(current);
+    const before = series();
+    expect(before.map((p) => p.assetsCents)).toEqual([150_000, 160_000, 170_000, 170_000, 170_000]);
+
+    setAccountActive(closed, false, '2026-04-10');
+    const after = series();
+
+    expect(after.slice(0, 3)).toEqual(before.slice(0, 3));
+    expect(after.slice(3)).toEqual([
+      { month: '2026-04', assetsCents: 100_000, debtsCents: 0, netCents: 100_000, accountsMissing: 0, accountsStale: 0 },
+      { month: '2026-05', assetsCents: 100_000, debtsCents: 0, netCents: 100_000, accountsMissing: 0, accountsStale: 0 },
+    ]);
+  });
+
+  it('counts the account in every month again once it is reactivated', () => {
+    current = createSeededTestDb();
+    const { closed } = seedTwoAccounts(current);
+    const before = series();
+    setAccountActive(closed, false, '2026-04-10');
+    setAccountActive(closed, true, '2026-05-02');
+
+    expect(current.sqlite.prepare('select deactivated_at as d from accounts where id = ?').get(closed)).toEqual({ d: null });
+    expect(series()).toEqual(before);
+  });
+
+  it('stamps the day once: deactivating an inactive account again keeps the first day', () => {
+    current = createSeededTestDb();
+    const { closed } = seedTwoAccounts(current);
+    setAccountActive(closed, false, '2026-04-10');
+    setAccountActive(closed, false, '2026-05-02');
+    expect(current.sqlite.prepare('select is_active as a, deactivated_at as d from accounts where id = ?').get(closed)).toEqual({
+      a: 0,
+      d: '2026-04-10',
+    });
+  });
+
+  it("starts the series at a deactivated account's first snapshot and counts the others it misses that month", () => {
+    current = createSeededTestDb();
+    const kept = insertTestAccount(current.db, { name: 'Joint chequing' });
+    const closed = insertTestAccount(current.db, { name: 'Old savings', type: 'savings' });
+    recordBalanceSnapshot({ accountId: closed, date: '2026-01-10', balanceCents: 50_000, source: 'manual' });
+    recordBalanceSnapshot({ accountId: closed, date: '2026-02-10', balanceCents: 50_000, source: 'manual' });
+    recordBalanceSnapshot({ accountId: kept, date: '2026-03-01', balanceCents: 100_000, source: 'manual' });
+    setAccountActive(closed, false, '2026-03-15');
+
+    const points = netWorthOverTime(4, { endMonth: '2026-04', today: '2026-04-15', viewer: household });
+
+    expect(points.map((p) => [p.month, p.assetsCents, p.accountsMissing])).toEqual([
+      ['2026-01', 50_000, 1],
+      ['2026-02', 50_000, 1],
+      ['2026-03', 100_000, 0],
+      ['2026-04', 100_000, 0],
+    ]);
+  });
+
+  it("keeps a self viewer's series to their own accounts, deactivated ones included", () => {
+    current = createSeededTestDb();
+    const alex = insertTestUser(current.db, { name: 'Alex', username: 'alex', role: 'member' });
+    const own = insertTestAccount(current.db, { name: 'Alex savings', type: 'savings', ownerUserId: alex });
+    const joint = insertTestAccount(current.db, { name: 'Joint chequing' });
+    recordBalanceSnapshot({ accountId: own, date: '2026-01-10', balanceCents: 20_000, source: 'manual' });
+    recordBalanceSnapshot({ accountId: joint, date: '2026-01-10', balanceCents: 900_000, source: 'manual' });
+    setAccountActive(own, false, '2026-03-15');
+    setAccountActive(joint, false, '2026-03-15');
+    const self: Viewer = { id: alex, role: 'member', visibility: 'self' };
+
+    const points = netWorthOverTime(3, { endMonth: '2026-03', today: '2026-03-20', viewer: self });
+
+    expect(points.map((p) => [p.month, p.assetsCents])).toEqual([
+      ['2026-01', 20_000],
+      ['2026-02', 20_000],
+    ]);
   });
 });
 

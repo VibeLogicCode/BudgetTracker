@@ -24,6 +24,11 @@ export interface GoalPace {
   monthsRemaining: number | null;
   requiredMonthlyCents: number | null;
   avgMonthlyCents: number;
+  /**
+   * v1.60.0 (item 5). How many complete calendar months avgMonthlyCents averages (1 to 3); 0 when
+   * the first contribution is this month, so the average is this month alone.
+   */
+  avgMonths: number;
   projectedFinishMonth: string | null;
   noPace: boolean;
   overdue: boolean;
@@ -73,23 +78,38 @@ export function computePace(input: {
 }): GoalPace {
   const today = input.today ?? todayIso();
   const currentMonthKey = monthOf(today);
-  const windowStart = addMonths(currentMonthKey, -(TRAILING_MONTHS - 1));
 
   const savedCents = input.contributions.reduce((sum, row) => sum + row.amountCents, 0);
   const remainingCents = input.targetCents - savedCents;
   const met = remainingCents <= 0;
 
   // ---- trailing average ----
-  let windowSum = 0;
+  // v1.60.0 (item 5): complete months only -- up to the TRAILING_MONTHS calendar months before
+  // this one, starting no earlier than the first contribution's month. Counting the unfinished
+  // current month cut the average by a third on the 1st, and goal_off_pace fired that day. With
+  // the first contribution in this month there is no complete month yet, so this month alone is
+  // the average. This month's contributions always count toward savedCents above.
   let firstMonth: string | null = null;
   for (const contribution of input.contributions) {
     const month = monthOf(contribution.date);
     if (firstMonth === null || month < firstMonth) firstMonth = month;
-    if (month >= windowStart && month <= currentMonthKey) windowSum += contribution.amountCents;
   }
-  const denominatorStart = firstMonth !== null && firstMonth > windowStart ? firstMonth : windowStart;
-  const monthsCounted = Math.max(1, monthsBetween(denominatorStart, currentMonthKey) + 1);
-  const avgMonthlyCents = input.contributions.length === 0 ? 0 : Math.round(windowSum / monthsCounted);
+  let avgMonthlyCents = 0;
+  let avgMonths = 0;
+  if (firstMonth !== null) {
+    const hasCompleteMonth = firstMonth < currentMonthKey;
+    const trailingStart = addMonths(currentMonthKey, -TRAILING_MONTHS);
+    const fromMonth = hasCompleteMonth ? (firstMonth > trailingStart ? firstMonth : trailingStart) : currentMonthKey;
+    const toMonth = hasCompleteMonth ? addMonths(currentMonthKey, -1) : currentMonthKey;
+    let windowSum = 0;
+    for (const contribution of input.contributions) {
+      const month = monthOf(contribution.date);
+      if (month >= fromMonth && month <= toMonth) windowSum += contribution.amountCents;
+    }
+    const monthsCounted = monthsBetween(fromMonth, toMonth) + 1;
+    avgMonthlyCents = Math.round(windowSum / monthsCounted);
+    avgMonths = hasCompleteMonth ? monthsCounted : 0;
+  }
 
   const noPace = !met && avgMonthlyCents <= 0;
   let projectedFinishMonth: string | null = null;
@@ -135,6 +155,7 @@ export function computePace(input: {
     monthsRemaining,
     requiredMonthlyCents,
     avgMonthlyCents,
+    avgMonths,
     projectedFinishMonth,
     noPace,
     overdue,

@@ -57,4 +57,23 @@ describe('TransactionsPage reviewCount prop', () => {
     await renderPage();
     expect(captured.reviewCount).toBe(1);
   });
+
+  /**
+   * v1.60.0: reviewQueueCount is wrapped in React `cache` so the layout and the page share one
+   * count per server request. Outside a server render that cache must hold nothing, or a page
+   * rendered after an import would show the count from before it.
+   */
+  it('counts afresh on every call outside a server render', async () => {
+    t = createSeededTestDb();
+    const admin = insertTestUser(t.db, { name: 'Alex', username: 'alex', role: 'admin' });
+    const accountId = insertTestAccount(t.db, { type: 'chequing', ownerUserId: null });
+    const { reviewQueueCount } = await import('@/lib/categorize/engine');
+    expect(reviewQueueCount()).toBe(0);
+    seedUncategorized(accountId, admin);
+    expect(reviewQueueCount()).toBe(1);
+
+    currentUser.value = { id: admin, name: 'Alex', username: 'alex', role: 'admin', visibility: 'household' };
+    await renderPage();
+    expect(captured.reviewCount).toBe(1);
+  });
 });

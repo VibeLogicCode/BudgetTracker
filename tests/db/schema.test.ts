@@ -45,6 +45,7 @@ const EXPECTED_INDEXES = [
   'transactions_attributed_date_idx',
   'transactions_import_idx',
   'transactions_normalized_merchant_idx',
+  'transactions_review_idx',
   'transaction_imports_import_idx',
   'merchant_rules_pattern_uq',
   'budgets_scope_user_category_month_uq',

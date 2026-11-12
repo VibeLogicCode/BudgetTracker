@@ -1,9 +1,10 @@
-import { and, asc, eq, type SQL } from 'drizzle-orm';
+import { and, asc, eq, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '@/db/client';
 import { accounts } from '@/db/schema';
 import { NOT_YOURS_ERROR, ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { nowIso } from '@/lib/clock';
+import { todayIso } from '@/lib/dates';
 
 /**
  * v1.13.0 ruling R10. Five values, up from three. This column has never carried a SQL CHECK
@@ -22,6 +23,8 @@ export interface AccountRecord {
   createdAt: string;
   /** Spec 2026-09-28 §2.2. null = the household's staleImportWeeks; 0 = never remind; else weeks. */
   expectedImportWeeks: number | null;
+  /** v1.60.0. The household day it was deactivated (YYYY-MM-DD); null while active. */
+  deactivatedAt: string | null;
 }
 
 /**
@@ -118,8 +121,17 @@ export function createAccount(input: {
   return row.id;
 }
 
-export function setAccountActive(id: number, active: boolean): void {
-  getDb().update(accounts).set({ isActive: active }).where(eq(accounts.id, id)).run();
+/**
+ * v1.60.0 (item 12). Deactivating records the household's day, which net worth over time reads so
+ * the months before it keep the account; deactivating an account already inactive keeps its first
+ * day. Reactivating clears it, and the account counts in every month again.
+ */
+export function setAccountActive(id: number, active: boolean, today: string = todayIso()): void {
+  getDb()
+    .update(accounts)
+    .set({ isActive: active, deactivatedAt: active ? null : sql`coalesce(${accounts.deactivatedAt}, ${today})` })
+    .where(eq(accounts.id, id))
+    .run();
 }
 
 /** Display name only — never touches the id, so history, imports and dedup are unaffected. */

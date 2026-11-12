@@ -53,9 +53,16 @@ export function GoalCard({ goal, footer }: { goal: GoalWithProgress; footer?: Re
   } else if (pace.noPace) {
     lines.push(<span key="nopace">No pace yet — log a contribution to see a projection.</span>);
   } else {
+    // v1.60.0 (item 5): the average covers complete months only, so the line says how many.
+    const over =
+      pace.avgMonths === 0
+        ? '(this month so far)'
+        : pace.avgMonths === 1
+          ? 'over the last full month'
+          : `over the last ${pace.avgMonths} full months`;
     lines.push(
       <span key="pace">
-        Averaging {formatCents(pace.avgMonthlyCents)}/month · projected finish {pace.projectedFinishMonth}
+        Averaging {formatCents(pace.avgMonthlyCents)}/month {over} · projected finish {pace.projectedFinishMonth}
       </span>,
     );
   }

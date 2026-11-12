@@ -138,6 +138,13 @@ export const accounts = sqliteTable(
      * src/lib/import/cadence.ts owns the label <-> weeks mapping and the one rule that reads it.
      */
     expectedImportWeeks: integer('expected_import_weeks'),
+    /**
+     * v1.60.0, drizzle/0030_review_index_and_deactivation.sql. The household day the account was
+     * deactivated (YYYY-MM-DD); NULL while active. Net worth over time counts an inactive account
+     * in every month that ended before this day. Accounts already inactive at the migration took
+     * the day after their last activity.
+     */
+    deactivatedAt: text('deactivated_at'),
   },
   (t) => [index('accounts_owner_idx').on(t.ownerUserId)],
 );
@@ -268,6 +275,11 @@ export const transactions = sqliteTable(
     index('transactions_attributed_date_idx').on(t.attributedUserId, t.date),
     index('transactions_import_idx').on(t.importId),
     index('transactions_normalized_merchant_idx').on(t.normalizedMerchant),
+    // drizzle/0030: the review queue's rows only. The predicate stays word for word what
+    // REVIEW_WHERE (src/lib/categorize/engine.ts) states, so the review count plans through it.
+    index('transactions_review_idx')
+      .on(t.date)
+      .where(sql`is_transfer = 0 and (category_id is null or categorization_source = 'bayes')`),
   ],
 );
 

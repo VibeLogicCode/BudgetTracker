@@ -212,6 +212,36 @@ describe('N6: the goal events', () => {
     addContribution({ goalId, amountCents: 10_000, date: '2026-09-01', userId: c.userId });
     expect(outbox('goal_reached')).toEqual([]);
   });
+
+  /**
+   * v1.60.0 (item 5). The pace average used to count the unfinished current month, so on the 1st
+   * it fell by a third and a goal on pace through February was reported behind that very day.
+   */
+  it('does not say a goal on pace through February is behind on the 1st of March', () => {
+    c = setupLoanTest();
+    emailTarget();
+    setPref(c.userId, 'goal_off_pace', 'email', true);
+    const goalId = createGoal({ name: 'New roof', ownerUserId: c.userId, targetCents: 120_000, targetDate: '2026-12-01' });
+    for (const date of ['2025-12-15', '2026-01-15', '2026-02-15']) {
+      addContribution({ goalId, amountCents: 10_000, date, userId: c.userId });
+    }
+
+    expect(evaluateGoals({ userId: c.userId, now: new Date('2026-03-01T09:00:00.000Z'), tz: 'UTC' })).toBe(0);
+    expect(outbox('goal_off_pace')).toEqual([]);
+  });
+
+  it('still says so when the goal really is behind', () => {
+    c = setupLoanTest();
+    emailTarget();
+    setPref(c.userId, 'goal_off_pace', 'email', true);
+    const goalId = createGoal({ name: 'New roof', ownerUserId: c.userId, targetCents: 300_000, targetDate: '2026-12-01' });
+    for (const date of ['2025-12-15', '2026-01-15', '2026-02-15']) {
+      addContribution({ goalId, amountCents: 10_000, date, userId: c.userId });
+    }
+
+    expect(evaluateGoals({ userId: c.userId, now: new Date('2026-03-01T09:00:00.000Z'), tz: 'UTC' })).toBe(1);
+    expect(outbox('goal_off_pace')[0]!.dedup_key).toBe(`goal:pace:${goalId}:2026-03`);
+  });
 });
 
 /**

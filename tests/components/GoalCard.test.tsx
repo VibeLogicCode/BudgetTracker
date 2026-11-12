@@ -42,6 +42,18 @@ describe('GoalCard', () => {
     expect(screen.getByText(/no pace yet/i)).toBeTruthy();
   });
 
+  /** v1.60.0 (item 5): the average covers complete months only, and the line says how many. */
+  it('says how many full months the average covers', () => {
+    const contributions = ['2026-05-10', '2026-06-10', '2026-07-10', '2026-08-01'].map((date) => ({ date, amountCents: 10000 }));
+    render(<GoalCard goal={goal({ targetCents: 100000, targetDate: null, contributions })} />);
+    expect(screen.getByText(/Averaging \$100\.00\/month over the last 3 full months · projected finish 2027-02/)).toBeTruthy();
+  });
+
+  it('says the average is this month alone for a goal started this month', () => {
+    render(<GoalCard goal={goal({ targetCents: 100000, targetDate: null, contributions: [{ date: '2026-08-01', amountCents: 10000 }] })} />);
+    expect(screen.getByText(/Averaging \$100\.00\/month \(this month so far\)/)).toBeTruthy();
+  });
+
   it('flags an overdue goal', () => {
     render(<GoalCard goal={goal({ targetCents: 100000, targetDate: '2026-01-01', contributions: [{ date: '2025-12-01', amountCents: 20000 }] })} />);
     expect(screen.getByText(/overdue/i)).toBeTruthy();

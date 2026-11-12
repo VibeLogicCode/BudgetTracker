@@ -40,25 +40,43 @@ describe('computePace — the happy path', () => {
     });
   });
 
-  it('averages the trailing three calendar months and projects a finish', () => {
+  it('averages the three full calendar months before this one and projects a finish', () => {
     const pace = computePace({
       targetCents: 100000,
       targetDate: '2026-12-01',
       contributions: [
-        { date: '2026-06-01', amountCents: 10000 },
-        { date: '2026-07-01', amountCents: 20000 },
-        { date: '2026-08-01', amountCents: 30000 },
+        { date: '2026-05-01', amountCents: 10000 },
+        { date: '2026-06-01', amountCents: 20000 },
+        { date: '2026-07-01', amountCents: 30000 },
+        // This month's money is saved, but the month is not over, so it is not in the average.
+        { date: '2026-08-01', amountCents: 5000 },
       ],
       today: TODAY,
     });
-    expect(pace.savedCents).toBe(60000);
-    expect(pace.remainingCents).toBe(40000);
+    expect(pace.savedCents).toBe(65000);
+    expect(pace.remainingCents).toBe(35000);
     expect(pace.avgMonthlyCents).toBe(20000);
+    expect(pace.avgMonths).toBe(3);
     expect(pace.projectedFinishMonth).toBe('2026-10');
     expect(pace.noPace).toBe(false);
   });
 
-  it('uses all history when it is shorter than three months', () => {
+  it('averages only the full months since the first contribution when there are fewer than three', () => {
+    const pace = computePace({
+      targetCents: 100000,
+      targetDate: null,
+      contributions: [
+        { date: '2026-06-20', amountCents: 10000 },
+        { date: '2026-07-01', amountCents: 20000 },
+        { date: '2026-08-01', amountCents: 90000 },
+      ],
+      today: TODAY,
+    });
+    expect(pace.avgMonthlyCents).toBe(15000);
+    expect(pace.avgMonths).toBe(2);
+  });
+
+  it('a goal started this month averages its own month', () => {
     const pace = computePace({
       targetCents: 100000,
       targetDate: null,
@@ -66,6 +84,7 @@ describe('computePace — the happy path', () => {
       today: TODAY,
     });
     expect(pace.avgMonthlyCents).toBe(30000);
+    expect(pace.avgMonths).toBe(0);
   });
 
   it('counts only the trailing window in the numerator but keeps a 3-month denominator', () => {
@@ -74,12 +93,35 @@ describe('computePace — the happy path', () => {
       targetDate: null,
       contributions: [
         { date: '2026-01-01', amountCents: 90000 },
+        { date: '2026-07-01', amountCents: 30000 },
         { date: '2026-08-01', amountCents: 30000 },
       ],
       today: TODAY,
     });
-    expect(pace.savedCents).toBe(120000);
+    expect(pace.savedCents).toBe(150000);
     expect(pace.avgMonthlyCents).toBe(10000);
+    expect(pace.avgMonths).toBe(3);
+  });
+
+  /**
+   * v1.60.0 (item 5). The window used to include the unfinished current month, so on the 1st the
+   * average fell by a third (v1.59.1 gave 66.67 here) and a goal on pace read as behind.
+   */
+  it('on the 1st, 100.00 in each of the last three months still averages 100.00 and stays on pace', () => {
+    const pace = computePace({
+      targetCents: 120000,
+      targetDate: '2026-12-01',
+      contributions: [
+        { date: '2025-12-15', amountCents: 10000 },
+        { date: '2026-01-15', amountCents: 10000 },
+        { date: '2026-02-15', amountCents: 10000 },
+      ],
+      today: '2026-03-01',
+    });
+    expect(pace.avgMonthlyCents).toBe(10000);
+    expect(pace.avgMonths).toBe(3);
+    expect(pace.requiredMonthlyCents).toBe(10000);
+    expect(pace.projectedFinishMonth).toBe('2026-12');
   });
 
   it('rounds required monthly up so the goal is actually reached', () => {
