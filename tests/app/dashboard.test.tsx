@@ -365,6 +365,25 @@ describe('DashboardPage (ruling R2)', () => {
     expect(screen.getByText(/2 transactions need review/)).toBeTruthy();
   });
 
+  it('v1.60.0: the backup line is shown to an admin and to no member', async () => {
+    const { adultId, childId } = await setup();
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const admin = render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+    expect(admin.container.querySelector('[data-testid="backup-health-line"]')).not.toBeNull();
+    cleanup();
+
+    currentUser.value = { id: childId, name: 'Kid', username: 'kid', role: 'member', visibility: 'household' };
+    const member = render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+    expect(member.container.querySelector('[data-testid="backup-health-line"]')).toBeNull();
+    cleanup();
+
+    currentUser.value = { id: childId, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+    const self = render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+    expect(self.container.querySelector('[data-testid="backup-health-line"]')).toBeNull();
+  });
+
   it('a household viewer keeps the full card set, including net worth, top merchants and the person switcher', async () => {
     const { adultId } = await setup();
     currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };

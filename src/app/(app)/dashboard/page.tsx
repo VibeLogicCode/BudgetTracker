@@ -32,6 +32,8 @@ import { transactionsHref } from '@/lib/transaction-links';
 import { savingsProgress, type SavingsProgress, savingsTargetsFor } from '@/lib/savings-target';
 import { expiringSoonItems } from '@/lib/warranty/search';
 import { formatCents } from '@/lib/money';
+import { backupHealth } from '@/lib/backup';
+import { BackupHealthLine } from '@/components/BackupHealthLine';
 import { ComingUpCard } from '@/components/ComingUpCard';
 import { GettingStartedCard } from '@/components/GettingStartedCard';
 import { GoalCard } from '@/components/GoalCard';
@@ -413,6 +415,9 @@ export default async function DashboardPage({
           </div>
         }
       />
+
+      {/* v1.60.0: backup age for the admin, one quiet line; members never see it. */}
+      {viewer.role === 'admin' ? <BackupHealthLine health={backupHealth()} /> : null}
 
       {/* Ruling T7: "A dashboard section either follows the chosen month or is visibly 'as of
           today'." This is the page-level half of that -- the per-section "as of today" notes
