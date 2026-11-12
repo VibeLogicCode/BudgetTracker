@@ -18,12 +18,24 @@ import { nowIso } from '@/lib/clock';
 import { catchUpLoans, reverseInstallmentLinksForTransactions, reverseLoanLinksForTransactions } from '@/lib/loans';
 import { deleteCsvSnapshotsForAccountDates, recordBalanceSnapshot } from '@/lib/networth';
 import { listAccountCardPeople } from './card-people';
+import { classifyNewRows, type ClassifyRow, type RowClassification } from './cross-source';
 import { findExistingByExternalIds, findExistingByHashes, type HashedRow } from './dedup';
 import { getImportHooks } from './hooks';
 import { normalizeCardValue, type ImportMapping } from './mapping';
+import type { ImportOrigin } from './origin';
 import { closingBalancesByDate, type ParseResult, type RowError } from './parse';
+import {
+  countWaitingForImport,
+  deleteWaitingForImport,
+  recordSetAside,
+  removeSetAside,
+  reopenSetAsideFor,
+} from './set-aside';
 
 export type CommitRow = HashedRow & { externalId?: string | null };
+
+/** What a person chose for one listed row in the preview: leave it out, or import it anyway. */
+export type RowDecision = 'skip' | 'import';
 
 /**
  * SQLite has no strict column typing, so a malformed row (e.g. a non-numeric
@@ -82,6 +94,19 @@ export interface CommitInput {
    * for every caller that omits this.
    */
   dateOrder?: ParseResult['dateOrder'];
+  /**
+   * v1.61.0. Which road these rows took; stored on every inserted row and on every set-aside
+   * record, and the origin the cross-source check compares against. Omitted, each row takes `ofx`
+   * when it carries a provider id and `csv` otherwise, which is what every caller before v1.61.0
+   * meant; flow.ts and sync.ts pass it.
+   */
+  origin?: ImportOrigin;
+  /**
+   * v1.61.0. The preview's choice per listed row, by key (externalId || dedupHash). A possible
+   * duplicate with no entry here is HELD: written to set_aside_rows as waiting, counted nowhere
+   * until Keep both. That covers the sync, a batch import and any client that skipped the preview.
+   */
+  rowDecisions?: Map<string, RowDecision>;
 }
 
 export interface CommitResult {
@@ -109,6 +134,16 @@ export interface CommitResult {
   unlinkedCardValues: { value: string; rowCount: number }[];
   /** The sentence for `unlinkedCardValues`, or null when it is empty. */
   unlinkedCardSummary: string | null;
+  /**
+   * v1.61.0. Rows left out because of set_aside_rows: a key a person left out before (or deleted),
+   * a key already waiting in Needs review, or a possible duplicate the person chose to leave out.
+   * `rowsDuplicate` keeps counting exact duplicates only.
+   */
+  rowsSetAside: number;
+  /** v1.61.0. Possible duplicates nobody decided on, now waiting in Needs review. */
+  rowsHeld: number;
+  /** The set_aside_rows ids of the held rows. */
+  heldIds: number[];
 }
 
 /** `Not linked to anyone yet: CARD 2002 (2 rows), CARD 3003 (1 row). Link them under ...` */
@@ -202,6 +237,47 @@ export function commitImport(input: CommitInput): CommitResult {
   const externalIds = input.rows.map((row) => row.externalId ?? null).filter((value): value is string => value !== null && value.length > 0);
   const existingByExternalId = findExistingByExternalIds(input.accountId, externalIds);
 
+  // v1.61.0. The key and the road of a row, exactly as the insert below stores it: a provider id
+  // ('' is no id) wins over the hash.
+  const keyOf = (row: CommitRow): string => row.externalId || row.dedupHash;
+  const originOf = (row: CommitRow): ImportOrigin => input.origin ?? (row.externalId ? 'ofx' : 'csv');
+
+  // The rows with no exact match are classified once, before anything is written: a set-aside
+  // record, a possible duplicate of a row from another road, or new. Grouped by road only for a
+  // caller that passed no origin; one file is one road in practice, so this is one call.
+  const classified = new Map<string, RowClassification>();
+  const unmatchedByOrigin = new Map<ImportOrigin, ClassifyRow[]>();
+  for (const row of input.rows) {
+    const providerId = row.externalId || null;
+    const matched = providerId ? existingByExternalId.has(providerId) : existing.has(row.dedupHash);
+    if (matched) continue;
+    const origin = originOf(row);
+    const group = unmatchedByOrigin.get(origin) ?? [];
+    group.push({ key: keyOf(row), rowIndex: row.rowIndex, date: row.date, amountCents: row.amountCents });
+    unmatchedByOrigin.set(origin, group);
+  }
+  for (const [origin, rows] of unmatchedByOrigin) {
+    for (const [key, verdict] of classifyNewRows({ accountId: input.accountId, origin, rows })) classified.set(key, verdict);
+  }
+
+  /** The attribution chain for one row, shared by the rows inserted and the rows set aside. */
+  function attribute(row: CommitRow) {
+    // Hoisted above the resolver because the attribution rule needs it too, and computing the
+    // normalized text twice per row for two readers is the kind of thing that silently doubles
+    // the cost of a 4,000-row import.
+    const normalizedMerchant = normalizeMerchant(row.rawDescription);
+    const matchedRule =
+      attributionRules.length === 0 ? null : matchRule(normalizedMerchant, 'attribution', attributionRules, row.amountCents);
+    const card = cardPerson(row.cells);
+    const attribution = resolveAttribution({
+      ruleUserId: matchedRule?.attributedUserId ?? null,
+      ruleMatched: matchedRule !== null,
+      cardUserId: card.userId,
+      ownerUserId,
+    });
+    return { normalizedMerchant, card, attribution };
+  }
+
   return db.transaction((tx) => {
     const importRow = tx
       .insert(imports)
@@ -230,6 +306,11 @@ export function commitImport(input: CommitInput): CommitResult {
         .run();
     };
 
+    let rowsSetAside = 0;
+    const heldIds: number[] = [];
+    /** Keys this call set aside, so a key met twice in one call is written once. */
+    const setAsideKeys = new Set<string>();
+
     for (const row of input.rows) {
       // Same '' -> null coalescing as assertInsertable: an empty string must
       // never reach the external_id column, only a real provider id or NULL.
@@ -245,21 +326,60 @@ export function commitImport(input: CommitInput): CommitResult {
 
       assertInsertable(row);
 
-      // Hoisted above the resolver because the attribution rule needs it too, and computing the
-      // normalized text twice per row for two readers is the kind of thing that silently doubles
-      // the cost of a 4,000-row import.
-      const normalizedMerchant = normalizeMerchant(row.rawDescription);
-      const matchedRule =
-        attributionRules.length === 0
-          ? null
-          : matchRule(normalizedMerchant, 'attribution', attributionRules, row.amountCents);
-      const card = cardPerson(row.cells);
-      const attribution = resolveAttribution({
-        ruleUserId: matchedRule?.attributedUserId ?? null,
-        ruleMatched: matchedRule !== null,
-        cardUserId: card.userId,
-        ownerUserId,
-      });
+      // v1.61.0. After the exact-duplicate test, the cross-source verdict (classified above).
+      const key = keyOf(row);
+      const origin = originOf(row);
+      if (setAsideKeys.has(key)) {
+        rowsSetAside += 1;
+        continue;
+      }
+      const verdict: RowClassification = classified.get(key) ?? { kind: 'new' };
+      const decision = input.rowDecisions?.get(key);
+      if (verdict.kind === 'set_aside') {
+        if (verdict.state === 'dismissed' && decision === 'import') {
+          // Left out before, and the person unticked it this time: it comes back.
+          removeSetAside(verdict.id);
+        } else {
+          // Dismissed stays out; waiting is decided in Needs review, not here.
+          rowsSetAside += 1;
+          continue;
+        }
+      } else if (verdict.kind === 'possible_duplicate' && decision !== 'import') {
+        // Attributed now, as an insert would be, and stored on the record so Keep both later writes
+        // the same person. Not tallied: the summaries describe inserted rows.
+        const { attribution } = attribute(row);
+        const candidate = verdict.candidates[0];
+        const state = decision === 'skip' ? 'dismissed' : 'waiting';
+        const recordId = recordSetAside({
+          accountId: input.accountId,
+          importId: importRow.id,
+          state,
+          reason: 'possible_duplicate',
+          origin,
+          date: row.date,
+          amountCents: row.amountCents,
+          rawDescription: row.rawDescription,
+          attributedUserId: attribution.userId,
+          dedupHash: providerId ? null : row.dedupHash,
+          externalId: providerId,
+          hashVersion: row.hashVersion,
+          candidateTxnId: candidate.id,
+          decidedBy: input.importedBy,
+          at,
+        });
+        setAsideKeys.add(key);
+        if (state === 'dismissed') {
+          rowsSetAside += 1;
+          // D5: an imported copy is linked as an exact duplicate would be, so undoing either import
+          // keeps it. A hand-typed copy is never linked, so no undo can delete it.
+          if (candidate.origin !== 'manual') link(candidate.id);
+        } else {
+          heldIds.push(recordId);
+        }
+        continue;
+      }
+
+      const { normalizedMerchant, card, attribution } = attribute(row);
       if (attribution.source === 'card' && card.userName !== null) {
         matchedTally.set(card.userName, (matchedTally.get(card.userName) ?? 0) + 1);
       } else if (attribution.source === 'rule') {
@@ -292,6 +412,7 @@ export function commitImport(input: CommitInput): CommitResult {
           dedupHash: providerId ? null : row.dedupHash,
           externalId: providerId,
           hashVersion: row.hashVersion,
+          origin,
           createdBy: input.importedBy,
           createdAt: timestamp,
           updatedAt: timestamp,
@@ -361,6 +482,9 @@ export function commitImport(input: CommitInput): CommitResult {
       attributionSummary,
       unlinkedCardValues,
       unlinkedCardSummary: unlinkedCardSentence(unlinkedCardValues),
+      rowsSetAside,
+      rowsHeld: heldIds.length,
+      heldIds,
     };
   });
 }
@@ -590,6 +714,11 @@ export interface UndoSideEffects {
   installments: number;
   /** Balance figures removed (the same predicate deleteCsvSnapshotsForAccountDates deletes by). */
   snapshots: number;
+  /**
+   * v1.61.0. Possible duplicates this import left waiting in Needs review. They never counted, and
+   * the undo removes them with the import. Rows a person left out stay left out.
+   */
+  heldRows: number;
 }
 
 export interface UndoPreview {
@@ -618,6 +747,7 @@ function undoSideEffects(importId: number, sole: number[]): UndoSideEffects {
     loanPayments: 0,
     installments: 0,
     snapshots: 0,
+    heldRows: countWaitingForImport(importId),
   };
   if (sole.length === 0) return none;
   const db = getDb();
@@ -710,6 +840,7 @@ function undoSideEffects(importId: number, sole: number[]): UndoSideEffects {
     loanPayments: loanPaymentCount,
     installments,
     snapshots,
+    heldRows: none.heldRows,
   };
 }
 
@@ -740,7 +871,15 @@ export function undoImport(importId: number): UndoResult {
   const result = db.transaction((tx) => {
     let loanRowsReversed = 0;
     let snapshotsDeleted = 0;
+    // v1.61.0. This import's waiting rows go with it (previewUndoImport's heldRows counts exactly
+    // these, before anything below can move a row to waiting). Its dismissed rows stay; the import
+    // delete nulls their import_id.
+    deleteWaitingForImport(importId);
     if (sole.length > 0) {
+      // D5, before the delete while candidate_txn_id still points: a row left out as a copy of one
+      // of these goes back to waiting, so leaving out a copy never ends with neither counted.
+      reopenSetAsideFor(sole);
+
       // Reverse Bayes training for rows that had reached the confirmed state.
       const confirmed = tx
         .select({ normalizedMerchant: transactions.normalizedMerchant, categoryId: transactions.categoryId })

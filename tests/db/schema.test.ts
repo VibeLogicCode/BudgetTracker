@@ -25,7 +25,7 @@ const EXPECTED_TABLES = [
   'merchant_rule_merges', 'merchant_rules', 'month_closures',
   'notification_household_prefs', 'notification_outbox',
   'notification_prefs', 'notification_smtp',
-  'notification_targets', 'notification_user_settings', 'savings_targets', 'sessions', 'settings',
+  'notification_targets', 'notification_user_settings', 'savings_targets', 'sessions', 'set_aside_rows', 'settings',
   'simplefin_account_links', 'simplefin_connections', 'totp_recovery_codes',
   'transaction_imports', 'transaction_splits', 'transactions', 'users', 'warranty_item_types',
   'warranty_items', 'warranty_receipts', 'warranty_search',
@@ -74,6 +74,11 @@ const EXPECTED_INDEXES = [
   'loan_rate_history_item_idx',
   'account_card_people_uq',
   'merchant_rule_merges_kept_idx',
+  'set_aside_rows_dedup_uq',
+  'set_aside_rows_external_id_uq',
+  'set_aside_rows_waiting_idx',
+  'set_aside_rows_candidate_idx',
+  'set_aside_rows_import_idx',
 ];
 
 describe('database schema', () => {

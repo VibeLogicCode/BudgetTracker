@@ -17,7 +17,17 @@ import { nowIso } from '@/lib/clock';
  * never a value enum (drizzle/0013_household_scope.sql:40, which says why), so a new action needs
  * no migration -- only this union and whatever writes it.
  */
-export type AuditAction = 'delete_item' | 'delete_receipt' | 'undo_import' | 'delete_transaction';
+/**
+ * v1.61.0: 'keep_duplicate' and 'dismiss_duplicate', the two Needs review decisions on a possible
+ * duplicate (src/lib/import/set-aside.ts). Both name the set_aside_rows record.
+ */
+export type AuditAction =
+  | 'delete_item'
+  | 'delete_receipt'
+  | 'undo_import'
+  | 'delete_transaction'
+  | 'keep_duplicate'
+  | 'dismiss_duplicate';
 
 export function appendAudit(input: {
   userId: number;

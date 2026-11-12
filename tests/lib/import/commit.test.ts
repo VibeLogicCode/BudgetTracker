@@ -9,6 +9,9 @@ import { parseCsv } from '@/lib/import/parse';
 import { getBuiltinPreset } from '@/lib/import/presets';
 import { resetImportHooks } from '@/lib/import/hooks';
 import { recordBalanceSnapshot } from '@/lib/networth';
+import { upsertRuleFromCorrection } from '@/lib/categorize/rules';
+import { cashflowForRange } from '@/lib/reports';
+import { createManualTransaction, listTransactions } from '@/lib/transactions';
 
 const fixture = (name: string) => fs.readFileSync(path.join(process.cwd(), 'fixtures', name));
 
@@ -727,5 +730,206 @@ describe('listImportHistory paging', () => {
   it('reports no more when the history ends exactly on a page boundary', () => {
     seedImports(25);
     expect(importHistoryPage({ limit: 25 }).hasMore).toBe(false);
+  });
+});
+
+// ------------------------------------------------------------------ v1.61.0: no double counting
+
+describe('commitImport across sources (v1.61.0)', () => {
+  const AT = new Date('2026-03-12T15:00:00.000Z');
+
+  function rowsFor(accountId: number, input: { date: string; description?: string; amountCents?: number; externalId?: string }[]) {
+    return computeRowHashes(
+      accountId,
+      input.map((row, index) => ({
+        rowIndex: index,
+        rawDate: row.date,
+        date: row.date,
+        rawDescription: row.description ?? 'MAPLE GROCER',
+        amountCents: row.amountCents ?? -4217,
+        balanceCents: null,
+        cells: [],
+      })),
+    ).map((row, index) => (input[index].externalId ? { ...row, dedupHash: '', externalId: input[index].externalId } : row));
+  }
+
+  function setup() {
+    current = createSeededTestDb();
+    const alex = insertTestUser(current.db, { name: 'Alex', username: 'alex' });
+    const account = insertTestAccount(current.db, { name: 'Joint chequing', ownerUserId: alex });
+    const t = current;
+    const handTyped = (date: string, amountCents = -4217) =>
+      createManualTransaction({
+        accountId: account,
+        date,
+        description: 'MAPLE GROCER',
+        amountCents,
+        categoryId: null,
+        attributedUserId: alex,
+        userId: alex,
+        actorRole: 'admin',
+      });
+    const commit = (
+      filename: string,
+      rows: ReturnType<typeof rowsFor>,
+      over: { origin?: 'csv' | 'ofx' | 'simplefin'; rowDecisions?: Map<string, 'skip' | 'import'> } = {},
+    ) => commitImport({ accountId: account, profileId: null, filename, importedBy: alex, rows, errors: [], at: AT, ...over });
+    const count = (query: string, ...params: unknown[]) => (t.sqlite.prepare(query).get(...params) as { c: number }).c;
+    const setAside = () =>
+      t.sqlite.prepare('select state, reason, origin, dedup_hash, external_id, candidate_txn_id, attributed_user_id, import_id from set_aside_rows order by id').all();
+    return { t, alex, account, handTyped, commit, count, setAside };
+  }
+
+  it('stores the origin it is given, and ofx or csv by the row when none is given', () => {
+    const { account, commit, t } = setup();
+    commit('march.csv', rowsFor(account, [{ date: '2026-03-02' }]));
+    commit('march.qfx', rowsFor(account, [{ date: '2026-03-03', amountCents: -1999, externalId: 'FIT-1' }]));
+    commit('simplefin 2026-03-04 09:15', rowsFor(account, [{ date: '2026-03-04', amountCents: -650, externalId: 'sf-1' }]), { origin: 'simplefin' });
+    expect(t.sqlite.prepare('select date, origin from transactions order by date').all()).toEqual([
+      { date: '2026-03-02', origin: 'csv' },
+      { date: '2026-03-03', origin: 'ofx' },
+      { date: '2026-03-04', origin: 'simplefin' },
+    ]);
+  });
+
+  it('holds a possible duplicate nobody decided on: a waiting record, no transaction', () => {
+    const { account, alex, handTyped, commit, count, setAside } = setup();
+    const typed = handTyped('2026-03-09');
+    const rows = rowsFor(account, [{ date: '2026-03-10' }]);
+    const result = commit('march.csv', rows, { origin: 'csv' });
+    expect(result).toMatchObject({ rowsAdded: 0, rowsDuplicate: 0, rowsSetAside: 0, rowsHeld: 1, insertedTransactionIds: [] });
+    expect(result.heldIds).toHaveLength(1);
+    expect(setAside()).toEqual([
+      {
+        state: 'waiting',
+        reason: 'possible_duplicate',
+        origin: 'csv',
+        dedup_hash: rows[0].dedupHash,
+        external_id: null,
+        candidate_txn_id: typed,
+        attributed_user_id: alex,
+        import_id: result.importId,
+      },
+    ]);
+    expect(count('select count(*) as c from transactions')).toBe(1);
+    expect(count('select rows_added as c from imports where id = ?', result.importId)).toBe(0);
+  });
+
+  it('a held commit changes no total: the transactions list and the month’s cashflow stay as they were', () => {
+    const { account, alex, handTyped, commit } = setup();
+    handTyped('2026-03-09');
+    const viewer = { id: alex, role: 'admin' as const, visibility: 'household' as const };
+    const before = listTransactions({ accountId: account }, viewer);
+    const flowBefore = cashflowForRange({ from: '2026-03-01', to: '2026-03-31' }, {}, viewer);
+    commit('march.csv', rowsFor(account, [{ date: '2026-03-10' }]), { origin: 'csv' });
+    const after = listTransactions({ accountId: account }, viewer);
+    expect([after.total, after.outCents, after.inCents]).toEqual([before.total, before.outCents, before.inCents]);
+    expect(cashflowForRange({ from: '2026-03-01', to: '2026-03-31' }, {}, viewer)).toEqual(flowBefore);
+  });
+
+  it('skip leaves the row out as dismissed, and never links a hand-typed candidate', () => {
+    const { account, alex, handTyped, commit, count, setAside } = setup();
+    const typed = handTyped('2026-03-09');
+    const rows = rowsFor(account, [{ date: '2026-03-10' }]);
+    const result = commit('march.csv', rows, { origin: 'csv', rowDecisions: new Map([[rows[0].dedupHash, 'skip']]) });
+    expect(result).toMatchObject({ rowsAdded: 0, rowsSetAside: 1, rowsHeld: 0, heldIds: [] });
+    expect(setAside()).toMatchObject([{ state: 'dismissed', candidate_txn_id: typed }]);
+    expect(count('select decided_by as c from set_aside_rows')).toBe(alex);
+    expect(count('select count(*) as c from transaction_imports where transaction_id = ?', typed)).toBe(0);
+  });
+
+  it('skip against an imported candidate links it to the new import, as an exact duplicate would be', () => {
+    const { account, commit, count } = setup();
+    const synced = commit('simplefin 2026-03-09 09:15', rowsFor(account, [{ date: '2026-03-09', externalId: 'sf-1' }]), { origin: 'simplefin' });
+    const rows = rowsFor(account, [{ date: '2026-03-10' }]);
+    const result = commit('march.csv', rows, { origin: 'csv', rowDecisions: new Map([[rows[0].dedupHash, 'skip']]) });
+    expect(result.rowsSetAside).toBe(1);
+    expect(
+      count('select count(*) as c from transaction_imports where transaction_id = ? and import_id = ?', synced.insertedTransactionIds[0], result.importId),
+    ).toBe(1);
+    // rows_duplicate still counts exact duplicates only.
+    expect(result.rowsDuplicate).toBe(0);
+  });
+
+  it('import inserts a possible duplicate', () => {
+    const { account, handTyped, commit, count } = setup();
+    handTyped('2026-03-09');
+    const rows = rowsFor(account, [{ date: '2026-03-10' }]);
+    const result = commit('march.csv', rows, { origin: 'csv', rowDecisions: new Map([[rows[0].dedupHash, 'import']]) });
+    expect(result).toMatchObject({ rowsAdded: 1, rowsSetAside: 0, rowsHeld: 0 });
+    expect(count('select count(*) as c from set_aside_rows')).toBe(0);
+  });
+
+  it('re-committing the same file holds nothing twice and leaves the dismissed rows out', () => {
+    const { account, handTyped, commit, count } = setup();
+    handTyped('2026-03-09');
+    handTyped('2026-03-20', -1999);
+    const rows = rowsFor(account, [{ date: '2026-03-10' }, { date: '2026-03-21', amountCents: -1999 }, { date: '2026-03-25', amountCents: -650 }]);
+    const first = commit('march.csv', rows, { origin: 'csv', rowDecisions: new Map([[rows[1].dedupHash, 'skip']]) });
+    expect(first).toMatchObject({ rowsAdded: 1, rowsHeld: 1, rowsSetAside: 1 });
+
+    const again = commit('march-again.csv', rows, { origin: 'csv' });
+    expect(again).toMatchObject({ rowsAdded: 0, rowsDuplicate: 1, rowsHeld: 0, rowsSetAside: 2 });
+    expect(count('select count(*) as c from set_aside_rows')).toBe(2);
+    expect(count(`select count(*) as c from set_aside_rows where state = 'waiting'`)).toBe(1);
+    expect(count('select count(*) as c from transactions')).toBe(3);
+  });
+
+  it('a dismissed row comes back when the person imports it, and a waiting row stays waiting whatever is posted', () => {
+    const { account, handTyped, commit, count } = setup();
+    handTyped('2026-03-09');
+    handTyped('2026-03-20', -1999);
+    const rows = rowsFor(account, [{ date: '2026-03-10' }, { date: '2026-03-21', amountCents: -1999 }]);
+    commit('march.csv', rows, { origin: 'csv', rowDecisions: new Map([[rows[0].dedupHash, 'skip']]) });
+
+    const again = commit('march-again.csv', rows, {
+      origin: 'csv',
+      rowDecisions: new Map([
+        [rows[0].dedupHash, 'import'],
+        [rows[1].dedupHash, 'import'],
+      ]),
+    });
+    expect(again).toMatchObject({ rowsAdded: 1, rowsSetAside: 1, rowsHeld: 0 });
+    expect(count('select count(*) as c from set_aside_rows')).toBe(1);
+    expect(count(`select count(*) as c from set_aside_rows where state = 'waiting'`)).toBe(1);
+    expect(count('select count(*) as c from transactions where dedup_hash = ?', rows[0].dedupHash)).toBe(1);
+  });
+
+  it('keeps importing two identical same-day purchases from one source, against no other copy', () => {
+    const { account, handTyped, commit } = setup();
+    // A hand-typed row of another amount is no match for either.
+    handTyped('2026-03-10', -500);
+    const csv = commit('march.csv', rowsFor(account, [{ date: '2026-03-10' }, { date: '2026-03-10' }]), { origin: 'csv' });
+    expect(csv).toMatchObject({ rowsAdded: 2, rowsHeld: 0 });
+    const synced = commit(
+      'simplefin 2026-03-11 09:15',
+      rowsFor(account, [
+        { date: '2026-03-11', amountCents: -650, externalId: 'sf-1' },
+        { date: '2026-03-11', amountCents: -650, externalId: 'sf-2' },
+      ]),
+      { origin: 'simplefin' },
+    );
+    expect(synced).toMatchObject({ rowsAdded: 2, rowsHeld: 0 });
+  });
+
+  it('holds only one of two identical rows against one hand-typed copy', () => {
+    const { account, handTyped, commit } = setup();
+    handTyped('2026-03-10');
+    const result = commit('march.csv', rowsFor(account, [{ date: '2026-03-10' }, { date: '2026-03-10' }]), { origin: 'csv' });
+    expect(result).toMatchObject({ rowsAdded: 1, rowsHeld: 1 });
+  });
+
+  it('a held row is attributed but left out of the attribution summary', () => {
+    const { t, alex, account, handTyped, commit } = setup();
+    const sam = insertTestUser(t.db, { name: 'Sam', username: 'sam' });
+    upsertRuleFromCorrection({
+      pattern: 'MAPLE GROCER', matchType: 'exact', ruleKind: 'attribution', categoryId: null,
+      attributedUserId: sam, createdBy: alex, actorRole: 'admin',
+    });
+    handTyped('2026-03-09');
+    const result = commit('march.csv', rowsFor(account, [{ date: '2026-03-10' }]), { origin: 'csv' });
+    expect(result.rowsHeld).toBe(1);
+    expect(result.attributionSummary).toBeNull();
+    expect(t.sqlite.prepare('select attributed_user_id as a from set_aside_rows').get()).toEqual({ a: sam });
   });
 });

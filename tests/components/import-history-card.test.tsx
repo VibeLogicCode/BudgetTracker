@@ -350,6 +350,16 @@ describe('ImportHistoryCard: the undo confirm lists what else goes', () => {
     expect(text).not.toMatch(/note|renamed|purchase link|installment/);
   });
 
+  it('names the possible duplicates the import left waiting (v1.61.0)', async () => {
+    const text = await confirmTextFor({
+      importId: 77,
+      willDelete: 3,
+      willKeep: 0,
+      alsoRemoved: { splitRows: 0, notedRows: 0, manualCategories: 0, renamedRows: 0, itemLinks: 0, loanPayments: 0, installments: 0, snapshots: 0, heldRows: 2 },
+    });
+    expect(text).toContain('- 2 possible duplicates waiting in Needs review removed');
+  });
+
   it('adds nothing when every count is zero', async () => {
     const text = await confirmTextFor({
       importId: 77,

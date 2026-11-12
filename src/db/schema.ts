@@ -261,6 +261,13 @@ export const transactions = sqliteTable(
     createdBy: integer('created_by').notNull().references(() => users.id),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
+    /**
+     * v1.61.0, drizzle/0031_no_double_counting.sql. Declared last because ALTER TABLE ADD COLUMN
+     * appends physically. How the row arrived; only a row from a different origin can be a second
+     * copy of one already here (src/lib/import/cross-source.ts). SQL carries the CHECK; existing
+     * rows were labelled from their hash, provider id and import name.
+     */
+    origin: text('origin', { enum: ['manual', 'csv', 'ofx', 'simplefin'] }).notNull().default('manual'),
   },
   (t) => [
     uniqueIndex('transactions_dedup_uq')
@@ -720,6 +727,13 @@ export const simplefinAccountLinks = sqliteTable(
     lastBalanceCents: integer('last_balance_cents'),
     lastBalanceDate: text('last_balance_date'),
     createdAt: text('created_at').notNull(),
+    /**
+     * v1.61.0, drizzle/0031_no_double_counting.sql, declared last for the ALTER TABLE reason. The
+     * first day (YYYY-MM-DD) this account takes from the bank, and when a sync first ran clean
+     * after it was set. NULL on every link made before v1.61.0, which syncs as it always did.
+     */
+    syncFrom: text('sync_from'),
+    firstSyncedAt: text('first_synced_at'),
   },
   (t) => [index('simplefin_links_account_idx').on(t.accountId)],
 );
@@ -1536,6 +1550,53 @@ export const auditLog = sqliteTable(
     detail: text('detail'),
   },
   (t) => [index('audit_log_at_idx').on(t.at), index('audit_log_entity_idx').on(t.entity, t.entityId)],
+);
+
+/**
+ * v1.61.0, drizzle/0031_no_double_counting.sql. Imported rows the app is deliberately not counting:
+ * `waiting` (held as a possible duplicate, decided in Needs review) or `dismissed` (a person left it
+ * out, or deleted the transaction it became). Keyed per account exactly as a transaction is, the
+ * hash for a CSV row and the provider id otherwise, so a re-import or the sync's overlap finds the
+ * record by the key it would have found the transaction by. src/lib/import/set-aside.ts owns it.
+ *
+ * NOT represented here; SQL only:
+ *   - the CHECKs on state, reason and origin (the enums below are TypeScript's copy)
+ *   - CHECK (dedup_hash IS NOT NULL OR external_id IS NOT NULL)
+ */
+export const setAsideRows = sqliteTable(
+  'set_aside_rows',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    accountId: integer('account_id').notNull().references(() => accounts.id),
+    importId: integer('import_id').references(() => imports.id, { onDelete: 'set null' }),
+    state: text('state', { enum: ['waiting', 'dismissed'] }).notNull(),
+    reason: text('reason', { enum: ['possible_duplicate', 'deleted'] }).notNull(),
+    origin: text('origin', { enum: ['csv', 'ofx', 'simplefin'] }).notNull(),
+    date: text('date').notNull(),
+    amountCents: integer('amount_cents').notNull(),
+    rawDescription: text('raw_description').notNull(),
+    /** The person commitImport's resolveAttribution gave the row when it was set aside. */
+    attributedUserId: integer('attributed_user_id').references(() => users.id),
+    dedupHash: text('dedup_hash'),
+    externalId: text('external_id'),
+    hashVersion: integer('hash_version').notNull().default(1),
+    /** The transaction this row looked like a copy of; NULL for a deleted row's record. */
+    candidateTxnId: integer('candidate_txn_id').references(() => transactions.id, { onDelete: 'set null' }),
+    decidedBy: integer('decided_by').references(() => users.id),
+    decidedAt: text('decided_at'),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [
+    uniqueIndex('set_aside_rows_dedup_uq')
+      .on(t.accountId, t.dedupHash)
+      .where(sql`${t.dedupHash} is not null`),
+    uniqueIndex('set_aside_rows_external_id_uq')
+      .on(t.accountId, t.externalId)
+      .where(sql`${t.externalId} is not null`),
+    index('set_aside_rows_waiting_idx').on(t.createdAt).where(sql`state = 'waiting'`),
+    index('set_aside_rows_candidate_idx').on(t.candidateTxnId),
+    index('set_aside_rows_import_idx').on(t.importId),
+  ],
 );
 
 /**

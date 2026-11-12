@@ -9,6 +9,7 @@ import { computeRowHashes } from '@/lib/import/dedup';
 import { parseCsv } from '@/lib/import/parse';
 import { createProfile, deleteProfile, getBuiltinPreset } from '@/lib/import/presets';
 import { resetImportHooks, setImportHooks } from '@/lib/import/hooks';
+import { createManualTransaction } from '@/lib/transactions';
 
 const fixture = (name: string) => fs.readFileSync(path.join(process.cwd(), 'fixtures', name));
 
@@ -325,6 +326,7 @@ describe('previewUndoImport counts what goes with the rows', () => {
       loanPayments: 1,
       installments: 1,
       snapshots: 7,
+      heldRows: 0,
     });
 
     const undone = undoImport(result.importId);
@@ -356,5 +358,114 @@ describe('previewUndoImport counts what goes with the rows', () => {
     expect(previewUndoImport(first.importId).alsoRemoved.notedRows).toBe(0);
     db.run(sql`update transactions set notes = 'goes' where id = ${ids[0]}`);
     expect(previewUndoImport(first.importId).alsoRemoved.notedRows).toBe(1);
+  });
+});
+
+// v1.61.0 A5: undo and the rows set aside as possible duplicates.
+describe('undoImport and set-aside rows', () => {
+  const AT = new Date('2026-03-12T15:00:00.000Z');
+
+  function rowsFor(accountId: number, input: { date: string; amountCents?: number; externalId?: string }[]) {
+    return computeRowHashes(
+      accountId,
+      input.map((row, index) => ({
+        rowIndex: index,
+        rawDate: row.date,
+        date: row.date,
+        rawDescription: 'MAPLE GROCER',
+        amountCents: row.amountCents ?? -4217,
+        balanceCents: null,
+        cells: [],
+      })),
+    ).map((row, index) => (input[index].externalId ? { ...row, dedupHash: '', externalId: input[index].externalId } : row));
+  }
+
+  function setupAccount() {
+    current = createSeededTestDb();
+    const alex = insertTestUser(current.db, { name: 'Alex', username: 'alex' });
+    const account = insertTestAccount(current.db, { name: 'Joint chequing', ownerUserId: alex });
+    const t = current;
+    const commit = (
+      filename: string,
+      rows: ReturnType<typeof rowsFor>,
+      origin: 'csv' | 'ofx' | 'simplefin',
+      rowDecisions?: Map<string, 'skip' | 'import'>,
+    ) => commitImport({ accountId: account, profileId: null, filename, importedBy: alex, rows, errors: [], at: AT, origin, rowDecisions });
+    const handTyped = (date: string, amountCents = -4217) =>
+      createManualTransaction({
+        accountId: account,
+        date,
+        description: 'MAPLE GROCER',
+        amountCents,
+        categoryId: null,
+        attributedUserId: alex,
+        userId: alex,
+        actorRole: 'admin',
+      });
+    const count = (query: string, ...params: unknown[]) => (t.sqlite.prepare(query).get(...params) as { c: number }).c;
+    return { alex, account, commit, handTyped, count, t };
+  }
+
+  it('never deletes the hand-typed row a skipped row matched', () => {
+    const { account, commit, handTyped, count } = setupAccount();
+    const typed = handTyped('2026-03-09');
+    const rows = rowsFor(account, [{ date: '2026-03-10' }]);
+    const statement = commit('march.csv', rows, 'csv', new Map([[rows[0].dedupHash, 'skip']]));
+    undoImport(statement.importId);
+    expect(count('select count(*) as c from transactions where id = ?', typed)).toBe(1);
+  });
+
+  it('keeps the imported row a skipped row matched, because the skip linked it', () => {
+    const { account, commit, count } = setupAccount();
+    const synced = commit('simplefin 2026-03-09 09:15', rowsFor(account, [{ date: '2026-03-09', externalId: 'sf-1' }]), 'simplefin');
+    const rows = rowsFor(account, [{ date: '2026-03-10' }]);
+    const statement = commit('march.csv', rows, 'csv', new Map([[rows[0].dedupHash, 'skip']]));
+    expect(previewUndoImport(statement.importId)).toMatchObject({ willDelete: 0, willKeep: 1 });
+    undoImport(statement.importId);
+    expect(count('select count(*) as c from transactions where id = ?', synced.insertedTransactionIds[0])).toBe(1);
+    // The statement's link went with its import, so the row is the sync's alone again.
+    expect(previewUndoImport(synced.importId)).toMatchObject({ willDelete: 1 });
+  });
+
+  it('deletes its waiting rows, keeps its dismissed ones, and the preview counts exactly what goes', () => {
+    const { account, commit, handTyped, count } = setupAccount();
+    handTyped('2026-03-09');
+    handTyped('2026-03-20', -1999);
+    const rows = rowsFor(account, [{ date: '2026-03-10' }, { date: '2026-03-21', amountCents: -1999 }]);
+    const statement = commit('march.csv', rows, 'csv', new Map([[rows[1].dedupHash, 'skip']]));
+    expect(statement).toMatchObject({ rowsHeld: 1, rowsSetAside: 1 });
+
+    const preview = previewUndoImport(statement.importId);
+    const waitingBefore = count(`select count(*) as c from set_aside_rows where state = 'waiting'`);
+    undoImport(statement.importId);
+    const waitingAfter = count(`select count(*) as c from set_aside_rows where state = 'waiting'`);
+    expect(preview.alsoRemoved.heldRows).toBe(1);
+    expect(waitingBefore - waitingAfter).toBe(preview.alsoRemoved.heldRows);
+    // The dismissed row stays, its import gone, so the statement imported again still leaves it out.
+    expect(count(`select count(*) as c from set_aside_rows where state = 'dismissed' and import_id is null`)).toBe(1);
+    const again = commit('march-again.csv', rows, 'csv');
+    expect(again).toMatchObject({ rowsSetAside: 1, rowsHeld: 1, rowsAdded: 0 });
+  });
+
+  it('puts a dismissed row back to waiting when an undo deletes the row it was left out for', () => {
+    const { account, commit, count, t } = setupAccount();
+    const statement = commit('march.csv', rowsFor(account, [{ date: '2026-03-09' }]), 'csv');
+    const qfxRows = rowsFor(account, [{ date: '2026-03-10', externalId: 'FIT-1' }]);
+    const qfx = commit('march.qfx', qfxRows, 'ofx', new Map([['FIT-1', 'skip']]));
+    expect(qfx.rowsSetAside).toBe(1);
+
+    // Undo the QFX first: the statement row survives (it was the statement's before the skip
+    // linked it), and the left-out row stays left out.
+    undoImport(qfx.importId);
+    expect(count(`select count(*) as c from set_aside_rows where state = 'dismissed'`)).toBe(1);
+    // Now undo the statement: its row goes, so the copy left out for it must count again.
+    undoImport(statement.importId);
+    expect(count('select count(*) as c from transactions')).toBe(0);
+    expect(t.sqlite.prepare('select state, decided_by, decided_at, candidate_txn_id from set_aside_rows').get()).toEqual({
+      state: 'waiting',
+      decided_by: null,
+      decided_at: null,
+      candidate_txn_id: null,
+    });
   });
 });

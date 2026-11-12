@@ -61,6 +61,7 @@ function sideEffectLines(counts: Partial<UndoSideEffects> | undefined): string[]
   if (n(counts.loanPayments) > 0) out.push(`${plural(n(counts.loanPayments), 'loan payment', 'loan payments')} reversed`);
   if (n(counts.installments) > 0) out.push(`${plural(n(counts.installments), 'bill installment', 'bill installments')} set back to unpaid`);
   if (n(counts.snapshots) > 0) out.push(`${plural(n(counts.snapshots), 'balance figure', 'balance figures')} removed`);
+  if (n(counts.heldRows) > 0) out.push(`${plural(n(counts.heldRows), 'possible duplicate', 'possible duplicates')} waiting in Needs review removed`);
   return out;
 }
 

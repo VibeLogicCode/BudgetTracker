@@ -61,6 +61,8 @@ const WRITERS: Record<string, string> = {
     'the rules page "Apply now" for an attribution rule: one of the three deliberate points (ruling P10), reached only by somebody pressing a button beside a rule that names a person, having been shown the count first. The rule IS the order here -- there is no card or owner to rank it against',
   'src/lib/categorize/engine.ts#createRulesFromRow':
     'the kebab dialog own pass, the second of the three deliberate points: it writes the rule and then applies it to the merchant rows it just counted for the person, in the same transaction',
+  'src/lib/import/set-aside.ts#releaseSetAsideRow':
+    'Keep both on a held possible duplicate (v1.61.0): inserts the row commitImport set aside, with the person commitImport chose for it then',
 };
 
 /**
@@ -88,6 +90,11 @@ const WRITERS_NOT_CONSULTING: Record<string, string> = {
     'the one just typed into the dialog, over rows the dialog counted and named first. There is ' +
     'no card cell and no account owner in scope to rank it against -- the order applies at ' +
     'IMPORT, deciding a row nobody has spoken about yet, and this is the opposite situation.',
+  'src/lib/import/set-aside.ts#releaseSetAsideRow':
+    'it copies the person commitImport chose, through its own resolveAttribution call, when it set ' +
+    'the row aside; that answer is stored on the set_aside_rows record. Asking again at release ' +
+    'would let a rule edited in between move a row nobody touched, and the card cell the order ' +
+    'ranks first is not stored anywhere to ask with.',
 };
 
 const EXPORTS = ['resolveAttribution', 'AttributionSource'];
