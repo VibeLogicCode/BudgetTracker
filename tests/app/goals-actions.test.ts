@@ -129,6 +129,14 @@ describe('createGoalAction', () => {
   });
 });
 
+describe('createGoalAction: a blank name shows a plain message (v1.60.1)', () => {
+  it('reads "Name is required", not a block of JSON', async () => {
+    setup();
+    const result = await createGoalAction({}, formData({ name: '   ', target: '500.00', targetDate: '', owner: 'shared' }));
+    expect(result.error).toBe('Name is required');
+  });
+});
+
 describe('addContributionAction', () => {
   it('rejects a cross-origin submission before touching the database', async () => {
     const { alice } = setup();

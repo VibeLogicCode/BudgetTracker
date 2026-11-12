@@ -2,7 +2,7 @@
 
 import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
-import { z } from 'zod';
+import { z } from '@/lib/zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireUser } from '@/lib/auth/session';
 import { isSelfScoped } from '@/lib/auth/viewer';
@@ -38,7 +38,7 @@ const saveSchema = z.object({
   name: z.string().trim().min(1, 'Give the profile a name').max(80),
   institution: z.string().trim().min(1, 'Which bank is this?').max(80),
   mapping: importMappingSchema,
-  stagingId: z.string().uuid().optional(),
+  stagingId: z.guid().optional(),
 });
 
 export async function saveWizardProfileAction(_prev: WizardState, formData: FormData): Promise<WizardState> {

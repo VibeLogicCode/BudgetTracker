@@ -3,7 +3,7 @@
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
-import { z } from 'zod';
+import { errorText, z } from '@/lib/zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireUser } from '@/lib/auth/session';
 import { canActOnOwner } from '@/lib/auth/viewer';
@@ -19,7 +19,7 @@ export interface GoalActionState {
 const CROSS_ORIGIN_ERROR = 'Cross-origin request rejected';
 
 // '' or 'shared' means a household goal; anything else must be a positive integer user id.
-const ownerField = z.string().trim().refine((v) => v === '' || v === 'shared' || /^\d+$/.test(v), { message: 'Invalid owner selection.' });
+const ownerField = z.string().trim().refine((v) => v === '' || v === 'shared' || /^\d+$/.test(v), { error: 'Invalid owner selection.' });
 const idField = z.coerce.number().int().positive();
 
 export async function createGoalAction(_prev: GoalActionState, formData: FormData): Promise<GoalActionState> {
@@ -45,7 +45,7 @@ export async function createGoalAction(_prev: GoalActionState, formData: FormDat
       targetDate: rawDate === '' ? null : rawDate,
     });
   } catch (error) {
-    return { error: error instanceof Error ? error.message : 'Could not create the goal.' };
+    return { error: errorText(error, 'Could not create the goal.') };
   }
   revalidatePath('/goals');
   // v1.20.0 (goal creation moves to its own route, /goals/new, matching /warranties/new):

@@ -2,7 +2,7 @@
 
 import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
-import { z } from 'zod';
+import { errorText, z } from '@/lib/zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireUser, type SessionUser } from '@/lib/auth/session';
 import { isSelfScoped, NOT_YOURS_ERROR, ownerScope } from '@/lib/auth/viewer';
@@ -227,7 +227,7 @@ export async function manualEntryAction(_prev: ActionState, formData: FormData):
       actorRole: user.role,
     });
   } catch (error) {
-    return { error: error instanceof Error ? error.message : 'Could not save the transaction.' };
+    return { error: errorText(error, 'Could not save the transaction.') };
   }
   // Ruling R7 / micro-ruling M5: remembered per person, so the next quick-add starts where this
   // one finished. Written after the transaction, so a failed write never moves the default.
@@ -454,7 +454,7 @@ export async function setRowTransferAction(_prev: ActionState, formData: FormDat
 // '' means "household/unattributed"; anything else must be a positive integer user id.
 // Number(raw) on a garbage string (e.g. a tampered <select> value) is NaN, which must
 // never reach attributed_user_id, hence the digits-only check before coercing.
-const attributedUserIdField = z.string().trim().refine((v) => v === '' || /^\d+$/.test(v), { message: 'Invalid person selection.' });
+const attributedUserIdField = z.string().trim().refine((v) => v === '' || /^\d+$/.test(v), { error: 'Invalid person selection.' });
 
 export async function setAttributionAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
@@ -689,7 +689,7 @@ export async function bulkNoteAction(_prev: ActionState, formData: FormData): Pr
  */
 const groupScopeSchema = z.object({
   scope: z.string().max(2000),
-  groupCategoryId: z.string().refine((v) => v === '' || /^\d+$/.test(v), { message: 'Invalid request.' }),
+  groupCategoryId: z.string().refine((v) => v === '' || /^\d+$/.test(v), { error: 'Invalid request.' }),
 });
 
 /** How many rows one page of the id sweep below asks for -- listTransactions' own clamp ceiling
@@ -1400,7 +1400,7 @@ const ruleFromRowFields = z.object({
   amountMin: z.string().trim(),
   amountMax: z.string().trim(),
   /** '' means "leave the category as it is" -- distinct from any category id. */
-  categoryId: z.string().trim().refine((v) => v === '' || /^\d+$/.test(v), { message: 'Pick a category.' }),
+  categoryId: z.string().trim().refine((v) => v === '' || /^\d+$/.test(v), { error: 'Pick a category.' }),
   /**
    * THREE states, which is why this is a string and not a number: '' is "leave the person as it
    * is", 'household' is Household (a deliberate choice that writes NULL), and digits are a person.
@@ -1408,7 +1408,7 @@ const ruleFromRowFields = z.object({
    * and they are opposites.
    */
   person: z.string().trim().refine((v) => v === '' || v === 'household' || /^\d+$/.test(v), {
-    message: 'Invalid person selection.',
+    error: 'Invalid person selection.',
   }),
 });
 

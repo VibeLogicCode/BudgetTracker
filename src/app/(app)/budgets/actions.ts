@@ -2,7 +2,7 @@
 
 import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
-import { z } from 'zod';
+import { z } from '@/lib/zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { isSelfScoped, NOT_YOURS_ERROR } from '@/lib/auth/viewer';
 import { requireUser } from '@/lib/auth/session';
@@ -43,10 +43,10 @@ const STALE_SUGGESTION_ERROR = 'That suggestion is no longer available. Reload t
 const NOT_CURRENT_MONTH_ERROR = 'Suggestions are only available for the current month.';
 
 const scopeSchema = z.enum(['household', 'personal']);
-const monthSchema = z.string().refine(isMonthKey, { message: 'Month must be YYYY-MM.' });
+const monthSchema = z.string().refine(isMonthKey, { error: 'Month must be YYYY-MM.' });
 const categoryIdSchema = z.coerce.number().int().positive();
 // '' means "the acting user" for a personal scope; anything else must be a positive integer id.
-const userIdField = z.string().trim().refine((v) => v === '' || /^\d+$/.test(v), { message: 'Invalid person selection.' });
+const userIdField = z.string().trim().refine((v) => v === '' || /^\d+$/.test(v), { error: 'Invalid person selection.' });
 
 export async function setLimitAction(_prev: BudgetActionState, formData: FormData): Promise<BudgetActionState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };

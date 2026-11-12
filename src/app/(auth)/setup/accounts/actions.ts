@@ -2,7 +2,7 @@
 
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
-import { z } from 'zod';
+import { errorText, z } from '@/lib/zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireAdmin } from '@/lib/auth/session';
 import { createAccount } from '@/lib/accounts';
@@ -55,7 +55,7 @@ export async function saveSetupAccountsAction(_prev: SetupAccountsState, formDat
         ownerUserId: ownerUserId === admin.id ? ownerUserId : null,
       });
     } catch (error) {
-      return { error: error instanceof Error ? error.message : 'Could not create that account.' };
+      return { error: errorText(error, 'Could not create that account.') };
     }
   }
 

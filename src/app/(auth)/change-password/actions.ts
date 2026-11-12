@@ -2,7 +2,7 @@
 
 import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
-import { z } from 'zod';
+import { z } from '@/lib/zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { passwordSchema, verifyPassword } from '@/lib/auth/password';
 import { SESSION_COOKIE_NAME, destroyOtherSessionsForUser, requireUser } from '@/lib/auth/session';

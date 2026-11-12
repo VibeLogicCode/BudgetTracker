@@ -2,7 +2,7 @@
 
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
-import { z } from 'zod';
+import { z } from '@/lib/zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { isSetupRequired, runSetup } from '@/lib/auth/login';
 import { passwordSchema } from '@/lib/auth/password';

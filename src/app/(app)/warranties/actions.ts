@@ -7,7 +7,7 @@ import { warrantyReceipts } from '@/db/schema';
 import { writeReceiptFile } from '@/lib/warranty/receipts';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
-import { z } from 'zod';
+import { z } from '@/lib/zod';
 import BetterSqlite3 from 'better-sqlite3';
 import { appendAudit } from '@/lib/audit';
 import { CROSS_ORIGIN_ERROR, isSameOrigin } from '@/lib/auth/csrf';

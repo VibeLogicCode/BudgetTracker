@@ -969,6 +969,17 @@ describe('manualEntryAction — F-10 (v1.31.0): quick-add\'s own Note field', ()
   });
 });
 
+describe('manualEntryAction: a blank description shows a plain message (v1.60.1)', () => {
+  it('reads "Description is required", not a block of JSON', async () => {
+    const { accountId } = setup();
+    const result = await manualEntryAction(
+      {},
+      formData({ amount: '12.34', direction: 'spend', accountId: String(accountId), date: '2026-03-02', description: '   ' }),
+    );
+    expect(result.error).toBe('Description is required');
+  });
+});
+
 describe('manualEntryAction — ruling R10: an asset account refuses transactions', () => {
   it('returns {error} inline and inserts no transaction row', async () => {
     const { sqlite } = setup();
