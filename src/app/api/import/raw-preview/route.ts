@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from '@/lib/zod';
 import { CsrfError, assertSameOrigin } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
 import { isSelfScoped } from '@/lib/auth/viewer';
@@ -10,12 +10,12 @@ const encodingSchema = z.enum(['auto', 'utf-8', 'windows-1252']).default('auto')
 /**
  * v1.55.2. The second way in: a file the import screen ALREADY staged, named by its id, so "Add a
  * bank" from that screen opens on the file in hand instead of asking for it again. The id is
- * validated exactly as /api/import/preview's JSON body validates it (`z.string().uuid()`), and the
+ * validated exactly as /api/import/preview's JSON body validates it (`z.guid()`), and the
  * bytes come through the same readStagedFile, whose stagedFilePath guard is the only way a
  * staging id ever reaches path.join.
  */
 const stagedBodySchema = z.object({
-  stagingId: z.string().uuid(),
+  stagingId: z.guid(),
   encoding: encodingSchema,
 });
 

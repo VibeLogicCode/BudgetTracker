@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from '@/lib/zod';
 import { CsrfError, assertSameOrigin } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
 import { isSelfScoped } from '@/lib/auth/viewer';
@@ -27,7 +27,7 @@ import { MAX_BATCH_FILES } from '../detect/route';
  * away seven good imports to do it.
  */
 const entrySchema = z.object({
-  stagingId: z.string().uuid(),
+  stagingId: z.guid(),
   filename: z.string().min(1).max(255),
   accountId: z.number().int().positive(),
   // Fix round: optional only for an OFX/QFX file, which names its own fields -- checked per file

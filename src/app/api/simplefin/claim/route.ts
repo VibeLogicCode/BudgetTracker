@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from '@/lib/zod';
 import { CsrfError, assertSameOrigin } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
 import { MAX_SIMPLEFIN_BODY_BYTES, SimplefinError, claimSetupToken } from '@/lib/simplefin/client';

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from '@/lib/zod';
 import { CsrfError, assertSameOrigin } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
 import { isSelfScoped } from '@/lib/auth/viewer';
@@ -11,7 +11,7 @@ import { StagingError, readStagedFile, writeStagedFile } from '@/lib/import/stag
 import { ImportLimitError, MAX_FILE_BYTES } from '@/lib/import/parse';
 
 const bodySchema = z.object({
-  stagingId: z.string().uuid(),
+  stagingId: z.guid(),
   filename: z.string().min(1).max(255),
   accountId: z.coerce.number().int().positive(),
   // Optional only so an OFX/QFX file can be previewed without one; the check below refuses a
