@@ -123,7 +123,10 @@ export async function runSync(input: { userId: number; fetcher?: Fetcher; now?: 
     if (!link) continue; // unmapped remote accounts are ignored by design
 
     const account = getAccount(link.accountId);
-    if (!account) continue;
+    // v1.60.0 (fix round): a deactivated account stops syncing. Its rows and balances would
+    // otherwise keep arriving after the day it was deactivated, on an account the household no
+    // longer counts.
+    if (!account || !account.isActive) continue;
 
     const rows: CommitRow[] = [];
     const errors: RowError[] = [];

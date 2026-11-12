@@ -240,6 +240,22 @@ describe('ImportHistoryCard: Show more', () => {
     expect(getByText('statement-4.csv')).toBeTruthy();
   });
 
+  /** Fix round: the wait is announced to a screen reader, then the live region empties. */
+  it('announces "Loading…" in a live region while the next page is on its way', async () => {
+    let release: (value: unknown) => void = () => {};
+    loadMore.mockReturnValueOnce(new Promise((resolve) => (release = resolve)));
+    const { getByText, getByRole } = render(<ImportHistoryCard history={[historyRow(6), historyRow(5)]} hasMore tz="America/Toronto" />);
+
+    const status = getByRole('status');
+    expect(status.getAttribute('aria-live')).toBe('polite');
+    expect(status.textContent).toBe('');
+    fireEvent.click(getByText('Show more'));
+    await waitFor(() => expect(getByRole('status').textContent).toBe('Loading…'));
+    release({ rows: [historyRow(4)], hasMore: true });
+    await waitFor(() => expect(getByText('statement-4.csv')).toBeTruthy());
+    expect(getByRole('status').textContent).toBe('');
+  });
+
   it('offers no button when there is nothing older', () => {
     const { queryByText } = render(<ImportHistoryCard history={[historyRow(1)]} tz="America/Toronto" />);
     expect(queryByText('Show more')).toBeNull();
@@ -259,6 +275,27 @@ describe('ImportHistoryCard: quiet bank syncs fold into one line', () => {
     expect(getByText('statement-6.csv')).toBeTruthy();
 
     fireEvent.click(getByRole('button', { name: '3 bank syncs with nothing new' }));
+    expect(getByText('simplefin 2026-03-10 14:00')).toBeTruthy();
+  });
+
+  /** Fix round: the folded line is a cell like any other on a phone, so it carries a label. */
+  it('labels the folded line for the stacked phone layout', () => {
+    const rows = [quiet(9, '15:00'), quiet(8, '14:00')];
+    const { getByRole } = render(<ImportHistoryCard history={rows} tz="America/Toronto" />);
+    const cell = getByRole('button', { name: '2 bank syncs with nothing new' }).closest('td');
+    expect(cell?.getAttribute('data-label')).toBe('Bank syncs');
+  });
+
+  /** Fix round: a sync that added nothing but hit row errors is news, so it never folds away. */
+  it('keeps a sync with row errors in sight, outside the fold', () => {
+    const rows = [
+      quiet(9, '15:00'),
+      historyRow(8, { filename: 'simplefin 2026-03-10 14:00', rowsAdded: 0, rowsError: 2, createdAt: '2026-03-10T14:00:00.000Z' }),
+      quiet(7, '13:00'),
+    ];
+    const { getByText, queryByText } = render(<ImportHistoryCard history={rows} tz="America/Toronto" />);
+
+    expect(queryByText(/bank syncs with nothing new/)).toBeNull();
     expect(getByText('simplefin 2026-03-10 14:00')).toBeTruthy();
   });
 

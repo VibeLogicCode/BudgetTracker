@@ -7,7 +7,7 @@ import {
   type SavingsMonthRow,
   type TaxYearDisplayRow,
 } from '@/app/(app)/reports/reports-client';
-import { buildSavingsSeries, hasAnyTarget, SavingsChart } from '@/components/charts/SavingsChart';
+import { buildSavingsSeries, flowTooltipValue, hasAnyTarget, SavingsChart } from '@/components/charts/SavingsChart';
 import { UNATTRIBUTED_LABEL } from '@/lib/reports';
 import type { ResolvedRange } from '@/lib/date-range';
 import type { NetWorthPoint } from '@/lib/networth';
@@ -568,6 +568,15 @@ describe('ReportsClient — Cash flow and savings rate card', () => {
     expect(within(cashflowCard(container)).getByText('No income recorded in this range.')).toBeTruthy();
   });
 
+  /** v1.60.0 item 2: money came in, none of it categorized yet. That is not "no income". */
+  it('names the uncategorized money in, with no rate, when no income is categorized yet', () => {
+    const rows = [savingsRow({ month: '2026-06', incomeCents: 0, uncategorizedInCents: 50000, spendCents: 10000, netCents: 40000 })];
+    const { container } = render(<ReportsClient {...baseProps({ cashflow: rows })} />);
+    const card = within(cashflowCard(container));
+    expect(card.queryByText('No income recorded in this range.')).toBeNull();
+    expect(card.getByText('Income $0.00 (plus $500.00 not categorized yet) · Spent $100.00 · Saved $400.00')).toBeTruthy();
+  });
+
   it('adds the target-met count when every month in range has a target, met or not', () => {
     const rows = [
       savingsRow({ month: '2026-04', incomeCents: 500000, spendCents: 350000, netCents: 150000, targetCents: 100000, met: true }),
@@ -648,6 +657,19 @@ describe('buildSavingsSeries (src/components/charts/SavingsChart.tsx)', () => {
       { month: '2026-06', incomeCents: 500000, spendCents: 600000, netCents: -100000, uncategorizedInCents: 0, targetCents: null },
     ]);
     expect(points.map((p) => p['Cumulative saved'])).toEqual([1000, 1500, 500]);
+  });
+
+  /** v1.60.0 item 2: the tooltip names uncategorized money in beside Income, so the three add up. */
+  it('the tooltip adds "plus $X not categorized yet" to Income only, and only when there is some', () => {
+    const [point, quiet] = buildSavingsSeries([
+      { month: '2026-05', incomeCents: 500000, spendCents: 350000, netCents: 152500, uncategorizedInCents: 2500, targetCents: null },
+      { month: '2026-06', incomeCents: 500000, spendCents: 350000, netCents: 150000, uncategorizedInCents: 0, targetCents: null },
+    ]);
+    expect(point.uncategorizedIn).toBe(25);
+    expect(flowTooltipValue(5000, 'Income', point)).toBe('$5000.00 (plus $25.00 not categorized yet)');
+    expect(flowTooltipValue(3500, 'Spend', point)).toBe('$3500.00');
+    expect(flowTooltipValue(1525, 'Net', point)).toBe('$1525.00');
+    expect(flowTooltipValue(5000, 'Income', quiet)).toBe('$5000.00');
   });
 });
 

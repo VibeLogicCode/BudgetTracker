@@ -340,14 +340,22 @@ export interface UncategorizedSpend {
  */
 export function uncategorizedSpend(
   month: string,
-  opts: { scope: BudgetScope; attributedUserId: number | null },
+  opts: {
+    scope: BudgetScope;
+    attributedUserId: number | null;
+    /**
+     * v1.60.0 item 3. The last day counted, when the month is still running: the Dashboard's tiles
+     * stop at today, so the Spent tile's "not categorized yet" line does too. Defaults to month end.
+     */
+    through?: string;
+  },
   viewer: Viewer,
 ): UncategorizedSpend {
   assertMonth(month);
   if (opts.scope === 'personal' && opts.attributedUserId === null) {
     throw new Error('Personal uncategorized spend requires a user');
   }
-  const scoped = [gte(transactions.date, monthStart(month)), lte(transactions.date, monthEnd(month))];
+  const scoped = [gte(transactions.date, monthStart(month)), lte(transactions.date, opts.through ?? monthEnd(month))];
   if (opts.scope !== 'household' && opts.attributedUserId !== null) {
     scoped.push(eq(transactions.attributedUserId, opts.attributedUserId));
   }

@@ -1084,15 +1084,17 @@ function formatOrDash(cents: number): React.ReactNode {
  */
 function cashflowSummary(rows: SavingsMonthRow[]): string {
   const rate = savingsRate(rows);
-  if (rate.pct === null) return 'No income recorded in this range.';
   // v1.60.0 item 2: Saved counts money in that has no category yet; Income and Spent do not. It is
   // named beside Income so the three figures in this sentence still add up.
   const uncategorizedInCents = rows.reduce((sum, row) => sum + row.uncategorizedInCents, 0);
+  // Money came in, none of it categorized as income yet: say what came in, with no rate to divide.
+  if (rate.pct === null && uncategorizedInCents <= 0) return 'No income recorded in this range.';
   const income =
     uncategorizedInCents > 0
       ? `Income ${formatCents(rate.incomeCents)} (plus ${formatCents(uncategorizedInCents)} not categorized yet)`
       : `Income ${formatCents(rate.incomeCents)}`;
-  const base = `${income} · Spent ${formatCents(rate.spendCents)} · Saved ${formatCents(rate.netCents)} (${rate.pct}%)`;
+  const saved = rate.pct === null ? `Saved ${formatCents(rate.netCents)}` : `Saved ${formatCents(rate.netCents)} (${rate.pct}%)`;
+  const base = `${income} · Spent ${formatCents(rate.spendCents)} · ${saved}`;
   const withTarget = rows.filter((row) => row.targetCents !== null);
   if (withTarget.length === 0) return base;
   const met = withTarget.filter((row) => row.met).length;

@@ -37,6 +37,11 @@ export interface SavingsSeriesPoint {
   'Cumulative saved': number;
   /** null, never 0, for a month with no target -- see SavingsChartRow's docblock above. */
   Target: number | null;
+  /**
+   * v1.60.0 item 2. Money in with no category yet, in dollars. Net counts it and Income does not,
+   * so the tooltip names it beside Income. Not a series: nothing draws it.
+   */
+  uncategorizedIn: number;
 }
 
 /**
@@ -55,8 +60,21 @@ export function buildSavingsSeries(data: SavingsChartRow[]): SavingsSeriesPoint[
       Net: row.netCents / 100,
       'Cumulative saved': cumulativeCents / 100,
       Target: row.targetCents === null ? null : row.targetCents / 100,
+      uncategorizedIn: row.uncategorizedInCents / 100,
     };
   });
+}
+
+/**
+ * v1.60.0 item 2. The monthly chart's tooltip figure: Income carries "plus $X not categorized yet"
+ * when the month had some, the Dashboard's and Reports' words, so the Income, Spend and Net the
+ * tooltip lists still add up. Exported for the reason buildSavingsSeries is: jsdom cannot mount
+ * the tooltip itself.
+ */
+export function flowTooltipValue(value: number, name: string, point: SavingsSeriesPoint | undefined): string {
+  const amount = `$${value.toFixed(2)}`;
+  if (name !== 'Income' || point === undefined || point.uncategorizedIn <= 0) return amount;
+  return `${amount} (plus $${point.uncategorizedIn.toFixed(2)} not categorized yet)`;
 }
 
 /**
@@ -101,7 +119,9 @@ function MonthlyFlowChart({ series, showTarget }: { series: SavingsSeriesPoint[]
           <XAxis dataKey="month" {...AXIS_TICK} />
           <YAxis {...AXIS_TICK} width={56} />
           <Tooltip
-            formatter={(value: number) => `$${value.toFixed(2)}`}
+            formatter={(value: number, name: string, item: { payload?: SavingsSeriesPoint }) =>
+              flowTooltipValue(value, name, item.payload)
+            }
             // Same reasoning as DebtTrendChart/NetWorthChart: recharts' Curve cursor (drawn for
             // the Line series) hard-codes stroke #ccc unless one is given explicitly, so both the
             // Bar cursor's fill and the Line cursor's stroke are supplied here.

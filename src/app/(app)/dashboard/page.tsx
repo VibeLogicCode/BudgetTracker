@@ -155,10 +155,15 @@ export default async function DashboardPage({
   // above they need to work for a month outside the chart's own trailing-12 window. v1.60.0 item
   // 13c: a month inside that window is the trend's own row (same query, same scope), so only a
   // month older than the chart costs a one-month read of its own.
-  const monthCashflow =
-    trend.find((row) => row.month === month) ??
-    cashflowTrend(1, { endMonth: month, attributedUserId: scopeUserId }, viewer)[0] ??
-    null;
+  //
+  // v1.60.0 item 3: the current month is read from day 1 to today, the same stretch the "vs"
+  // window below covers, so a row dated after today is in neither until its day comes. A past
+  // month is complete and keeps its whole-month row.
+  const monthCashflow: CashflowTotals | null = isCurrentMonth
+    ? cashflowForRange({ from: monthStart(month), to: today }, { attributedUserId: scopeUserId }, viewer)
+    : (trend.find((row) => row.month === month) ??
+      cashflowTrend(1, { endMonth: month, attributedUserId: scopeUserId }, viewer)[0] ??
+      null);
   // Item 1: the prior-period twin of `monthCashflow` above, purely to power each tile's delta --
   // same query helper, same scoping, one month earlier than whatever is being VIEWED (not
   // calendar-"last month" when a past month is being drilled into).
@@ -225,7 +230,7 @@ export default async function DashboardPage({
   // for a self viewer, the same pairing net worth below already uses.
   const savings: SavingsProgress | null = selfScoped
     ? null
-    : savingsProgress(month, viewer, { row: householdRows ? (monthCashflow ?? undefined) : undefined });
+    : savingsProgress(month, viewer, { row: householdRows && monthCashflow !== null ? { month, ...monthCashflow } : undefined });
   // Cash runway takes `today`, not a month (Lane 1's own signature) -- it cannot follow the
   // chosen month even in principle, so it is always "as of today" and says so in its own hint
   // rather than needing the "as of today" note the loans/goals/etc. sections below carry.
@@ -287,9 +292,10 @@ export default async function DashboardPage({
   const spendPlan = safeToSpend({ month, today, viewer });
   const householdTotals = selfScoped ? totals : scopeUserId === null ? totals : budgetTotals(budgetProgress(month));
 
-  // monthCashflow (above) is the SAME query cashflowTrend always was -- read off the 12-month
-  // `trend` when the viewed month is inside it, and on its own otherwise, since ruling T7 pinned
-  // the chart to today and a month outside its window would silently zero out these tiles.
+  // monthCashflow (above) is the SAME query cashflowTrend always was -- day 1 to today for the
+  // current month (v1.60.0 item 3), read off the 12-month `trend` for a past month inside it, and on
+  // its own otherwise, since ruling T7 pinned the chart to today and a month outside its window
+  // would silently zero out these tiles.
   const incomeCents = monthCashflow?.incomeCents ?? 0;
   // v1.60.0 item 2: money in with no category yet. Net counts it; Money in and Spent do not, so
   // the Money in tile names it and the three tiles still reconcile on screen.
@@ -319,9 +325,13 @@ export default async function DashboardPage({
    * loan link -- a real gap, but a different one, and mislabelling it "not categorized yet" would
    * send someone to the review queue to fix a row that was never uncategorized.
    */
+  // v1.60.0 item 3: through today in the current month, as Spent itself is.
+  const through = isCurrentMonth ? today : undefined;
   const uncategorizedSpentCents = uncategorizedSpend(
     month,
-    scopeUserId === null ? { scope: 'household', attributedUserId: null } : { scope: 'personal', attributedUserId: scopeUserId },
+    scopeUserId === null
+      ? { scope: 'household', attributedUserId: null, through }
+      : { scope: 'personal', attributedUserId: scopeUserId, through },
     viewer,
   ).totalCents;
 

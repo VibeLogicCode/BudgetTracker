@@ -357,6 +357,11 @@ export type RenderInput =
       /** Spec 2026-09-28 §2.1. Same line the weekly digest opens with; same source. */
       lastImportIso: string | null;
       incomeCents: number;
+      /**
+       * v1.60.0 item 2. Money in with no category yet: in Net, in neither Income nor Spent, so the
+       * Income line names it and the three lines still add up.
+       */
+      uncategorizedInCents: number;
       spendCents: number;
       netCents: number;
       budgetedLimitCents: number;
@@ -809,6 +814,7 @@ function renderHouseholdDigest(input: Extract<WeeklyDigestInput, { variant: 'hou
 function renderMonthlyDigest(input: Extract<RenderInput, { event: 'monthly_digest' }>): string {
   const empty =
     input.incomeCents === 0 &&
+    input.uncategorizedInCents === 0 &&
     input.spendCents === 0 &&
     input.netCents === 0 &&
     input.topMerchants.length === 0 &&
@@ -816,7 +822,10 @@ function renderMonthlyDigest(input: Extract<RenderInput, { event: 'monthly_diges
   if (empty) return 'No transactions were recorded last month.';
 
   const parts: string[] = [
-    `Income: ${money(input.incomeCents)}`,
+    // v1.60.0 item 2: the Dashboard's and Reports' wording, so Income + this - Spent = Net here too.
+    input.uncategorizedInCents > 0
+      ? `Income: ${money(input.incomeCents)} (plus ${money(input.uncategorizedInCents)} not categorized yet)`
+      : `Income: ${money(input.incomeCents)}`,
     `Spent: ${money(input.spendCents)}`,
     `Net: ${money(input.netCents)}`,
   ];

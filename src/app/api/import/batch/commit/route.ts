@@ -6,7 +6,8 @@ import { acceptsTransactions, getAccount } from '@/lib/accounts';
 import { importMappingSchema } from '@/lib/import/mapping';
 import { getProfile } from '@/lib/import/presets';
 import { commitStagedImport } from '@/lib/import/flow';
-import { StagingError } from '@/lib/import/staging';
+import { looksLikeOfx } from '@/lib/import/ofx';
+import { StagingError, readStagedFile } from '@/lib/import/staging';
 import { ImportLimitError, MAX_FILE_BYTES } from '@/lib/import/parse';
 import { MAX_BATCH_FILES } from '../detect/route';
 
@@ -15,7 +16,7 @@ import { MAX_BATCH_FILES } from '../detect/route';
  *
  * RULING B2: THERE IS NO NEW COMMIT PATH HERE. Every file goes through `commitStagedImport`
  * (src/lib/import/flow.ts) -- the same call the single-file route makes, with the same arguments,
- * in the same order. This route is a loop and three refusals; the moment it grows a second way to
+ * in the same order. This route is a loop and a few refusals; the moment it grows a second way to
  * write a transaction it has become a place for the two paths to disagree about dedup, rules,
  * loan matching or balance reconciliation, all of which that one function owns.
  *
@@ -29,8 +30,10 @@ const entrySchema = z.object({
   stagingId: z.string().uuid(),
   filename: z.string().min(1).max(255),
   accountId: z.number().int().positive(),
-  profileId: z.number().int().positive(),
-  mapping: importMappingSchema,
+  // Fix round: optional only for an OFX/QFX file, which names its own fields -- checked per file
+  // below, the same staged-bytes check the single-file commit route makes.
+  profileId: z.number().int().positive().optional(),
+  mapping: importMappingSchema.optional(),
 });
 
 const bodySchema = z.object({ files: z.array(entrySchema).min(1).max(MAX_BATCH_FILES) });
@@ -86,12 +89,32 @@ export async function POST(request: Request): Promise<Response> {
       results.push({ ...base, ok: false, error: 'That account only holds a balance you type in.' });
       continue;
     }
-    if (!getProfile(entry.profileId)) {
+    if (entry.profileId === undefined) {
+      // No profile is acceptable only when the staged file itself reads as OFX/QFX; a CSV is refused.
+      let isOfx: boolean;
+      try {
+        isOfx = looksLikeOfx(entry.filename, readStagedFile(entry.stagingId));
+      } catch (error) {
+        results.push({ ...base, ok: false, error: error instanceof StagingError ? error.message : 'This file could not be imported.' });
+        continue;
+      }
+      if (!isOfx) {
+        results.push({ ...base, ok: false, error: 'Choose an import profile for this file.' });
+        continue;
+      }
+    } else if (!getProfile(entry.profileId) || entry.mapping === undefined) {
       results.push({ ...base, ok: false, error: 'That import mapping no longer exists.' });
       continue;
     }
     try {
-      const result = commitStagedImport({ ...entry, userId: user.id });
+      const result = commitStagedImport({
+        stagingId: entry.stagingId,
+        filename: entry.filename,
+        accountId: entry.accountId,
+        profileId: entry.profileId ?? null,
+        mapping: entry.mapping ?? null,
+        userId: user.id,
+      });
       results.push({
         ...base,
         ok: true,

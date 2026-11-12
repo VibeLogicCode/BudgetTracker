@@ -11,6 +11,12 @@ alter table accounts add column deactivated_at text;
 -- activity: the latest of their newest balance snapshot, their newest transaction and the day the
 -- account was created. Multi-argument max() is NULL when any argument is, hence the '' stand-ins
 -- for an account with no snapshots or no transactions (every date sorts after '').
+-- Nothing ever recorded the deactivation itself: setAccountActive wrote no audit_log entry, so
+-- there is no better day to read. A linked account kept syncing while inactive until v1.60.0 (the
+-- sync now skips it), so its synced rows count as activity here: no row says which of them came
+-- after the click. The day this gives can be after today; net worth caps it at today
+-- (countsInMonthEnding, src/lib/networth.ts), so it never counts an inactive account in the
+-- month still running.
 update accounts set deactivated_at = date(max(
     coalesce((select max(s.date) from account_balance_snapshots s where s.account_id = accounts.id), ''),
     coalesce((select max(t.date) from transactions t where t.account_id = accounts.id), ''),

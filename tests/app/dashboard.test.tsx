@@ -2128,6 +2128,27 @@ describe('DashboardPage — v1.60.0: the money figures', () => {
       expect(tile('Spent this month').textContent).toContain('+10.0% vs Feb 1-28');
     });
 
+    /** v1.60.0 item 3: the tiles stop at today, as the "vs" window does. */
+    it('a row dated after today is in no tile and no "not categorized yet" line until its day', async () => {
+      const { alex, salary, groceries, add } = await household();
+      add('2026-02-10', -10_000, groceries);
+      add('2026-03-05', -11_000, groceries);
+      add('2026-03-12', 50_000, salary, alex.id, 'PAYROLL');
+      // After March 18: dated ahead, so not spent, and not in, yet.
+      add('2026-03-25', -90_000, groceries);
+      add('2026-03-26', -7_000, null);
+      add('2026-03-27', 3_000, null, alex.id, 'E-TRANSFER');
+      add('2026-03-28', 40_000, salary, alex.id, 'PAYROLL');
+      signIn(alex, 'admin', 'household');
+      await dash();
+
+      expect(tile('Spent this month').textContent).toContain('$110.00');
+      expect(tile('Spent this month').textContent).toContain('+10.0% vs Feb 1-18');
+      expect(tile('Money in').textContent).toContain('$500.00');
+      expect(tile('Net this month').textContent).toContain('+$390.00');
+      expect(screen.queryByText(/not categorized yet/)).toBeNull();
+    });
+
     it('a viewed past month is complete, so it keeps the whole month before and "last month"', async () => {
       const { alex, groceries, add } = await household();
       add('2026-01-25', -10_000, groceries);
@@ -2183,11 +2204,12 @@ describe('DashboardPage — v1.60.0: the money figures', () => {
       return count;
     }
 
-    it('on the Household pill reads the trend and the comparison window only (v1.59.1 read five)', async () => {
+    it('on the Household pill reads the trend, the month to date and the comparison window only (v1.59.1 read five)', async () => {
       const { alex } = await mixed();
       signIn(alex, 'admin', 'household');
-      // Trend, month, last month, savingsProgress and cashRunway each read their own before.
-      expect(await cashflowReads(() => dash())).toBe(2);
+      // Trend, month, last month, savingsProgress and cashRunway each read their own before. Item 3
+      // reads the current month to today on its own, so its tiles stop where the "vs" window does.
+      expect(await cashflowReads(() => dash())).toBe(3);
     });
 
     it('shows the figures savingsProgress, cashRunway and a one-month cashflowTrend give on their own', async () => {

@@ -156,9 +156,9 @@ export function BatchClient(props: {
    * reads as, and when they disagree the file in hand is the better evidence.
    *
    * An OFX row has no profile at all (ruling B7) and needs none -- flow.ts dispatches on the
-   * file's CONTENT and ignores the mapping entirely for one. It still has to send SOMETHING,
-   * because `imports.profile_id` records what was used; the account's pin, else the first
-   * offered profile, is the same answer the one-file page's picker would have been showing.
+   * file's CONTENT and ignores the mapping entirely for one. Fix round: so it sends none, and the
+   * import records a NULL profile, as the one-file route does since v1.60.0; the batch route
+   * accepts that only for a file whose staged bytes read as OFX.
    */
   function mappingFor(row: BatchRow): { profileId: number; mapping: ImportMapping } | null {
     const detected = props.profiles.find((profile) => profile.id === row.profile?.id);
@@ -195,17 +195,12 @@ export function BatchClient(props: {
     setBusy(true);
     try {
       const files = ready.flatMap((row) => {
+        if (row.stagingId === null || row.account === null) return [];
+        const file = { stagingId: row.stagingId, filename: row.filename, accountId: row.account.id };
+        if (row.source === 'ofx') return [file];
         const resolved = mappingFor(row);
-        if (resolved === null || row.stagingId === null || row.account === null) return [];
-        return [
-          {
-            stagingId: row.stagingId,
-            filename: row.filename,
-            accountId: row.account.id,
-            profileId: resolved.profileId,
-            mapping: resolved.mapping,
-          },
-        ];
+        if (resolved === null) return [];
+        return [{ ...file, profileId: resolved.profileId, mapping: resolved.mapping }];
       });
       const response = await fetch('/api/import/batch/commit', {
         method: 'POST',

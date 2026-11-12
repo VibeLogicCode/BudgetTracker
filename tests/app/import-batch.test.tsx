@@ -259,6 +259,25 @@ describe('BatchClient: nothing commits without a confirmation', () => {
     expect(String(fetchMock.mock.calls[1]![0])).toContain('/api/import/batch/commit');
   });
 
+  /** Fix round: an OFX file names its own fields, so its entry carries no profile or mapping. */
+  it('posts no profile for an OFX row, and the detected one for a CSV row', async () => {
+    const fetchMock = answerDetect([
+      row({ filename: 'jan.csv' }),
+      row({ filename: 'feb.qfx', stagingId: '22222222-2222-4222-8222-222222222222', profile: null, profileConfidence: null, source: 'ofx' }),
+    ]);
+    render(<BatchClient {...props} />);
+    dropFiles(['jan.csv', 'feb.qfx']);
+    await waitFor(() => expect(screen.getByText('Import the 2 ready ones')).toBeTruthy());
+    fireEvent.click(screen.getByText('Import the 2 ready ones'));
+    fireEvent.click(screen.getByText('Yes, import them'));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    const { files } = JSON.parse(String((fetchMock.mock.calls[1]![1] as RequestInit).body)) as { files: Record<string, unknown>[] };
+    expect(files.find((file) => file.filename === 'jan.csv')).toMatchObject({ profileId: 3 });
+    const ofx = files.find((file) => file.filename === 'feb.qfx');
+    expect(ofx).toEqual({ stagingId: '22222222-2222-4222-8222-222222222222', filename: 'feb.qfx', accountId: 7 });
+  });
+
   it('backs out of the confirmation without writing', async () => {
     const fetchMock = answerDetect([row({ filename: 'jan.csv' })]);
     render(<BatchClient {...props} />);

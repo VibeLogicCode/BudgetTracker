@@ -21,8 +21,9 @@ type HistoryItem = { kind: 'row'; row: ImportHistoryRow } | { kind: 'run'; rows:
 
 /**
  * Consecutive bank-sync rows that added nothing fold into one run so a day of quiet syncs cannot
- * push a CSV import and its Undo off the list. A lone quiet sync, any sync that added rows and
- * every CSV/OFX row stay as plain rows.
+ * push a CSV import and its Undo off the list. A lone quiet sync, any sync that added rows or hit
+ * row errors (fix round: an error count is news, so it stays in sight) and every CSV/OFX row stay
+ * as plain rows.
  */
 function groupQuietSyncs(rows: ImportHistoryRow[]): HistoryItem[] {
   const items: HistoryItem[] = [];
@@ -33,7 +34,7 @@ function groupQuietSyncs(rows: ImportHistoryRow[]): HistoryItem[] {
     run = [];
   };
   for (const row of rows) {
-    if (SYNC_FILENAME.test(row.filename) && row.rowsAdded === 0) run.push(row);
+    if (SYNC_FILENAME.test(row.filename) && row.rowsAdded === 0 && row.rowsError === 0) run.push(row);
     else {
       flush();
       items.push({ kind: 'row', row });
@@ -287,7 +288,8 @@ export function ImportHistoryCard({
                 return (
                   <Fragment key={`run-${first.id}`}>
                     <tr>
-                      <td colSpan={8} className="text-muted">
+                      {/* Fix round: labelled like every sibling cell, so the phone card names it. */}
+                      <td colSpan={8} className="text-muted" data-label="Bank syncs">
                         <button
                           type="button"
                           aria-expanded={open}
@@ -313,10 +315,14 @@ export function ImportHistoryCard({
           </TableWrap>
         )}
         {hasMore ? (
-          <div className="flex justify-center pt-3">
+          <div className="flex flex-col items-center gap-1 pt-3">
             <button type="button" onClick={() => void showMore()} disabled={loadingMore} className={buttonClass('secondary', 'sm')}>
               Show more
             </button>
+            {/* Fix round: the wait is announced, not only shown as a disabled button. */}
+            <p role="status" aria-live="polite" className="text-xs text-muted">
+              {loadingMore ? 'Loading…' : ''}
+            </p>
           </div>
         ) : null}
       </Card>

@@ -444,6 +444,28 @@ describe('Defect fix: an empty closed month gets an honest short digest, not fou
     expect(row.body).toContain('Spent: $713.40');
     expect(row.body).toContain('No budgets were set this month.');
   });
+
+  /** v1.60.0 item 2: Net counts uncategorized money in, so the Income line names it. */
+  it('names uncategorized money in beside Income, so Income, Spent and Net add up', () => {
+    const userId = optedInUser();
+    enableMonthlyDigest(userId);
+    setPref(userId, 'predicted_vs_actual', 'email', false);
+    setPref(userId, 'suggested_budget_refresh', 'email', false);
+    spend(categoryIdByName(t.db, 'Groceries'), 11_000, '2026-07-10');
+    t.db.run(
+      sql`insert into transactions
+            (account_id, date, amount_cents, raw_description, normalized_merchant, category_id,
+             attributed_user_id, is_transfer, dedup_hash, created_by, created_at, updated_at)
+          values (${accountId}, ${'2026-07-14'}, ${2_500}, ${'E-TRANSFER'}, ${'e-transfer'}, ${null},
+                  ${null}, 0, ${'h-uncat-in'}, ${creatorId}, ${'2026-01-01T00:00:00.000Z'}, ${'2026-01-01T00:00:00.000Z'})`,
+    );
+
+    expect(evaluateMonthBoundary({ userId, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(1);
+    const { body } = t.sqlite.prepare('select body from notification_outbox limit 1').get() as { body: string };
+    expect(body).toContain('Income: $0.00 (plus $25.00 not categorized yet)');
+    expect(body).toContain('Spent: $110.00');
+    expect(body).toContain('Net: -$85.00');
+  });
 });
 
 /**

@@ -420,6 +420,7 @@ describe('Task 16 (v1.7.0): the monthly digest', () => {
     lastImportIso: null,
     month: '2026-07',
     incomeCents: 500000,
+    uncategorizedInCents: 0,
     spendCents: 320000,
     netCents: 180000,
     budgetedLimitCents: 200000,
@@ -446,6 +447,28 @@ describe('Task 16 (v1.7.0): the monthly digest', () => {
     // 2026-09-09: whole dollars in `Name: $figure` form, as the weekly's tables now are.
     expect(body).toContain('LOBLAWS: $211');
     expect(body).toContain('Budgets: $1,500.00 of $2,000.00 spent, $500.00 left.');
+  });
+
+  /** v1.60.0 item 2: Net counts money in with no category yet, so Income names it and the lines add up. */
+  it('names uncategorized money in beside Income, and a month holding only that is not empty', () => {
+    const { body } = renderEvent({ ...full, uncategorizedInCents: 2500, netCents: 182500 });
+    expect(body).toContain('Income: $5,000.00 (plus $25.00 not categorized yet)');
+    expect(body).toContain('Spent: $3,200.00');
+    expect(body).toContain('Net: $1,825.00');
+    expect(renderEvent({ ...full, uncategorizedInCents: 0 }).body).not.toContain('not categorized yet');
+
+    const onlyThat = renderEvent({
+      ...full,
+      incomeCents: 0,
+      uncategorizedInCents: 5000,
+      spendCents: 0,
+      netCents: 5000,
+      budgetedLimitCents: 0,
+      budgetedSpentCents: 0,
+      topMerchants: [],
+    }).body;
+    expect(onlyThat).toContain('Income: $0.00 (plus $50.00 not categorized yet)');
+    expect(onlyThat).not.toContain('No transactions were recorded');
   });
 
   it('says "over" instead of "left" once spend passes the budgeted limit', () => {
@@ -641,6 +664,7 @@ const SAMPLES_BY_EVENT: Record<string, RenderInput[]> = {
       lastImportIso: null,
       month: '2026-07',
       incomeCents: 0,
+      uncategorizedInCents: 0,
       spendCents: 0,
       netCents: 0,
       budgetedLimitCents: 0,
@@ -1092,6 +1116,7 @@ describe('spec 2026-09-28 §2.1: the freshness line', () => {
       event: 'monthly_digest',
       month: '2026-07',
       incomeCents: 500000,
+      uncategorizedInCents: 0,
       spendCents: 320000,
       netCents: 180000,
       budgetedLimitCents: 0,

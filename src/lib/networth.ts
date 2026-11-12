@@ -258,9 +258,17 @@ export { STALE_SNAPSHOT_DAYS };
  * always does, and an inactive one does when it was deactivated after that day, so deactivating
  * an account leaves every month before it as it was. An inactive account with no recorded day
  * counts in no month.
+ *
+ * Fix round: an inactive account was deactivated by `today` at the latest, whatever day is stored.
+ * Migration 0030's backfill (the day after last activity) can land after today, when the newest
+ * row is dated ahead or was synced today; read as stored, a day past this month's end would count
+ * an account that is already inactive in the month still running. Capped at today it cannot.
  */
-function countsInMonthEnding(account: Pick<AccountRecord, 'isActive' | 'deactivatedAt'>, end: string): boolean {
-  return account.isActive || (account.deactivatedAt !== null && account.deactivatedAt > end);
+function countsInMonthEnding(account: Pick<AccountRecord, 'isActive' | 'deactivatedAt'>, end: string, today: string): boolean {
+  if (account.isActive) return true;
+  if (account.deactivatedAt === null) return false;
+  const deactivated = account.deactivatedAt < today ? account.deactivatedAt : today;
+  return deactivated > end;
 }
 
 /**
@@ -350,7 +358,7 @@ export function netWorthOverTime(
   if (keys.length === 0) return [];
   const firstMonthEnd = monthEnd(keys[0]!);
   const candidates = listAccounts({ includeInactive: true }, opts.viewer).filter((account) =>
-    countsInMonthEnding(account, firstMonthEnd),
+    countsInMonthEnding(account, firstMonthEnd, today),
   );
   if (candidates.length === 0) return [];
 
@@ -380,7 +388,7 @@ export function netWorthOverTime(
   const points: NetWorthPoint[] = [];
   for (const month of keys) {
     const end = monthEnd(month);
-    const accountIds = candidates.filter((account) => countsInMonthEnding(account, end)).map((account) => account.id);
+    const accountIds = candidates.filter((account) => countsInMonthEnding(account, end, today)).map((account) => account.id);
     let firstDate: string | null = null;
     for (const accountId of accountIds) {
       const first = firstDateByAccount.get(accountId);

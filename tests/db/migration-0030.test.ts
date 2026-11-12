@@ -81,14 +81,18 @@ describe('0030: an account records the day it was deactivated', () => {
     account.run(2, 'Open chequing', 1, '2025-03-01T12:00:00.000Z');
     account.run(3, 'Never used', 0, '2025-06-10T12:00:00.000Z');
     account.run(4, 'Closed savings', 0, '2025-04-01T12:00:00.000Z');
+    account.run(5, 'Closed linked card', 0, '2025-04-01T12:00:00.000Z');
     const snapshot = s.prepare(
       `insert into account_balance_snapshots (account_id, date, balance_cents, source, created_at)
-       values (?, ?, 1000, 'manual', '2025-03-01T12:00:00.000Z')`,
+       values (?, ?, 1000, ?, '2025-03-01T12:00:00.000Z')`,
     );
-    snapshot.run(1, '2025-10-01');
-    snapshot.run(1, '2025-11-20');
-    snapshot.run(2, '2025-11-20');
-    snapshot.run(4, '2025-09-14');
+    snapshot.run(1, '2025-10-01', 'manual');
+    snapshot.run(1, '2025-11-20', 'manual');
+    snapshot.run(2, '2025-11-20', 'manual');
+    snapshot.run(4, '2025-09-14', 'manual');
+    // Fix round: nothing records when an account was deactivated (no audit_log entry was ever
+    // written), so a balance the sync kept writing afterwards counts as activity like any other.
+    snapshot.run(5, '2026-01-15', 'simplefin');
     const txn = s.prepare(
       `insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents,
          created_by, created_at, updated_at)
@@ -111,6 +115,8 @@ describe('0030: an account records the day it was deactivated', () => {
         { id: 3, d: '2025-06-11' },
         // A snapshot and no transaction.
         { id: 4, d: '2025-09-15' },
+        // A synced balance: the same rule. Net worth caps a day past today at today.
+        { id: 5, d: '2026-01-16' },
       ]);
     } finally {
       upgraded.sqlite.close();

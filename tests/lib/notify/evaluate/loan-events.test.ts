@@ -230,6 +230,19 @@ describe('N6: the goal events', () => {
     expect(outbox('goal_off_pace')).toEqual([]);
   });
 
+  /** v1.60.0 (item 5, fix round): a restart after empty months has no pace to judge yet. */
+  it('does not say a goal picked up again this month, after three empty months, is behind', () => {
+    c = setupLoanTest();
+    emailTarget();
+    setPref(c.userId, 'goal_off_pace', 'email', true);
+    const goalId = createGoal({ name: 'New roof', ownerUserId: c.userId, targetCents: 300_000, targetDate: '2026-12-01' });
+    addContribution({ goalId, amountCents: 10_000, date: '2025-10-15', userId: c.userId });
+    addContribution({ goalId, amountCents: 5_000, date: '2026-03-02', userId: c.userId });
+
+    expect(evaluateGoals({ userId: c.userId, now: new Date('2026-03-02T15:00:00.000Z'), tz: 'UTC' })).toBe(0);
+    expect(outbox('goal_off_pace')).toEqual([]);
+  });
+
   it('still says so when the goal really is behind', () => {
     c = setupLoanTest();
     emailTarget();

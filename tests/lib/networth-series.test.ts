@@ -349,6 +349,27 @@ describe('netWorthOverTime: deactivating an account keeps its past', () => {
     expect(series()).toEqual(before);
   });
 
+  /**
+   * Fix round. Migration 0030 backfills "the day after last activity", which lands after today
+   * when the newest row was synced today or is dated ahead. An account inactive now still never
+   * counts in the month that is running.
+   */
+  it('a backfilled day past the running month\'s end does not count an inactive account in it', () => {
+    current = createSeededTestDb();
+    const { closed } = seedTwoAccounts(current);
+    current.sqlite.prepare("update accounts set is_active = 0, deactivated_at = '2026-06-01' where id = ?").run(closed);
+
+    const points = netWorthOverTime(5, { endMonth: '2026-05', today: '2026-05-31', viewer: household });
+
+    expect(points.map((p) => [p.month, p.assetsCents])).toEqual([
+      ['2026-01', 150_000],
+      ['2026-02', 160_000],
+      ['2026-03', 170_000],
+      ['2026-04', 170_000],
+      ['2026-05', 100_000],
+    ]);
+  });
+
   it('stamps the day once: deactivating an inactive account again keeps the first day', () => {
     current = createSeededTestDb();
     const { closed } = seedTwoAccounts(current);

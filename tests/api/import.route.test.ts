@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 import { POST as previewRoute } from '@/app/api/import/preview/route';
 import { POST as commitRoute } from '@/app/api/import/commit/route';
+import { POST as batchCommitRoute } from '@/app/api/import/batch/commit/route';
 import { POST as undoRoute } from '@/app/api/import/undo/route';
 import { createSession, SESSION_COOKIE_NAME } from '@/lib/auth/session';
 import { createAccount } from '@/lib/accounts';
@@ -547,6 +548,40 @@ describe('import routes - OFX without a profile', () => {
       jsonRequest('http://nas.local:3000/api/import/commit', { stagingId: staged, filename: 'td-chequing.csv', accountId }),
     );
     expect(commitResponse.status).toBe(400);
+    expect((current!.sqlite.prepare('select count(*) as c from imports').get() as { c: number }).c).toBe(0);
+  });
+
+  /** Fix round: the batch commit takes the same OFX-only exemption, by the same staged-bytes check. */
+  it('batch: commits an OFX file with no profile, recording a NULL profile', async () => {
+    const stagingId = writeStagedFile(Buffer.from(OFX_STATEMENT));
+    const response = await batchCommitRoute(
+      jsonRequest('http://nas.local:3000/api/import/batch/commit', { files: [{ stagingId, filename: 'march.qfx', accountId }] }),
+    );
+    expect(response.status).toBe(200);
+    const { results } = (await response.json()) as { results: { ok: boolean; importId: number; rowsAdded: number }[] };
+    expect(results[0]).toMatchObject({ ok: true, rowsAdded: 2 });
+    expect(
+      (current!.sqlite.prepare('select profile_id as p from imports where id = ?').get(results[0]!.importId) as { p: number | null }).p,
+    ).toBeNull();
+  });
+
+  it('batch: still refuses a CSV, or a CSV named .qfx, with no profile', async () => {
+    const csv = writeStagedFile(fixture('td-chequing.csv'));
+    const fake = writeStagedFile(fixture('td-chequing.csv'));
+    const response = await batchCommitRoute(
+      jsonRequest('http://nas.local:3000/api/import/batch/commit', {
+        files: [
+          { stagingId: csv, filename: 'td-chequing.csv', accountId },
+          { stagingId: fake, filename: 'fake.qfx', accountId },
+        ],
+      }),
+    );
+    expect(response.status).toBe(200);
+    const { results } = (await response.json()) as { results: { ok: boolean; error?: string }[] };
+    expect(results).toEqual([
+      expect.objectContaining({ ok: false, error: 'Choose an import profile for this file.' }),
+      expect.objectContaining({ ok: false, error: 'Choose an import profile for this file.' }),
+    ]);
     expect((current!.sqlite.prepare('select count(*) as c from imports').get() as { c: number }).c).toBe(0);
   });
 });

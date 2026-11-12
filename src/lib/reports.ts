@@ -55,6 +55,14 @@ function rangeClauses(range: DateRange, scope: PersonScope): SQL[] {
   return clauses;
 }
 
+/**
+ * v1.60.0 item 2: CASHFLOW_BUCKET's spend rule, for the figures that sum spend without its income
+ * arm. With no category a credit cannot be told from income (decision 9), so an uncategorized row
+ * counts only when it is money out; a categorized credit is a refund and still nets against its own
+ * category. Per joined row, so a split part is judged by its own category and amount.
+ */
+const NOT_UNCATEGORIZED_IN = sql`(${EFFECTIVE_CATEGORY} is not null or ${EFFECTIVE_AMOUNT} <= 0)`;
+
 export interface CategoryBreakdownRow {
   categoryId: number | null;
   categoryName: string;
@@ -86,11 +94,12 @@ export function categoryBreakdown(
   // Split-aware (spec 2026-08-22, v1.7.0, Task 3): a split transaction is counted once, at
   // its parts' own categories/amounts (EFFECTIVE_CATEGORY/EFFECTIVE_AMOUNT, src/lib/splits.ts)
   // via the LEFT JOIN below, never at its own lump category/amount and never at both.
+  // v1.60.0 item 2: the Uncategorized bucket is money out only, so these rows sum to cashflow Spent.
   const rows = getDb()
     .select({ categoryId: EFFECTIVE_CATEGORY, total: sql<number>`sum(${EFFECTIVE_AMOUNT})` })
     .from(transactions)
     .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
-    .where(and(...rangeClauses(input, scope)))
+    .where(and(...rangeClauses(input, scope), NOT_UNCATEGORIZED_IN))
     .groupBy(EFFECTIVE_CATEGORY)
     .all();
 
@@ -500,13 +509,14 @@ export function personSpendSplit(input: DateRange, viewer: Viewer): PersonSplitR
   // whole-transaction, design ruling 1 -- a split has no owner of its own), but the income
   // exclusion join keys off EFFECTIVE_CATEGORY and the summed amount is EFFECTIVE_AMOUNT, so
   // BOTH of a split's parts land on the parent's person, each correctly included/excluded by
-  // its OWN category rather than the parent's.
+  // its OWN category rather than the parent's. v1.60.0 item 2: uncategorized money in is left out,
+  // as cashflow Spent leaves it out, so the people's rows add up to that figure.
   const rows = getDb()
     .select({ userId: transactions.attributedUserId, total: sql<number>`sum(${EFFECTIVE_AMOUNT})` })
     .from(transactions)
     .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
     .leftJoin(categories, eq(categories.id, EFFECTIVE_CATEGORY))
-    .where(and(...rangeClauses(input, undefined), sql`coalesce(${categories.isIncome}, 0) = 0`))
+    .where(and(...rangeClauses(input, undefined), sql`coalesce(${categories.isIncome}, 0) = 0`, NOT_UNCATEGORIZED_IN))
     .groupBy(transactions.attributedUserId)
     .all();
 

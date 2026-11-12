@@ -137,6 +137,10 @@ export function buildArchive(targetPath: string, options: { verify?: (partialPat
       { file: partialTarget, cwd: stage, gzip: true, sync: true, portable: true, follow: false },
       ['budget.db', 'receipts'],
     );
+    // Fix round: the staging copy is spent once the tar is written. Removed before the check, which
+    // unpacks the archive again, so the two never sit in /data/tmp together. The `finally` below
+    // still clears it if the tar step threw.
+    fs.rmSync(stage, { recursive: true, force: true });
     if (options.verify) {
       try {
         options.verify(partialTarget);

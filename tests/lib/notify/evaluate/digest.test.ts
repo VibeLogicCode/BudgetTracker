@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { categoryIdByName, createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../../helpers/db';
-import { upsertBudget } from '@/lib/budgets';
+import { uncategorizedSpend, upsertBudget } from '@/lib/budgets';
+import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
+import { cashflowForRange, categoryBreakdown, personSpendSplit } from '@/lib/reports';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { saveEmailTarget, saveSmtp, setPref } from '@/lib/notify/config';
 import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
@@ -117,6 +119,42 @@ describe('§10.2: the window is [slot − 7, slot − 1]', () => {
     // topMerchants() reports normalizedMerchant, which normalizeMerchant() UPPERCASES —
     // production digests show 'LOBLAWS', matching the raw description here.
     expect(body()).toContain('LOBLAWS');
+  });
+});
+
+/**
+ * v1.60.0 item 2 (fix round). Uncategorized money in never lowers Spent, on every surface that
+ * prints a spend total: cash flow, Budgets' Not categorized yet, the category breakdown, Who spent
+ * it and the weekly digest all read the same figures from one week.
+ */
+describe('v1.60.0 item 2: every spend total agrees on uncategorized money in', () => {
+  it('cash flow, Not categorized, the breakdown, Who spent it and the digest all say $110.00', () => {
+    const userId = emailUser();
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    const row = (categoryId: number | null, amountCents: number, date: string, merchant: string) =>
+      t.db.run(
+        sql`insert into transactions
+              (account_id, date, amount_cents, raw_description, normalized_merchant, category_id,
+               attributed_user_id, is_transfer, dedup_hash, created_by, created_at, updated_at)
+            values (${accountId}, ${date}, ${amountCents}, ${merchant}, ${normalizeMerchant(merchant)}, ${categoryId},
+                    ${null}, 0, ${`h${Math.random()}`}, ${creatorId}, ${'2026-08-05T00:00:00.000Z'}, ${'2026-08-05T00:00:00.000Z'})`,
+      );
+    row(groceries, -4_000, '2026-08-11', 'LOBLAWS');
+    row(groceries, 1_000, '2026-08-12', 'LOBLAWS'); // a refund, filed: it nets
+    row(null, -8_000, '2026-08-13', 'MAPLE GROCER');
+    row(null, 2_500, '2026-08-14', 'E-TRANSFER'); // money in with no category: never lowers Spent
+    const week = { from: '2026-08-10', to: '2026-08-16' };
+
+    const cashflow = cashflowForRange(week, {}, HOUSEHOLD_VIEWER);
+    expect(cashflow).toMatchObject({ spendCents: 11_000, uncategorizedInCents: 2_500 });
+    expect(uncategorizedSpend('2026-08', { scope: 'household', attributedUserId: null }, HOUSEHOLD_VIEWER).totalCents).toBe(8_000);
+    const breakdown = categoryBreakdown(week, HOUSEHOLD_VIEWER);
+    expect(breakdown.find((line) => line.categoryId === null)?.spentCents).toBe(8_000);
+    expect(breakdown.reduce((sum, line) => sum + line.spentCents, 0)).toBe(11_000);
+    expect(personSpendSplit(week, HOUSEHOLD_VIEWER).reduce((sum, line) => sum + line.spentCents, 0)).toBe(11_000);
+
+    expect(evaluateWeeklyDigest({ userId, slotDate: '2026-08-17', now: NOW })).toBe(1);
+    expect(body()).toContain('Household spend: $110.00');
   });
 });
 

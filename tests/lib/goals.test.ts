@@ -124,6 +124,49 @@ describe('computePace — the happy path', () => {
     expect(pace.projectedFinishMonth).toBe('2026-12');
   });
 
+  /**
+   * v1.60.0 (item 5, fix round). Paused for the three complete months, picked up again this month:
+   * the complete-month window sums to 0, which read as "no pace" and a goal far behind. This
+   * month's money is the pace now, labelled as this month so far.
+   */
+  it('a goal resumed this month after empty months averages this month alone', () => {
+    const pace = computePace({
+      targetCents: 120000,
+      targetDate: '2026-12-01',
+      contributions: [
+        { date: '2026-02-15', amountCents: 20000 },
+        { date: '2026-08-03', amountCents: 15000 },
+      ],
+      today: TODAY,
+    });
+    expect(pace.resumed).toBe(true);
+    expect(pace.avgMonthlyCents).toBe(15000);
+    expect(pace.avgMonths).toBe(0);
+    expect(pace.noPace).toBe(false);
+    expect(pace.projectedFinishMonth).toBe('2027-02');
+  });
+
+  it('is not resumed while the complete months still hold money, nor with nothing this month', () => {
+    const steady = computePace({
+      targetCents: 120000,
+      targetDate: null,
+      contributions: [
+        { date: '2026-07-15', amountCents: 10000 },
+        { date: '2026-08-03', amountCents: 15000 },
+      ],
+      today: TODAY,
+    });
+    expect(steady.resumed).toBe(false);
+    expect(steady.avgMonthlyCents).toBe(10000);
+    const paused = computePace({
+      targetCents: 120000,
+      targetDate: null,
+      contributions: [{ date: '2026-02-15', amountCents: 20000 }],
+      today: TODAY,
+    });
+    expect(paused).toMatchObject({ resumed: false, avgMonthlyCents: 0, noPace: true });
+  });
+
   it('rounds required monthly up so the goal is actually reached', () => {
     const pace = computePace({ targetCents: 100001, targetDate: '2026-11-01', contributions: [], today: TODAY });
     expect(pace.monthsRemaining).toBe(3);

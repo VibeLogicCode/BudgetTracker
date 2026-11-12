@@ -19,6 +19,7 @@ import { amountToCents, postedToIsoDate, runSync, syncWindow } from '@/lib/simpl
 import { DAILY_REQUEST_LIMIT, getConnection, linkAccount, listLinks, remainingRequestsToday, saveClaimedConnection } from '@/lib/simplefin/connection';
 import type { Fetcher } from '@/lib/simplefin/client';
 import { listImportHistory } from '@/lib/import/commit';
+import { setAccountActive } from '@/lib/accounts';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -264,6 +265,21 @@ describe('runSync', () => {
     const result = await runSync({ userId, fetcher, now: NOW });
     expect(result.accounts).toHaveLength(0);
     expect((sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(0);
+  });
+
+  /** v1.60.0 (fix round): a deactivated account stops syncing, rows and balance alike. */
+  it('skips a linked account that has been deactivated', async () => {
+    const { userId, sqlite, accountId } = setup();
+    setAccountActive(accountId, false, '2026-08-01');
+    const fetcher = bridge(
+      accountSet([{ id: 'txn-1', posted: Math.floor(Date.parse('2026-08-10T15:00:00Z') / 1000), amount: '-12.34', description: 'TIM HORTONS #4821' }]),
+    );
+
+    const result = await runSync({ userId, fetcher, now: NOW });
+    expect(result.accounts).toHaveLength(0);
+    expect((sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(0);
+    expect((sqlite.prepare('select count(*) as c from account_balance_snapshots').get() as { c: number }).c).toBe(0);
+    expect(listLinks()[0]!.lastBalanceCents).toBeNull();
   });
 
   it('records the reported balance on the link and writes a matching balance snapshot (spec 2026-08-22 v1.7.0 Task 6)', async () => {

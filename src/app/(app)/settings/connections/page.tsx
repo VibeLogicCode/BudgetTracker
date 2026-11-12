@@ -1,6 +1,6 @@
 import { requireAdmin } from '@/lib/auth/session';
 import { listAccounts } from '@/lib/accounts';
-import { localDateTimeOf } from '@/lib/dates';
+import { localTimeLabel } from '@/lib/dates';
 import {
   AUTO_SYNC_INTERVALS,
   DAILY_REQUEST_LIMIT,
@@ -22,8 +22,9 @@ export default async function ConnectionsPage() {
   const storedAutoSync = getSetting(SETTING_AUTO_SYNC);
   const autoSync = storedAutoSync !== null && isAutoSyncInterval(storedAutoSync) ? storedAutoSync : null;
   // v1.60.0: only while automatic sync is on and waiting out a failure backoff. The time is the
-  // household's clock, HH:mm.
-  const backoff = autoSync !== null && connection !== null ? autoSyncBackoff() : null;
+  // household's clock, HH:mm, with the day named when it is not today (a backoff runs up to 24h).
+  const now = new Date();
+  const backoff = autoSync !== null && connection !== null ? autoSyncBackoff(now) : null;
   return (
     <ConnectionsClient
       connection={connection}
@@ -35,7 +36,7 @@ export default async function ConnectionsPage() {
       dailyLimit={DAILY_REQUEST_LIMIT}
       autoSync={autoSync}
       autoSyncWaiting={
-        backoff ? { failures: backoff.failures, nextTry: localDateTimeOf(backoff.nextTryAt.toISOString()).slice(11) } : null
+        backoff ? { failures: backoff.failures, nextTry: localTimeLabel(backoff.nextTryAt.toISOString(), now) } : null
       }
       // Server Component computes this FROM the constant and passes plain strings down --
       // the client component never imports @/lib/simplefin/connection as a VALUE (only its

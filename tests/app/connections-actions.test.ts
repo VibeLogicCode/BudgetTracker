@@ -6,9 +6,11 @@ import {
   isSimplefinManaged,
   linkAccount,
   listLinks,
+  recordAutoSyncAttempt,
+  recordAutoSyncFailure,
   saveClaimedConnection,
 } from '@/lib/simplefin/connection';
-import { getSetting } from '@/lib/settings';
+import { getSetting, setSetting } from '@/lib/settings';
 
 let currentUser = { id: 1, name: 'Admin', username: 'admin', role: 'admin' as const };
 let requestHeaders = new Headers({ origin: 'http://nas.local:3000', host: 'nas.local:3000' });
@@ -151,5 +153,35 @@ describe('setSimplefinAutoSyncAction (Task 8)', () => {
 
     expect(result.error).toBe('Cross-origin request rejected');
     expect(getSetting(SETTING_AUTO_SYNC)).toBeNull();
+  });
+});
+
+/**
+ * v1.60.0 (fix round). A backoff runs up to 24 hours, so the waiting line's "Next try" names the
+ * day once it is not today in the household's zone (the suite runs in America/Toronto).
+ */
+describe('ConnectionsPage: the backoff line names the day when it is not today', () => {
+  afterEach(() => vi.useRealTimers());
+
+  async function nextTry(lastAttempt: string, failures: number, now: string): Promise<string | undefined> {
+    setup();
+    saveClaimedConnection(ACCESS_URL);
+    setSetting(SETTING_AUTO_SYNC, 'daily');
+    recordAutoSyncAttempt(new Date(lastAttempt));
+    for (let i = 0; i < failures; i += 1) recordAutoSyncFailure();
+    vi.useFakeTimers({ now: new Date(now), toFake: ['Date'] });
+    const { default: ConnectionsPage } = await import('@/app/(app)/settings/connections/page');
+    const element = (await ConnectionsPage()) as { props: { autoSyncWaiting: { nextTry: string } | null } };
+    return element.props.autoSyncWaiting?.nextTry;
+  }
+
+  it('a time later today is the time alone', async () => {
+    // 10:00 Toronto, one failure: back in 30 minutes.
+    expect(await nextTry('2026-11-12T15:00:00.000Z', 1, '2026-11-12T15:05:00.000Z')).toBe('10:30');
+  });
+
+  it('a time past midnight names its day', async () => {
+    // 23:50 Toronto on Nov 12, one failure: 00:20 on Nov 13, which is not today.
+    expect(await nextTry('2026-11-13T04:50:00.000Z', 1, '2026-11-13T04:55:00.000Z')).toBe('Nov 13 at 00:20');
   });
 });

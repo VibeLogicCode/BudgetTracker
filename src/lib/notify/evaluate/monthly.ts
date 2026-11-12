@@ -412,6 +412,7 @@ function renderMonthlyDigestFor(endedMonth: string, viewer: Viewer): { subject: 
     // for the room's (fireMonthlyDigest calls this twice), so ruling R2 holds by construction.
     lastImportIso: latestImportIso(viewer),
     incomeCents: trend.incomeCents,
+    uncategorizedInCents: trend.uncategorizedInCents,
     spendCents: trend.spendCents,
     netCents: trend.netCents,
     budgetedLimitCents: totals.budgetedLimitCents,

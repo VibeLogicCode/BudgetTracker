@@ -29,6 +29,12 @@ export interface GoalPace {
    * the first contribution is this month, so the average is this month alone.
    */
   avgMonths: number;
+  /**
+   * v1.60.0 (item 5, fix round). The complete months held nothing and this month has money in: a
+   * goal picked up again after a pause. The average is this month alone (avgMonths 0, "this month
+   * so far"), and goal_off_pace stays quiet, since the restart says nothing about pace yet.
+   */
+  resumed: boolean;
   projectedFinishMonth: string | null;
   noPace: boolean;
   overdue: boolean;
@@ -96,19 +102,29 @@ export function computePace(input: {
   }
   let avgMonthlyCents = 0;
   let avgMonths = 0;
+  let resumed = false;
   if (firstMonth !== null) {
     const hasCompleteMonth = firstMonth < currentMonthKey;
     const trailingStart = addMonths(currentMonthKey, -TRAILING_MONTHS);
     const fromMonth = hasCompleteMonth ? (firstMonth > trailingStart ? firstMonth : trailingStart) : currentMonthKey;
     const toMonth = hasCompleteMonth ? addMonths(currentMonthKey, -1) : currentMonthKey;
     let windowSum = 0;
+    let currentMonthSum = 0;
     for (const contribution of input.contributions) {
       const month = monthOf(contribution.date);
       if (month >= fromMonth && month <= toMonth) windowSum += contribution.amountCents;
+      if (month === currentMonthKey) currentMonthSum += contribution.amountCents;
     }
-    const monthsCounted = monthsBetween(fromMonth, toMonth) + 1;
-    avgMonthlyCents = Math.round(windowSum / monthsCounted);
-    avgMonths = hasCompleteMonth ? monthsCounted : 0;
+    // Fix round: three empty months then money in this month is a restart, not a pace of zero.
+    resumed = hasCompleteMonth && windowSum === 0 && currentMonthSum > 0;
+    if (resumed) {
+      avgMonthlyCents = currentMonthSum;
+      avgMonths = 0;
+    } else {
+      const monthsCounted = monthsBetween(fromMonth, toMonth) + 1;
+      avgMonthlyCents = Math.round(windowSum / monthsCounted);
+      avgMonths = hasCompleteMonth ? monthsCounted : 0;
+    }
   }
 
   const noPace = !met && avgMonthlyCents <= 0;
@@ -156,6 +172,7 @@ export function computePace(input: {
     requiredMonthlyCents,
     avgMonthlyCents,
     avgMonths,
+    resumed,
     projectedFinishMonth,
     noPace,
     overdue,

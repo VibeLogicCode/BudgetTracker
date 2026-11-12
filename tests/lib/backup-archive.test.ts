@@ -316,6 +316,17 @@ describe('the new-archive check (item 7a)', () => {
     expect(fs.existsSync(target)).toBe(true);
   });
 
+  /** Fix round: the check unpacks the archive again, so the staging copy is gone before it runs. */
+  it('removes the staging folder before verify runs, so the check never doubles temporary disk use', () => {
+    const target = path.join(dataDir, 'staged.tar.gz');
+    const staging: string[][] = [];
+    buildArchive(target, {
+      verify: () => staging.push(fs.readdirSync(tempDir()).filter((name) => name.endsWith('-archive'))),
+    });
+    expect(staging).toEqual([[]]);
+    expect(fs.existsSync(target)).toBe(true);
+  });
+
   it('a failed verify deletes the partial, keeps the earlier archive at that name, and says the check failed', () => {
     const target = path.join(backupsDir(), 'budget-2026-08-16.tar.gz');
     fs.mkdirSync(backupsDir(), { recursive: true });

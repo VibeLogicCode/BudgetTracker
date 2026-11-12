@@ -74,6 +74,9 @@ export function evaluateGoals(input: { userId: number | null; now: Date; tz: str
   if (subscribed('goal_off_pace', input.userId)) {
     for (const goal of goals) {
       if (goal.pace.met || goal.targetDate === null) continue;
+      // v1.60.0 (item 5, fix round): a goal picked up again this month after empty months has no
+      // pace to judge yet; its average is this month so far.
+      if (goal.pace.resumed) continue;
       const required = goal.pace.requiredMonthlyCents;
       if (required === null) continue;
       // A goal nothing has been put into yet is behind by definition; that is still worth saying,

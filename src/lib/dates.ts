@@ -365,6 +365,18 @@ export function dayLabel(isoDate: string, today: string): string {
   return year === today.slice(0, 4) ? label : `${label}, ${year}`;
 }
 
+/**
+ * v1.60.0 (fix round). An instant as the household reads a time: `14:30` on `now`'s own day, and
+ * with the day named otherwise (`Mar 11 at 00:20`, dayLabel's form), so a time that is tomorrow
+ * never reads as one earlier today.
+ */
+export function localTimeLabel(isoInstant: string, now: Date = new Date(), tz?: string): string {
+  const zone = tz ?? safeTz();
+  const [date, time] = localDateTimeOf(isoInstant, zone).split(' ');
+  const today = todayIso(now, zone);
+  return date === today ? time : `${dayLabel(date, today)} at ${time}`;
+}
+
 function safeTz(): string {
   return readTz();
 }

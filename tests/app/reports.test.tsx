@@ -477,20 +477,20 @@ describe('ReportsPage — no link that bounces the viewer (v1.60.0 item 8)', () 
     const sam = await createUser({ name: 'Sam', username: 'sam', password: 'correct horse battery', role: 'member' });
     const accountId = createAccount({ name: 'Chequing', type: 'chequing', ownerUserId: alex.id });
     createManualTransaction({
-      accountId, date: todayIso(), description: 'MAPLE GROCER', amountCents: -5000, categoryId: null,
+      accountId, date: '2026-03-18', description: 'MAPLE GROCER', amountCents: -5000, categoryId: null,
       attributedUserId: sam.id, userId: alex.id, actorRole: 'admin',
     });
     // An owed loan, so the Debt over time card renders its own empty state.
     const loanType = t.sqlite
       .prepare(`insert into warranty_item_types (name, is_subscription, kind, created_at) values ('Car loan', 0, 'loan', ?) returning id`)
-      .get(todayIso()) as { id: number };
+      .get('2026-03-18') as { id: number };
     t.sqlite
       .prepare(
         `insert into warranty_items
            (name, purchase_date, is_lifetime, owner_user_id, type_id, current_balance_cents, balance_updated_at, created_at, updated_at)
          values ('Civic', '2024-01-15', 0, ?, ?, 1500000, ?, ?, ?)`,
       )
-      .run(alex.id, loanType.id, todayIso(), todayIso(), todayIso());
+      .run(alex.id, loanType.id, '2026-03-18', '2026-03-18', '2026-03-18');
     return { alex, sam };
   }
 
