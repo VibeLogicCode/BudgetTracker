@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, or, sql, type SQL } from 'drizzle-orm';
-import { z } from 'zod';
+import { z } from '@/lib/zod';
 import { getDb } from '@/db/client';
 import { accounts, categories, transactions, transactionSplits, users } from '@/db/schema';
 import { getAccount } from '@/lib/accounts';

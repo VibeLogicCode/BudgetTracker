@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
-import { z } from 'zod';
+import { z } from '@/lib/zod';
 import { getDb } from '@/db/client';
 import { users } from '@/db/schema';
 import type { Viewer } from '@/lib/auth/viewer';

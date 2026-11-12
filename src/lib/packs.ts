@@ -1,5 +1,5 @@
 import { and, eq, isNull, sql } from 'drizzle-orm';
-import { z } from 'zod';
+import { z } from '@/lib/zod';
 import { getDb } from '@/db/client';
 import { merchantRules } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
@@ -313,7 +313,7 @@ const packRuleSchema = z
     // rename is a strictly different design than the null grey area).
     if (rule.rule_kind === 'rename' && rule.rename_to === null) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: 'custom',
         message: `A rename rule needs a non-empty rename_to (pattern "${rule.pattern}").`,
         path: ['rename_to'],
       });
@@ -328,7 +328,7 @@ const packRuleSchema = z
     // returns. rule_kind defaults to 'category', so an entry naming neither is caught here too.
     if (rule.rule_kind === 'category' && rule.category === null) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: 'custom',
         message: `${CATEGORY_RULE_NEEDS_CATEGORY_ERROR} (pattern "${rule.pattern}")`,
         path: ['category'],
       });

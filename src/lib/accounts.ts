@@ -1,5 +1,5 @@
 import { and, asc, eq, sql, type SQL } from 'drizzle-orm';
-import { z } from 'zod';
+import { z } from '@/lib/zod';
 import { getDb } from '@/db/client';
 import { accounts } from '@/db/schema';
 import { NOT_YOURS_ERROR, ownerScope, type Viewer } from '@/lib/auth/viewer';

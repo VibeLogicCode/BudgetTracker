@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { z } from 'zod';
+import { z } from '@/lib/zod';
 import { migrationsFolder } from '@/db/client';
 import { readEnv } from '@/lib/env';
 import { APP_VERSION } from '@/lib/version';

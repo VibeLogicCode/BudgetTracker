@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from '@/lib/zod';
 
 export type AmountMode = 'signed' | 'debit_credit';
 export type SignConvention = 'negative_is_spend' | 'positive_is_spend';
@@ -88,11 +88,11 @@ const baseSchema = z.object({
 
 export const importMappingSchema = baseSchema.superRefine((value, ctx) => {
   if (value.amountMode === 'signed' && value.amountCol === null) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'amountCol is required when amountMode is "signed"' });
+    ctx.addIssue({ code: 'custom', message: 'amountCol is required when amountMode is "signed"' });
   }
   if (value.amountMode === 'debit_credit' && value.debitCol === null && value.creditCol === null) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: 'custom',
       message: 'debitCol or creditCol is required when amountMode is "debit_credit"',
     });
   }

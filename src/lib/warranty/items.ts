@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import { and, eq, sql } from 'drizzle-orm';
-import { z } from 'zod';
+import { z } from '@/lib/zod';
 import { getDb } from '@/db/client';
 import { addRateChange, setLoanAnchor } from '@/lib/loans';
 import type { InterestBasis } from '@/lib/loans/interest';
@@ -274,7 +274,7 @@ export function warrantyInputSchema(today: string) {
       // updateWarrantyItem, below -- that requires a DB lookup of the type's kind, which has
       // no place inside a synchronous shape schema like this one.
       billingCycle: z
-        .enum(BILLING_CYCLES, { errorMap: () => ({ message: 'Billing must be Monthly or Annual.' }) })
+        .enum(BILLING_CYCLES, { error: 'Billing must be Monthly or Annual.' })
         .nullable()
         .optional(),
       // Shape only, exactly like billingCycle above: whether 'lent' is ALLOWED for this item's
@@ -325,7 +325,7 @@ export function warrantyInputSchema(today: string) {
     .superRefine((value, ctx) => {
       // MUST-3.5, enforced by zod at the action boundary AND by a CHECK in 0002.
       if (value.isLifetime && value.warrantyMonths !== null) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['warrantyMonths'], message: LIFETIME_WITH_TERM_ERROR });
+        ctx.addIssue({ code: 'custom', path: ['warrantyMonths'], message: LIFETIME_WITH_TERM_ERROR });
       }
       // review fix: cycle and amount are a pair -- neither surface (detail, list) can render
       // one alone without either lying (a blank placeholder next to "/ month") or silently dropping the other value the
@@ -334,13 +334,13 @@ export function warrantyInputSchema(today: string) {
       const cycleSet = value.billingCycle !== null && value.billingCycle !== undefined;
       const amountSet = value.billingAmountCents !== null && value.billingAmountCents !== undefined;
       if (cycleSet !== amountSet) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['billingCycle'], message: BILLING_PAIR_ERROR });
+        ctx.addIssue({ code: 'custom', path: ['billingCycle'], message: BILLING_PAIR_ERROR });
       }
       // MUST-11.7, at the schema boundary as well as in the writers.
       const balanceSet = value.currentBalanceCents !== null && value.currentBalanceCents !== undefined;
       const anchorSet = value.balanceUpdatedAt !== null && value.balanceUpdatedAt !== undefined;
       if (balanceSet !== anchorSet) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['currentBalanceCents'], message: BALANCE_ANCHOR_ERROR });
+        ctx.addIssue({ code: 'custom', path: ['currentBalanceCents'], message: BALANCE_ANCHOR_ERROR });
       }
     });
 }

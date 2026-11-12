@@ -1,5 +1,5 @@
 import argon2 from 'argon2';
-import { z } from 'zod';
+import { z } from '@/lib/zod';
 
 export const MIN_PASSWORD_LENGTH = 10;
 export const MAX_PASSWORD_LENGTH = 1024;

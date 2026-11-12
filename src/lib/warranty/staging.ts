@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { z } from 'zod';
+import { z } from '@/lib/zod';
 import { receiptTempDir } from '@/lib/warranty/receipts';
 import { RECEIPT_EXTS, extForMime, mimeForExt, type ReceiptMime } from '@/lib/warranty/sniff';
 import type { AmountCandidate, DateCandidate, SuggestedFields } from '@/lib/warranty/suggest';
