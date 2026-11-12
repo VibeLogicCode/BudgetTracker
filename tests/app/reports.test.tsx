@@ -1,11 +1,16 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterAll, afterEach, vi } from 'vitest';
+import { sql } from 'drizzle-orm';
 import { render, cleanup, screen } from '@testing-library/react';
 import { createAccount } from '@/lib/accounts';
 import { createUser } from '@/lib/auth/users';
-import { saveSavingsTarget } from '@/lib/savings-target';
+import { saveSavingsTarget, savingsProgress } from '@/lib/savings-target';
 import { createManualTransaction } from '@/lib/transactions';
 import { todayIso } from '@/lib/dates';
+import { cashflowTrend } from '@/lib/reports';
+import { setTransactionSplits } from '@/lib/splits';
+import type { Viewer } from '@/lib/auth/viewer';
+import type { SavingsMonthRow } from '@/app/(app)/reports/reports-client';
 import { createSeededTestDb, createTestDb, categoryIdByName, type TestDb } from '../helpers/db';
 
 /**
@@ -336,5 +341,188 @@ describe('ReportsPage (ruling R2)', () => {
     const { container } = render(await ReportsPage({ searchParams: Promise.resolve({}) }));
 
     expect(container.textContent).toContain('Target met in 1 of 1 month.');
+  });
+});
+
+/**
+ * v1.60.0 item 13b. Each month's savings target and whether it was met come from ONE household
+ * read and one target read, not savingsProgress per month (four queries each, up to 24 months).
+ * The figures must equal savingsProgress month by month -- the v1.59.1 computation -- on a fixture
+ * with transfers, a split, refunds and uncategorized rows both ways, a person filter set, and for a
+ * self viewer.
+ */
+describe('ReportsPage — savings targets in one read (v1.60.0 item 13b)', () => {
+  let t: TestDb | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  const RANGE = { range: 'custom', from: '2026-01-01', to: '2026-03-31' };
+  const MONTHS = ['2026-01', '2026-02', '2026-03'];
+
+  async function seed() {
+    t = createSeededTestDb();
+    const alex = await createUser({ name: 'Alex', username: 'alex', password: 'correct horse battery', role: 'admin' });
+    const sam = await createUser({ name: 'Sam', username: 'sam', password: 'correct horse battery', role: 'member' });
+    const accountId = createAccount({ name: 'Chequing', type: 'chequing', ownerUserId: alex.id });
+    const salary = categoryIdByName(t.db, 'Salary');
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    const gas = categoryIdByName(t.db, 'Gas');
+    const add = (date: string, amountCents: number, categoryId: number | null, person: number, description = 'MAPLE GROCER') =>
+      createManualTransaction({ accountId, date, description, amountCents, categoryId, attributedUserId: person, userId: alex.id, actorRole: 'admin' });
+    for (const [month, pay] of [['2026-01', 400_000], ['2026-02', 380_000], ['2026-03', 410_000]] as const) {
+      add(`${month}-01`, pay, salary, alex.id, 'PAYROLL');
+      add(`${month}-02`, 120_000, salary, sam.id, 'PAYROLL');
+      add(`${month}-04`, -95_000, groceries, sam.id);
+      add(`${month}-06`, 4_000, groceries, sam.id);
+      add(`${month}-09`, -21_000, null, alex.id, 'FUEL STOP 12');
+      add(`${month}-11`, 6_500, null, sam.id, 'E-TRANSFER');
+      const transfer = add(`${month}-13`, -150_000, null, alex.id, 'TO SAVINGS');
+      t.db.run(sql`update transactions set is_transfer = 1 where id = ${transfer}`);
+      const split = add(`${month}-15`, -30_000, groceries, sam.id);
+      setTransactionSplits({
+        txnId: split,
+        parts: [
+          { categoryId: groceries, amountCents: -18_000 },
+          { categoryId: gas, amountCents: -12_000 },
+        ],
+        userId: alex.id,
+      });
+    }
+    saveSavingsTarget({ month: '2026-01', mode: 'percent', value: 20 });
+    saveSavingsTarget({ month: '2026-02', mode: 'amount', value: 200_000 });
+    saveSavingsTarget({ month: '2026-03', mode: 'amount', value: 900_000 });
+    return { alex, sam };
+  }
+
+  async function cashflowProp(params: Record<string, string>): Promise<SavingsMonthRow[]> {
+    const { default: ReportsPage } = await import('@/app/(app)/reports/page');
+    const element = await ReportsPage({ searchParams: Promise.resolve(params) });
+    return (element.props as { cashflow: SavingsMonthRow[] }).cashflow;
+  }
+
+  /** Cashflow queries prepared during `run` -- the grouped month-by-income read, old shape or new. */
+  async function cashflowReads(run: () => Promise<unknown>): Promise<number> {
+    const sqlite = t!.sqlite;
+    const original = sqlite.prepare.bind(sqlite);
+    let count = 0;
+    const spy = vi.spyOn(sqlite, 'prepare').mockImplementation(((text: string) => {
+      if (/group by substr\("transactions"\."date", 1, 7\), (?:case\s+when )?"categories"\."is_income"/.test(text)) count += 1;
+      return original(text);
+    }) as TestDb['sqlite']['prepare']);
+    try {
+      await run();
+    } finally {
+      spy.mockRestore();
+    }
+    return count;
+  }
+
+  /** v1.59.1's computation: the card's own row, plus savingsProgress for that month. */
+  function oracle(person: number | null, viewer: Viewer): SavingsMonthRow[] {
+    return MONTHS.map((month) => {
+      const row = cashflowTrend(1, { endMonth: month, attributedUserId: person }, viewer)[0];
+      const progress = savingsProgress(month, viewer);
+      return { ...row, targetCents: progress.targetCents, met: progress.met };
+    });
+  }
+
+  it('with a person filter, each month equals savingsProgress month by month, from two cashflow reads', async () => {
+    const { alex, sam } = await seed();
+    currentUser.value = { id: alex.id, name: 'Alex', username: 'alex', role: 'admin', visibility: 'household' };
+    const viewer: Viewer = { id: alex.id, role: 'admin', visibility: 'household' };
+    const params = { ...RANGE, person: String(sam.id) };
+
+    const rows = await cashflowProp(params);
+    expect(rows).toEqual(oracle(sam.id, viewer));
+    // The targets are the household ones, met against the household net, never the filtered person.
+    expect(rows.map((row) => row.met)).toEqual([true, true, false]);
+    expect(rows.every((row) => row.targetCents !== null)).toBe(true);
+    // The card rows and the household rows; v1.59.1 read the card rows plus one per month.
+    expect(await cashflowReads(() => cashflowProp(params))).toBe(2);
+  });
+
+  it('with no person filter, the household rows are the card rows: one cashflow read', async () => {
+    const { alex } = await seed();
+    currentUser.value = { id: alex.id, name: 'Alex', username: 'alex', role: 'admin', visibility: 'household' };
+    const viewer: Viewer = { id: alex.id, role: 'admin', visibility: 'household' };
+    expect(await cashflowProp(RANGE)).toEqual(oracle(null, viewer));
+    expect(await cashflowReads(() => cashflowProp(RANGE))).toBe(1);
+  });
+
+  it('a self viewer gets savingsProgress over their own rows, as before, whatever person the URL names', async () => {
+    const { alex, sam } = await seed();
+    currentUser.value = { id: sam.id, name: 'Sam', username: 'sam', role: 'member', visibility: 'self' };
+    const samSelf: Viewer = { id: sam.id, role: 'member', visibility: 'self' };
+    expect(await cashflowProp({ ...RANGE, person: String(alex.id) })).toEqual(oracle(sam.id, samSelf));
+    expect(await cashflowReads(() => cashflowProp(RANGE))).toBe(1);
+  });
+});
+
+/**
+ * v1.60.0 item 8. /import sends a self viewer back to the dashboard and every /settings page is
+ * admin-only, so neither viewer is offered a link to one. The cards say who can act instead.
+ */
+describe('ReportsPage — no link that bounces the viewer (v1.60.0 item 8)', () => {
+  let t: TestDb | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  async function seed() {
+    t = createTestDb();
+    const alex = await createUser({ name: 'Alex', username: 'alex', password: 'correct horse battery', role: 'admin' });
+    const sam = await createUser({ name: 'Sam', username: 'sam', password: 'correct horse battery', role: 'member' });
+    const accountId = createAccount({ name: 'Chequing', type: 'chequing', ownerUserId: alex.id });
+    createManualTransaction({
+      accountId, date: todayIso(), description: 'MAPLE GROCER', amountCents: -5000, categoryId: null,
+      attributedUserId: sam.id, userId: alex.id, actorRole: 'admin',
+    });
+    // An owed loan, so the Debt over time card renders its own empty state.
+    const loanType = t.sqlite
+      .prepare(`insert into warranty_item_types (name, is_subscription, kind, created_at) values ('Car loan', 0, 'loan', ?) returning id`)
+      .get(todayIso()) as { id: number };
+    t.sqlite
+      .prepare(
+        `insert into warranty_items
+           (name, purchase_date, is_lifetime, owner_user_id, type_id, current_balance_cents, balance_updated_at, created_at, updated_at)
+         values ('Civic', '2024-01-15', 0, ?, ?, 1500000, ?, ?, ?)`,
+      )
+      .run(alex.id, loanType.id, todayIso(), todayIso(), todayIso());
+    return { alex, sam };
+  }
+
+  const hrefs = (container: HTMLElement) => [...container.querySelectorAll('a')].map((a) => a.getAttribute('href') ?? '');
+  async function renderAs(user: { id: number; name: string; username: string }, role: 'admin' | 'member', visibility: 'household' | 'self') {
+    currentUser.value = { id: user.id, name: user.name, username: user.username, role, visibility };
+    const { default: ReportsPage } = await import('@/app/(app)/reports/page');
+    return render(await ReportsPage({ searchParams: Promise.resolve({}) }));
+  }
+
+  it('a self viewer sees no Import or Settings link, and is told who marks income', async () => {
+    const { sam } = await seed();
+    const { container } = await renderAs(sam, 'member', 'self');
+    expect(hrefs(container).filter((href) => href.startsWith('/import') || href.startsWith('/settings'))).toEqual([]);
+    expect(container.textContent).toContain('An admin marks income categories in Settings.');
+  });
+
+  it('a member with household visibility can import, but sees no Settings link', async () => {
+    const { sam } = await seed();
+    const { container } = await renderAs(sam, 'member', 'household');
+    expect(hrefs(container).filter((href) => href.startsWith('/settings'))).toEqual([]);
+    expect(hrefs(container)).toContain('/import');
+    expect(container.textContent).toContain('Net worth appears here once an admin records a balance');
+    expect(container.textContent).toContain('Categories show here once an admin marks them as tax relevant in Settings.');
+  });
+
+  it('an admin keeps every link', async () => {
+    const { alex } = await seed();
+    const { container } = await renderAs(alex, 'admin', 'household');
+    const all = hrefs(container);
+    expect(all).toContain('/import');
+    expect(all).toContain('/settings/managers');
+    expect(all).toContain('/settings/accounts');
   });
 });

@@ -2028,6 +2028,7 @@ describe('BudgetsClient — the income line (v1.59.0)', () => {
       month: '2026-10',
       attributedUserId: null,
       incomeCents: 612000,
+      uncategorizedInCents: 0,
       spendCents: 401050,
       netCents: 210950,
       typicalMonths: ['2026-07', '2026-08', '2026-09'],
@@ -2061,6 +2062,19 @@ describe('BudgetsClient — the income line (v1.59.0)', () => {
     expect(screen.getByText('Household, October 2026: Money in $6,120.00 · Spent $4,010.50 · Net +$2,109.50')).toBeTruthy();
     expect(screen.getByText('Typical income $5,980.00 — the average of Jul, Aug and Sep.')).toBeTruthy();
     expect(screen.queryByText(/more than typical income/)).toBeNull();
+  });
+
+  /** v1.60.0 item 2: Net counts money in with no category yet, so the line names it and still adds up. */
+  it('names uncategorized money in, in a quiet line under the figures', () => {
+    renderIncome(incomeLine({ incomeCents: 100000, uncategorizedInCents: 2500, spendCents: 11000, netCents: 91500 }));
+    expect(screen.getByText('Household, October 2026: Money in $1,000.00 · Spent $110.00 · Net +$915.00')).toBeTruthy();
+    const quiet = screen.getByText('Money in: plus $25.00 not categorized yet');
+    expect(quiet.className.split(/\s+/)).toContain('text-muted');
+  });
+
+  it('adds no such line when none came in', () => {
+    const { container } = renderIncome(incomeLine());
+    expect(container.textContent).not.toContain('not categorized yet');
   });
 
   it('a negative net carries its sign', () => {

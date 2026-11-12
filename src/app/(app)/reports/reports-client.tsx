@@ -57,12 +57,11 @@ export interface TaxYearDisplayRow extends TaxYearRow {
 /**
  * Savings targets, Lane 4 (spec docs/superpowers/plans/2026-08-30-savings-targets.md,
  * v1.17.0). One cashflowTrend() row (Task 14) plus its resolved savings target and whether the
- * month met it -- both read from savingsProgress() (src/lib/savings-target.ts, Lane 1) by
- * reports/page.tsx and carried through here already resolved, exactly the way TaxYearDisplayRow
- * above carries taxYearReport()'s own row plus a field the page attaches. This file never
- * recomputes `targetCents` (percent-of-income resolution) or `met` from scratch -- ruling T1
- * forbids a second definition of "saved", and savingsProgress is the one place that division
- * happens.
+ * month met it -- both resolved by reports/page.tsx (savingsTargetsFor in src/lib/savings-target.ts
+ * against the household's own rows, v1.60.0 item 13b) and carried through here already resolved,
+ * exactly the way TaxYearDisplayRow above carries taxYearReport()'s own row plus a field the page
+ * attaches. This file never recomputes `targetCents` (percent-of-income resolution) or `met` from
+ * scratch -- ruling T1 forbids a second definition of "saved".
  */
 /**
  * F-08 (v1.31.0): one `categoryBreakdown` row plus the same category's net spend over the range
@@ -113,6 +112,8 @@ export function ReportsClient({
   showPersonSplit,
   showHouseholdTotals,
   showExport,
+  canImport,
+  isAdmin,
 }: {
   range: ResolvedRange;
   today: string;
@@ -158,7 +159,7 @@ export function ReportsClient({
   yoyMonth: string;
   /** Task 14: cashflowTrend() over the range's whole-month span, capped at 24. Lane 4 (v1.17.0):
    *  each row also carries that month's resolved savings target and whether it was met, both
-   *  already resolved by the page via savingsProgress() -- see SavingsMonthRow above. */
+   *  already resolved by the page -- see SavingsMonthRow above. */
   cashflow: SavingsMonthRow[];
   /** Task 15b: years with at least one non-transfer transaction, newest first (taxYears() in
    *  src/lib/tax.ts) -- populates the year select independently of whether anything is flagged. */
@@ -183,6 +184,10 @@ export function ReportsClient({
    *  14 gates /api/reports/export for a self viewer, but the ruling reads "no export links
    *  offered", so the control itself must not appear. */
   showExport: boolean;
+  /** v1.60.0 item 8: false for a self viewer, whom /import sends back to the dashboard. */
+  canImport: boolean;
+  /** v1.60.0 item 8: every /settings page is admin-only, so only an admin is offered a link there. */
+  isAdmin: boolean;
 }) {
   const exportHref = `/api/reports/export?${new URLSearchParams({
     ...rangeParams(range),
@@ -340,30 +345,51 @@ export function ReportsClient({
           description="Median and average over the last 6 full calendar months. This card does not follow the date filter above: a median needs equal-length months, and an arbitrary range does not have them."
         />
         <CardBody padded={false}>
+          {/* v1.60.0 item 8: an Import link only for a viewer the Import page lets in. */}
           {baselineMonthsUsed < 3 ? (
-            <EmptyState
-              icon={ReportsIcon}
-              title="Not enough history yet"
-              action={
-                <Link href="/import" className={buttonClass('secondary', 'sm')}>
-                  Import older statements
-                </Link>
-              }
-            >
-              Baselines appear after three full calendar months.
-            </EmptyState>
+            canImport ? (
+              <EmptyState
+                icon={ReportsIcon}
+                title="Not enough history yet"
+                action={
+                  <Link href="/import" className={buttonClass('secondary', 'sm')}>
+                    Import older statements
+                  </Link>
+                }
+              >
+                Baselines appear after three full calendar months.
+              </EmptyState>
+            ) : (
+              <EmptyState
+                icon={ReportsIcon}
+                title="Not enough history yet"
+                noAction="Importing statements is for household members and admins; the Import page sends this viewer back to the dashboard."
+              >
+                Baselines appear after three full calendar months. A household member or an admin can import older statements.
+              </EmptyState>
+            )
           ) : baselines.length === 0 ? (
-            <EmptyState
-              icon={ReportsIcon}
-              title="No category has enough regular spend for a baseline yet"
-              action={
-                <Link href="/import" className={buttonClass('secondary', 'sm')}>
-                  Import more statements
-                </Link>
-              }
-            >
-              A category needs a median spend above the suggestion floor, and this household's does not clear it yet.
-            </EmptyState>
+            canImport ? (
+              <EmptyState
+                icon={ReportsIcon}
+                title="No category has enough regular spend for a baseline yet"
+                action={
+                  <Link href="/import" className={buttonClass('secondary', 'sm')}>
+                    Import more statements
+                  </Link>
+                }
+              >
+                A category needs a median spend above the suggestion floor, and this household's does not clear it yet.
+              </EmptyState>
+            ) : (
+              <EmptyState
+                icon={ReportsIcon}
+                title="No category has enough regular spend for a baseline yet"
+                noAction="Importing statements is for household members and admins; the Import page sends this viewer back to the dashboard."
+              >
+                A category needs a median spend above the suggestion floor, and this household's does not clear it yet.
+              </EmptyState>
+            )
           ) : (
             <TableWrap bare responsive>
               <thead>
@@ -494,18 +520,30 @@ export function ReportsClient({
           card directly above. */}
       <Card>
         <CardHeader title="Income by source" description="What came in over the range, by income category." />
+        {/* v1.60.0 item 8: Settings and Managers is admin-only, so a member is told who can mark one. */}
         {income.length === 0 ? (
-          <EmptyState
-            icon={ReportsIcon}
-            title="No income in this range"
-            action={
-              <Link href="/settings/managers" className={buttonClass('secondary', 'sm')}>
-                Mark a category as income
-              </Link>
-            }
-          >
-            Income shows up here once a category is marked as income and a deposit is filed under it.
-          </EmptyState>
+          isAdmin ? (
+            <EmptyState
+              icon={ReportsIcon}
+              title="No income in this range"
+              action={
+                <Link href="/settings/managers" className={buttonClass('secondary', 'sm')}>
+                  Mark a category as income
+                </Link>
+              }
+            >
+              Income shows up here once a category is marked as income and a deposit is filed under it.
+            </EmptyState>
+          ) : (
+            <EmptyState
+              icon={ReportsIcon}
+              title="No income in this range"
+              noAction="Marking a category as income happens in Settings and Managers, which only an admin can open."
+            >
+              Income shows up here once a category is marked as income and a deposit is filed under it. An admin marks
+              income categories in Settings.
+            </EmptyState>
+          )
         ) : (
           <TableWrap bare responsive>
             <thead>
@@ -756,17 +794,27 @@ export function ReportsClient({
         <Card>
           <CardHeader title="Net worth" description="Assets minus debts and loans, carried forward from the balances you have on file." />
           {netWorth.length === 0 ? (
-            <EmptyState
-              icon={ReportsIcon}
-              title="No balances recorded yet"
-              action={
-                <Link href="/settings/accounts" className={buttonClass('secondary', 'sm')}>
-                  Record a balance
-                </Link>
-              }
-            >
-              Record a balance for at least one account in Settings and Accounts to see net worth here.
-            </EmptyState>
+            isAdmin ? (
+              <EmptyState
+                icon={ReportsIcon}
+                title="No balances recorded yet"
+                action={
+                  <Link href="/settings/accounts" className={buttonClass('secondary', 'sm')}>
+                    Record a balance
+                  </Link>
+                }
+              >
+                Record a balance for at least one account in Settings and Accounts to see net worth here.
+              </EmptyState>
+            ) : (
+              <EmptyState
+                icon={ReportsIcon}
+                title="No balances recorded yet"
+                noAction="Balances are recorded in Settings and Accounts, which only an admin can open."
+              >
+                Net worth appears here once an admin records a balance for at least one account in Settings.
+              </EmptyState>
+            )
           ) : (
             <CardBody className="flex flex-col gap-3">
               <NetWorthChart data={netWorth} />
@@ -803,17 +851,27 @@ export function ReportsClient({
             }
           />
           {taxRows.length === 0 ? (
-            <EmptyState
-              icon={ReportsIcon}
-              title="Nothing marked tax-relevant yet"
-              action={
-                <Link href="/settings/managers" className={buttonClass('secondary', 'sm')}>
-                  Mark categories as tax relevant
-                </Link>
-              }
-            >
-              Mark categories as tax relevant in Settings and Managers to see them here.
-            </EmptyState>
+            isAdmin ? (
+              <EmptyState
+                icon={ReportsIcon}
+                title="Nothing marked tax-relevant yet"
+                action={
+                  <Link href="/settings/managers" className={buttonClass('secondary', 'sm')}>
+                    Mark categories as tax relevant
+                  </Link>
+                }
+              >
+                Mark categories as tax relevant in Settings and Managers to see them here.
+              </EmptyState>
+            ) : (
+              <EmptyState
+                icon={ReportsIcon}
+                title="Nothing marked tax-relevant yet"
+                noAction="Marking categories as tax relevant happens in Settings and Managers, which only an admin can open."
+              >
+                Categories show here once an admin marks them as tax relevant in Settings.
+              </EmptyState>
+            )
           ) : (
             <>
               <TableWrap bare responsive>
@@ -910,17 +968,28 @@ export function ReportsClient({
               nothing to show. This also retires what was otherwise a dead branch, since the
               current month is always non-null once the card renders at all. */}
           {debt.filter((point) => point.owedCents !== null).length < 2 ? (
-            <EmptyState
-              icon={LoanIcon}
-              title="Not enough history yet"
-              action={
-                <Link href="/import" className={buttonClass('secondary', 'sm')}>
-                  Import older statements
-                </Link>
-              }
-            >
-              The chart appears after a month of tracked activity.
-            </EmptyState>
+            canImport ? (
+              <EmptyState
+                icon={LoanIcon}
+                title="Not enough history yet"
+                action={
+                  <Link href="/import" className={buttonClass('secondary', 'sm')}>
+                    Import older statements
+                  </Link>
+                }
+              >
+                The chart appears after a month of tracked activity.
+              </EmptyState>
+            ) : (
+              <EmptyState
+                icon={LoanIcon}
+                title="Not enough history yet"
+                noAction="Importing statements is for household members and admins; the Import page sends this viewer back to the dashboard."
+              >
+                The chart appears after a month of tracked activity. A household member or an admin can import older
+                statements.
+              </EmptyState>
+            )
           ) : (
             <CardBody className="flex flex-col gap-3">
               <DebtTrendChart data={debt} showLent={hasLent} />
@@ -1003,10 +1072,10 @@ function formatOrDash(cents: number): React.ReactNode {
 /**
  * Task 14 + Lane 4 (savings targets, v1.17.0): the Cash flow and savings rate card's one-line
  * summary. All the money arithmetic (including the division-by-zero guard) lives in
- * savingsRate() (src/lib/savings-rate.ts); whether a month met its target lives in
- * savingsProgress() (src/lib/savings-target.ts, Lane 1) and reaches this file already resolved
- * on each row (SavingsMonthRow above) -- this function only formats and counts what is already
- * computed, so it never invents a second definition of either "saved" or "met" (ruling T1).
+ * savingsRate() (src/lib/savings-rate.ts); whether a month met its target is resolved by the page
+ * and reaches this file already on each row (SavingsMonthRow above) -- this function only formats
+ * and counts what is already computed, so it never invents a second definition of either "saved"
+ * or "met" (ruling T1).
  *
  * A month with no target set is neither met nor missed -- the same "no opinion" rule
  * savingsProgress/savingsStreak apply -- so it is left out of both the numerator and the
@@ -1016,7 +1085,14 @@ function formatOrDash(cents: number): React.ReactNode {
 function cashflowSummary(rows: SavingsMonthRow[]): string {
   const rate = savingsRate(rows);
   if (rate.pct === null) return 'No income recorded in this range.';
-  const base = `Income ${formatCents(rate.incomeCents)} · Spent ${formatCents(rate.spendCents)} · Saved ${formatCents(rate.netCents)} (${rate.pct}%)`;
+  // v1.60.0 item 2: Saved counts money in that has no category yet; Income and Spent do not. It is
+  // named beside Income so the three figures in this sentence still add up.
+  const uncategorizedInCents = rows.reduce((sum, row) => sum + row.uncategorizedInCents, 0);
+  const income =
+    uncategorizedInCents > 0
+      ? `Income ${formatCents(rate.incomeCents)} (plus ${formatCents(uncategorizedInCents)} not categorized yet)`
+      : `Income ${formatCents(rate.incomeCents)}`;
+  const base = `${income} · Spent ${formatCents(rate.spendCents)} · Saved ${formatCents(rate.netCents)} (${rate.pct}%)`;
   const withTarget = rows.filter((row) => row.targetCents !== null);
   if (withTarget.length === 0) return base;
   const met = withTarget.filter((row) => row.met).length;

@@ -32,7 +32,7 @@ function personClause(scope: PersonScope): SQL | null {
  *
  * This is the one place in reports.ts that knows about visibility. Every exported aggregate below
  * runs its requested scope through it before building a clause, so a page cannot forget -- and
- * `viewer` is a required parameter on all seven, so a NEW aggregate cannot forget either: it will
+ * `viewer` is a required parameter on every one, so a NEW aggregate cannot forget either: it will
  * not compile until its author decides what scope it is reading.
  */
 function scopeFor(requested: PersonScope, viewer: Viewer): PersonScope {
@@ -163,11 +163,90 @@ export function categoryBreakdown(
   return result.sort((a, b) => b.spentCents - a.spentCents);
 }
 
-export interface MonthTrendRow {
-  month: string;
+/** Money in, money out and what was kept, over one month or one date range. */
+export interface CashflowTotals {
+  /** Rows filed under an is_income category. */
   incomeCents: number;
+  /**
+   * v1.60.0 item 2. Money in with no category yet. With no category a refund cannot be told from
+   * income (decision 9), so it neither lowers Spent nor counts as income; Net still counts it, as
+   * cash that came in.
+   */
+  uncategorizedInCents: number;
+  /** Categorized spending net of its refunds, plus uncategorized money out in full. */
   spendCents: number;
+  /** incomeCents + uncategorizedInCents - spendCents: every non-transfer dollar in, minus every one out. */
   netCents: number;
+}
+
+export interface MonthTrendRow extends CashflowTotals {
+  month: string;
+}
+
+/**
+ * The three buckets every cashflow figure sums into, decided per joined row so a split part is
+ * classified by its own category. Split parts always carry a category, so the middle arm is
+ * exactly the uncategorized rows that brought money in.
+ */
+const CASHFLOW_BUCKET = sql<'income' | 'uncategorized_in' | 'spend'>`case
+  when ${categories.isIncome} = 1 then 'income'
+  when ${EFFECTIVE_CATEGORY} is null and ${EFFECTIVE_AMOUNT} > 0 then 'uncategorized_in'
+  else 'spend' end`;
+
+interface CashflowSums {
+  income: number;
+  uncategorizedIn: number;
+  spend: number;
+}
+
+/**
+ * The one SQL definition behind cashflowTrend and cashflowForRange: signed sums per month and
+ * bucket over `range`, with rangeClauses' transfer, loan-principal and person rules. `scope` has
+ * already been through scopeFor.
+ *
+ * Split-aware (Task 3): the categories join keys off EFFECTIVE_CATEGORY, not the parent's own
+ * transactions.category_id, so a part filed under an income category moves into the income
+ * series even when the parent transaction itself was not.
+ */
+function cashflowSumsByMonth(range: DateRange, scope: PersonScope): Map<string, CashflowSums> {
+  const rows = getDb()
+    .select({
+      month: sql<string>`substr(${transactions.date}, 1, 7)`,
+      bucket: CASHFLOW_BUCKET,
+      total: sql<number>`sum(${EFFECTIVE_AMOUNT})`,
+    })
+    .from(transactions)
+    .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
+    .leftJoin(categories, eq(categories.id, EFFECTIVE_CATEGORY))
+    .where(and(...rangeClauses(range, scope)))
+    .groupBy(sql`substr(${transactions.date}, 1, 7)`, CASHFLOW_BUCKET)
+    .all();
+
+  const byMonth = new Map<string, CashflowSums>();
+  for (const row of rows) {
+    const sums = byMonth.get(row.month) ?? { income: 0, uncategorizedIn: 0, spend: 0 };
+    const total = row.total ?? 0;
+    if (row.bucket === 'income') sums.income += total;
+    else if (row.bucket === 'uncategorized_in') sums.uncategorizedIn += total;
+    else sums.spend += total;
+    byMonth.set(row.month, sums);
+  }
+  return byMonth;
+}
+
+/**
+ * Spend is netted (netSpentCents): a credit filed in a spending category is a refund and lowers
+ * it, and uncategorized money out counts in full. Net is the plain cash difference, the same value
+ * v1.59.1 gave when uncategorized money in was still netted into spend.
+ */
+function cashflowTotals(sums: CashflowSums): CashflowTotals {
+  const spendCents = netSpentCents(sums.spend);
+  return {
+    incomeCents: sums.income,
+    uncategorizedInCents: sums.uncategorizedIn,
+    spendCents,
+    netCents: sums.income + sums.uncategorizedIn - spendCents,
+  };
 }
 
 export function cashflowTrend(
@@ -182,37 +261,25 @@ export function cashflowTrend(
   const startMonth = addMonths(endMonth, -(months - 1));
   const keys = monthRange(startMonth, endMonth);
 
-  // Split-aware (Task 3): each split part is classified as income/spend by ITS OWN category
-  // (the categories join below keys off EFFECTIVE_CATEGORY, not the parent's own
-  // transactions.category_id), so a part filed under an income category moves into the
-  // income series even when the parent transaction itself was not.
-  const rows = getDb()
-    .select({
-      month: sql<string>`substr(${transactions.date}, 1, 7)`,
-      isIncome: categories.isIncome,
-      total: sql<number>`sum(${EFFECTIVE_AMOUNT})`,
-    })
-    .from(transactions)
-    .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
-    .leftJoin(categories, eq(categories.id, EFFECTIVE_CATEGORY))
-    .where(and(...rangeClauses({ from: monthStart(startMonth), to: monthEnd(endMonth) }, scope)))
-    .groupBy(sql`substr(${transactions.date}, 1, 7)`, categories.isIncome)
-    .all();
+  const byMonth = cashflowSumsByMonth({ from: monthStart(startMonth), to: monthEnd(endMonth) }, scope);
+  return keys.map((month) => ({ month, ...cashflowTotals(byMonth.get(month) ?? { income: 0, uncategorizedIn: 0, spend: 0 }) }));
+}
 
-  const income = new Map<string, number>();
-  const spend = new Map<string, number>();
-  for (const row of rows) {
-    // Income counts ONLY is_income categories; everything else (including
-    // uncategorized rows) is spend, netted.
-    if (row.isIncome) income.set(row.month, (income.get(row.month) ?? 0) + (row.total ?? 0));
-    else spend.set(row.month, (spend.get(row.month) ?? 0) + (row.total ?? 0));
+/**
+ * v1.60.0 item 4. The same figures as one cashflowTrend row, over any date range: the Dashboard's
+ * "vs" comparison reads day 1 to the same day of the previous month with it, so a month in
+ * progress is set against the same stretch of the month before rather than all of it. Same query
+ * helper, same buckets, same scope rule as cashflowTrend.
+ */
+export function cashflowForRange(range: DateRange, opts: { attributedUserId?: PersonScope }, viewer: Viewer): CashflowTotals {
+  const scope = scopeFor(opts.attributedUserId, viewer);
+  const sums: CashflowSums = { income: 0, uncategorizedIn: 0, spend: 0 };
+  for (const month of cashflowSumsByMonth(range, scope).values()) {
+    sums.income += month.income;
+    sums.uncategorizedIn += month.uncategorizedIn;
+    sums.spend += month.spend;
   }
-
-  return keys.map((month) => {
-    const incomeCents = income.get(month) ?? 0;
-    const spendCents = netSpentCents(spend.get(month) ?? 0);
-    return { month, incomeCents, spendCents, netCents: incomeCents - spendCents };
-  });
+  return cashflowTotals(sums);
 }
 
 /**
@@ -249,7 +316,8 @@ export function cashflowTrend(
  * deliberately not new behaviour inside `cashflowTrend`.
  */
 export function trimLeadingEmptyMonths(rows: MonthTrendRow[]): MonthTrendRow[] {
-  const firstReal = rows.findIndex((row) => row.incomeCents !== 0 || row.spendCents !== 0);
+  // v1.60.0 item 2: a month holding only uncategorized money in is real history too.
+  const firstReal = rows.findIndex((row) => row.incomeCents !== 0 || row.spendCents !== 0 || row.uncategorizedInCents !== 0);
   return firstReal === -1 ? [] : rows.slice(firstReal);
 }
 

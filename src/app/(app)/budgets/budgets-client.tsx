@@ -1788,7 +1788,8 @@ export type BudgetsIncome = BudgetIncomeLine & { scopeLabel: string };
 
 /**
  * v1.59.0 item 15. The month's money in, spending and net for the scope the pill shows (the
- * Dashboard's own figures), then typical income and whether this month's budgets run past it.
+ * Dashboard's own figures, uncategorized money in named the way its Money in tile names it), then
+ * typical income and whether this month's budgets run past it.
  * Owner decision 4: a person's line is that person's own attributed money and never falls back to
  * the household's, so a person with no income attributed to them gets a pointer to person rules
  * instead of a comparison against nothing.
@@ -1836,6 +1837,11 @@ function IncomeLine({ income, currentUserId, isAdmin }: { income: BudgetsIncome;
     <Card as="div">
       <CardBody className="flex flex-col gap-1 pt-4">
         <p className="text-sm font-medium text-ink">{figures}</p>
+        {/* v1.60.0 item 2: Net counts money in that has no category yet, Money in and Spent do
+            not, so it is named in a quiet line and the three figures above still add up. */}
+        {income.uncategorizedInCents > 0 ? (
+          <p className="text-xs text-muted">{`Money in: plus ${formatCents(income.uncategorizedInCents)} not categorized yet`}</p>
+        ) : null}
         {typical}
         {!income.noAttributedIncome && income.overTypicalByCents !== null ? (
           <p className="text-sm text-warning">

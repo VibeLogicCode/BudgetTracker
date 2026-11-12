@@ -4,7 +4,9 @@ import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser
 import type { Viewer } from '@/lib/auth/viewer';
 import {
   UNATTRIBUTED_LABEL,
+  cashflowForRange,
   cashflowTrend,
+  trimLeadingEmptyMonths,
   categoryBreakdown,
   categoryMonthOverMonth,
   personSpendSplit,
@@ -15,6 +17,7 @@ import {
   type MonthTrendRow,
 } from '@/lib/reports';
 import { nowIso } from '@/lib/clock';
+import { netSpentCents } from '@/lib/money';
 import { upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { assignTransactionToLoan } from '@/lib/loans';
 import { setTransactionSplits } from '@/lib/splits';
@@ -291,6 +294,144 @@ describe('cashflowTrend', () => {
     expect(cashflowTrend(1, { endMonth: '2026-03', attributedUserId: 'unattributed' }, HOUSEHOLD)[0].spendCents).toBe(30000);
   });
 });
+
+/**
+ * v1.60.0 item 2. With no category, a credit cannot be told from income (decision 9), so it no
+ * longer nets against spending: Spent is categorized spending net of its refunds plus
+ * uncategorized money out in full, and the credit is its own figure. Net is the cash difference,
+ * exactly what v1.59.1 gave.
+ */
+describe('cashflowTrend: uncategorized money in never reduces Spent (v1.60.0 item 2)', () => {
+  function seedMarch() {
+    const ctx = setup();
+    const salary = categoryIdByName(ctx.db, 'Salary');
+    const groceries = categoryIdByName(ctx.db, 'Groceries');
+    ctx.add({ categoryId: salary, amountCents: 100_000, date: '2026-03-01', merchant: 'PAYROLL' });
+    ctx.add({ categoryId: null, amountCents: -8_000, date: '2026-03-04', merchant: 'MAPLE GROCER' });
+    ctx.add({ categoryId: null, amountCents: 2_500, date: '2026-03-06', merchant: 'MAPLE GROCER' });
+    ctx.add({ categoryId: groceries, amountCents: -4_000, date: '2026-03-08', merchant: 'MAPLE GROCER' });
+    ctx.add({ categoryId: groceries, amountCents: 1_000, date: '2026-03-09', merchant: 'MAPLE GROCER' });
+    return { ...ctx, salary, groceries };
+  }
+
+  it('Spent counts uncategorized money out only, a categorized refund still nets, and Net is unchanged', () => {
+    seedMarch();
+    const [march] = cashflowTrend(1, { endMonth: '2026-03' }, HOUSEHOLD);
+    // 80.00 uncategorized out + (40.00 - 10.00 refund) categorized = 110.00.
+    expect(march).toEqual({ month: '2026-03', incomeCents: 100_000, uncategorizedInCents: 2_500, spendCents: 11_000, netCents: 91_500 });
+    // v1.59.1's Net: income minus every non-income row netted together.
+    expect(march.netCents).toBe(100_000 - netSpentCents(-8_000 + 2_500 - 4_000 + 1_000));
+  });
+
+  it('a transfer is still in no figure, and a self viewer gets only their own uncategorized money in', () => {
+    const { alice, bob, add } = seedMarch();
+    add({ categoryId: null, amountCents: 50_000, date: '2026-03-10', isTransfer: true });
+    add({ categoryId: null, amountCents: 1_200, date: '2026-03-11', attributedUserId: alice });
+    add({ categoryId: null, amountCents: 3_400, date: '2026-03-12', attributedUserId: bob });
+    expect(cashflowTrend(1, { endMonth: '2026-03' }, HOUSEHOLD)[0].uncategorizedInCents).toBe(2_500 + 1_200 + 3_400);
+    const aliceSelf: Viewer = { id: alice, role: 'member', visibility: 'self' };
+    expect(cashflowTrend(1, { endMonth: '2026-03', attributedUserId: bob }, aliceSelf)[0]).toMatchObject({
+      uncategorizedInCents: 1_200,
+      spendCents: 0,
+      netCents: 1_200,
+    });
+  });
+
+  it('a month holding only an uncategorized credit is real history, so the leading trim keeps it', () => {
+    const { db, add } = setup();
+    add({ categoryId: null, amountCents: 5_000, date: '2026-02-10' });
+    add({ categoryId: categoryIdByName(db, 'Groceries'), amountCents: -3_000, date: '2026-03-05' });
+    const trimmed = trimLeadingEmptyMonths(cashflowTrend(3, { endMonth: '2026-03' }, HOUSEHOLD));
+    expect(trimmed.map((row) => row.month)).toEqual(['2026-02', '2026-03']);
+    expect(trimmed[0]).toEqual({ month: '2026-02', incomeCents: 0, uncategorizedInCents: 5_000, spendCents: 0, netCents: 5_000 });
+  });
+
+  it('trimLeadingEmptyMonths keeps a leading row whose only figure is uncategorized money in', () => {
+    const quiet = { incomeCents: 0, uncategorizedInCents: 0, spendCents: 0, netCents: 0 };
+    const rows: MonthTrendRow[] = [
+      { month: '2026-01', ...quiet },
+      { month: '2026-02', ...quiet, uncategorizedInCents: 700, netCents: 700 },
+      { month: '2026-03', ...quiet },
+    ];
+    expect(trimLeadingEmptyMonths(rows).map((row) => row.month)).toEqual(['2026-02', '2026-03']);
+  });
+});
+
+/**
+ * v1.60.0 item 4. One range, the same buckets and scope rule as cashflowTrend, from the same query
+ * helper -- the Dashboard's "vs Feb 1-18" reads it.
+ */
+describe('cashflowForRange (v1.60.0 item 4)', () => {
+  /** Transfers, a split, a refund, uncategorized rows both ways, and two people. */
+  function seedMixed() {
+    const ctx = setup();
+    const salary = categoryIdByName(ctx.db, 'Salary');
+    const groceries = categoryIdByName(ctx.db, 'Groceries');
+    const gas = categoryIdByName(ctx.db, 'Gas');
+    ctx.add({ categoryId: salary, amountCents: 300_000, date: '2026-03-01', attributedUserId: ctx.alice, merchant: 'PAYROLL' });
+    ctx.add({ categoryId: groceries, amountCents: -12_000, date: '2026-03-03', attributedUserId: ctx.bob, merchant: 'MAPLE GROCER' });
+    ctx.add({ categoryId: groceries, amountCents: 2_000, date: '2026-03-05', attributedUserId: ctx.bob, merchant: 'MAPLE GROCER' });
+    ctx.add({ categoryId: null, amountCents: -6_500, date: '2026-03-12', attributedUserId: ctx.alice, merchant: 'FUEL STOP 12' });
+    ctx.add({ categoryId: null, amountCents: 4_200, date: '2026-03-15', attributedUserId: ctx.alice, merchant: 'E-TRANSFER' });
+    ctx.add({ categoryId: null, amountCents: -90_000, date: '2026-03-16', isTransfer: true, merchant: 'TO SAVINGS' });
+    const split = ctx.add({ categoryId: groceries, amountCents: -10_000, date: '2026-03-20', attributedUserId: ctx.alice, merchant: 'MAPLE GROCER' });
+    setTransactionSplits({
+      txnId: split,
+      parts: [
+        { categoryId: groceries, amountCents: -7_000 },
+        { categoryId: gas, amountCents: -3_000 },
+      ],
+      userId: ctx.alice,
+    });
+    ctx.add({ categoryId: null, amountCents: 1_500, date: '2026-03-28', attributedUserId: ctx.bob, merchant: 'E-TRANSFER' });
+    return ctx;
+  }
+
+  it('over a whole month equals that month of cashflowTrend, for every scope and a self viewer', () => {
+    const { alice, bob } = seedMixed();
+    const aliceSelf: Viewer = { id: alice, role: 'member', visibility: 'self' };
+    const cases: [PersonScopeArg, Viewer][] = [
+      [undefined, HOUSEHOLD],
+      [alice, HOUSEHOLD],
+      [bob, HOUSEHOLD],
+      ['unattributed', HOUSEHOLD],
+      [bob, aliceSelf],
+    ];
+    for (const [attributedUserId, viewer] of cases) {
+      const { month: _month, ...trendRow } = cashflowTrend(1, { endMonth: '2026-03', attributedUserId }, viewer)[0];
+      void _month;
+      expect(cashflowForRange(MARCH, { attributedUserId }, viewer)).toEqual(trendRow);
+    }
+  });
+
+  it('counts only the rows inside the range', () => {
+    seedMixed();
+    expect(cashflowForRange({ from: '2026-03-01', to: '2026-03-15' }, {}, HOUSEHOLD)).toEqual({
+      incomeCents: 300_000,
+      uncategorizedInCents: 4_200,
+      // 120.00 - 20.00 refund + 65.00 uncategorized out; the split on the 20th is outside.
+      spendCents: 16_500,
+      netCents: 300_000 + 4_200 - 16_500,
+    });
+  });
+
+  it('a self viewer reads their own rows whatever person the call names', () => {
+    const { alice, bob } = seedMixed();
+    const aliceSelf: Viewer = { id: alice, role: 'member', visibility: 'self' };
+    expect(cashflowForRange(MARCH, { attributedUserId: bob }, aliceSelf)).toEqual(cashflowForRange(MARCH, { attributedUserId: alice }, HOUSEHOLD));
+  });
+
+  it('spans months when the range does', () => {
+    const { add } = seedMixed();
+    add({ categoryId: null, amountCents: -1_000, date: '2026-02-27' });
+    const twoMonths = cashflowForRange({ from: '2026-02-01', to: '2026-03-31' }, {}, HOUSEHOLD);
+    const [feb, mar] = cashflowTrend(2, { endMonth: '2026-03' }, HOUSEHOLD);
+    expect(twoMonths.spendCents).toBe(feb.spendCents + mar.spendCents);
+    expect(twoMonths.netCents).toBe(feb.netCents + mar.netCents);
+  });
+});
+
+type PersonScopeArg = number | 'unattributed' | null | undefined;
 
 describe('categoryMonthOverMonth', () => {
   it('returns one row per category with a value for every month in the range', () => {
@@ -631,8 +772,8 @@ describe('topMerchants — split-aware income filter and sum (v1.7.0 review fix)
 describe('savingsRate (v1.7.0 Task 14)', () => {
   it('sums income, spend and net across the rows and rounds net/income to a whole percent', () => {
     const rows: MonthTrendRow[] = [
-      { month: '2026-01', incomeCents: 500000, spendCents: 300000, netCents: 200000 },
-      { month: '2026-02', incomeCents: 500000, spendCents: 450000, netCents: 50000 },
+      { month: '2026-01', incomeCents: 500000, spendCents: 300000, netCents: 200000, uncategorizedInCents: 0 },
+      { month: '2026-02', incomeCents: 500000, spendCents: 450000, netCents: 50000, uncategorizedInCents: 0 },
     ];
     expect(savingsRate(rows)).toEqual({ incomeCents: 1000000, spendCents: 750000, netCents: 250000, pct: 25 });
   });
@@ -640,17 +781,17 @@ describe('savingsRate (v1.7.0 Task 14)', () => {
   it('rounds to the nearest whole percent rather than truncating', () => {
     // 100000 / 300000 = 33.33...%, must round to 33, not truncate to 33 by luck of the draw --
     // covered separately below with a case that would fail under truncation vs rounding.
-    const rows: MonthTrendRow[] = [{ month: '2026-01', incomeCents: 300000, spendCents: 200000, netCents: 100000 }];
+    const rows: MonthTrendRow[] = [{ month: '2026-01', incomeCents: 300000, spendCents: 200000, netCents: 100000, uncategorizedInCents: 0 }];
     expect(savingsRate(rows).pct).toBe(33);
   });
 
   it('a negative net (spent more than earned) reports a negative percentage, never clamped to zero', () => {
-    const rows: MonthTrendRow[] = [{ month: '2026-01', incomeCents: 100000, spendCents: 150000, netCents: -50000 }];
+    const rows: MonthTrendRow[] = [{ month: '2026-01', incomeCents: 100000, spendCents: 150000, netCents: -50000, uncategorizedInCents: 0 }];
     expect(savingsRate(rows).pct).toBe(-50);
   });
 
   it('is null, never a division-by-zero artifact, when there is no income', () => {
-    const rows: MonthTrendRow[] = [{ month: '2026-01', incomeCents: 0, spendCents: 20000, netCents: -20000 }];
+    const rows: MonthTrendRow[] = [{ month: '2026-01', incomeCents: 0, spendCents: 20000, netCents: -20000, uncategorizedInCents: 0 }];
     const rate = savingsRate(rows);
     expect(rate.pct).toBeNull();
     expect(rate.incomeCents).toBe(0);
@@ -659,7 +800,7 @@ describe('savingsRate (v1.7.0 Task 14)', () => {
   });
 
   it('is null when income sums negative too, not just at exactly zero', () => {
-    const rows: MonthTrendRow[] = [{ month: '2026-01', incomeCents: -5000, spendCents: 1000, netCents: -6000 }];
+    const rows: MonthTrendRow[] = [{ month: '2026-01', incomeCents: -5000, spendCents: 1000, netCents: -6000, uncategorizedInCents: 0 }];
     expect(savingsRate(rows).pct).toBeNull();
   });
 

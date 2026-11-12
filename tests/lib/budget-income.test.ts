@@ -4,6 +4,7 @@ import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser
 import type { Viewer } from '@/lib/auth/viewer';
 import { nowIso } from '@/lib/clock';
 import { budgetIncomeLine } from '@/lib/budget-income';
+import { budgetProgress, budgetTotals, uncategorizedSpend } from '@/lib/budgets';
 import { cashflowTrend } from '@/lib/reports';
 
 /**
@@ -24,7 +25,7 @@ function setup() {
   const account = insertTestAccount(db, { name: 'Joint Chequing', ownerUserId: alex });
   const salary = categoryIdByName(db, 'Salary');
   const groceries = categoryIdByName(db, 'Groceries');
-  const add = (date: string, amountCents: number, categoryId: number, attributedUserId: number | null = null) =>
+  const add = (date: string, amountCents: number, categoryId: number | null, attributedUserId: number | null = null) =>
     db.run(sql`
       insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, category_id, categorization_source, is_transfer, attributed_user_id, created_by, created_at, updated_at)
       values (${account}, ${date}, 'MAPLE GROCER', 'MAPLE GROCER', ${amountCents}, ${categoryId}, 'manual', 0, ${attributedUserId}, ${alex}, ${nowIso()}, ${nowIso()})
@@ -54,6 +55,47 @@ describe('budgetIncomeLine: the month itself', () => {
     const householdLine = budgetIncomeLine({ month: '2026-05', currentMonth: '2026-05', attributedUserId: null, budgetedLimitCents: 0 }, household);
     expect(householdLine.incomeCents).toBe(511000);
     expect(householdLine.spendCents).toBe(21530);
+  });
+});
+
+/**
+ * v1.60.0 item 2. The line's Spent is Budgets' own categorized spending plus its Not categorized
+ * yet card (money out only), so the page's figures agree with each other; uncategorized money in
+ * is carried separately, and Net still counts it.
+ */
+describe('budgetIncomeLine: uncategorized money in (v1.60.0 item 2)', () => {
+  function seedMarch() {
+    const ctx = setup();
+    ctx.add('2026-03-01', 100000, ctx.salary, ctx.alex);
+    ctx.add('2026-03-04', -8000, null, ctx.alex);
+    ctx.add('2026-03-06', 2500, null, ctx.alex);
+    ctx.add('2026-03-08', -4000, ctx.groceries, ctx.sam);
+    ctx.add('2026-03-09', 1000, ctx.groceries, ctx.sam);
+    ctx.add('2026-03-12', -3000, null, ctx.sam);
+    ctx.add('2026-03-14', 600, null, ctx.sam);
+    return ctx;
+  }
+
+  it("Spent equals Budgets' categorized spending plus its Not categorized yet card, for the household and each person", () => {
+    const { alex, sam, household } = seedMarch();
+    const scopes = [
+      { attributedUserId: null, card: { scope: 'household' as const, attributedUserId: null }, rows: budgetProgress('2026-03') },
+      { attributedUserId: alex, card: { scope: 'personal' as const, attributedUserId: alex }, rows: budgetProgress('2026-03', 'personal', alex) },
+      { attributedUserId: sam, card: { scope: 'personal' as const, attributedUserId: sam }, rows: budgetProgress('2026-03', 'personal', sam) },
+    ];
+    for (const { attributedUserId, card, rows } of scopes) {
+      const line = budgetIncomeLine({ month: '2026-03', currentMonth: '2026-03', attributedUserId, budgetedLimitCents: 0 }, household);
+      expect(line.spendCents).toBe(budgetTotals(rows).totalSpentCents + uncategorizedSpend('2026-03', card, household).totalCents);
+    }
+  });
+
+  it('carries uncategorized money in on its own, and Net still counts it', () => {
+    const { sam, household, samSelf } = seedMarch();
+    const line = budgetIncomeLine({ month: '2026-03', currentMonth: '2026-03', attributedUserId: null, budgetedLimitCents: 0 }, household);
+    expect(line).toMatchObject({ incomeCents: 100000, uncategorizedInCents: 3100, spendCents: 14000, netCents: 89100 });
+    // A self viewer's line is their own, whatever it asks for.
+    const own = budgetIncomeLine({ month: '2026-03', currentMonth: '2026-03', attributedUserId: null, budgetedLimitCents: 0 }, samSelf);
+    expect(own).toMatchObject({ attributedUserId: sam, incomeCents: 0, uncategorizedInCents: 600, spendCents: 6000, netCents: -5400 });
   });
 });
 

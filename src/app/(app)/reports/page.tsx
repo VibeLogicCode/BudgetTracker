@@ -17,7 +17,7 @@ import { resolveRange } from '@/lib/date-range';
 import { readEnv } from '@/lib/env';
 import { suggestionsFor } from '@/lib/predict/history';
 import type { BaselineRow } from '@/lib/predict/suggest';
-import { savingsProgress } from '@/lib/savings-target';
+import { savingsTargetsFor } from '@/lib/savings-target';
 import { taxYearReport, taxYears } from '@/lib/tax';
 import {
   ReportsClient,
@@ -87,15 +87,25 @@ export default async function ReportsPage({
   // rather than inventing a day-granular series that does not exist.
   const cashflowMonths = Math.min(24, monthsBetween(monthOf(from), monthOf(to)) + 1);
   const cashflowRows = cashflowTrend(cashflowMonths, { endMonth: monthOf(to), attributedUserId: person }, viewer);
-  // Lane 4 (savings targets, v1.17.0 spec): each month's resolved target and whether it was met
-  // come from savingsProgress() (Lane 1, src/lib/savings-target.ts) -- never recomputed here
-  // (ruling T1). savingsProgress is household-scope by construction (ruling T3: there is no
-  // per-person savings target), so these two figures do not follow the Person filter above the
-  // way the rest of this card's own Income/Spend bars do; that is the correct reading of "one
-  // household, one target" rather than a gap to close.
+  // Lane 4 (savings targets, v1.17.0 spec): each month's resolved target and whether it was met.
+  // Household-scope by construction (ruling T3: there is no per-person savings target), so these
+  // two figures do not follow the Person filter above the way the rest of this card's own
+  // Income/Spend bars do; that is the correct reading of "one household, one target" rather than a
+  // gap to close.
+  //
+  // v1.60.0 item 13b: one read, not savingsProgress per month (four queries each, up to 24
+  // months). The household rows are the card's own rows when no person is picked -- and for a self
+  // viewer, whose rows are always their own scope, exactly what savingsProgress read for them --
+  // else ONE cashflowTrend over the same months with no person. savingsTargetsFor resolves each
+  // target from that row's income, and `met` is savingsProgress' own rule against that row's net
+  // (ruling T1: still the trend's one definition of "saved").
+  const householdRows =
+    person === null || isSelfScoped(viewer) ? cashflowRows : cashflowTrend(cashflowMonths, { endMonth: monthOf(to) }, viewer);
+  const targets = savingsTargetsFor(householdRows);
+  const householdNet = new Map(householdRows.map((row) => [row.month, row.netCents]));
   const cashflow: SavingsMonthRow[] = cashflowRows.map((row) => {
-    const progress = savingsProgress(row.month, viewer);
-    return { ...row, targetCents: progress.targetCents, met: progress.met };
+    const targetCents = targets.get(row.month) ?? null;
+    return { ...row, targetCents, met: targetCents !== null && (householdNet.get(row.month) ?? 0) >= targetCents };
   });
 
   // MUST-14.8: this card's window is the last 6 FULL calendar months, always, whatever the
@@ -252,6 +262,10 @@ export default async function ReportsPage({
       // viewer at all -- Task 14 gates /api/reports/export server-side for them, but the
       // ruling was "no export links offered", not merely "the route refuses them".
       showExport={!isSelfScoped(viewer)}
+      // v1.60.0 item 8: no link to a page that bounces this viewer. /import redirects a self
+      // viewer (import/page.tsx), and every /settings page is requireAdmin.
+      canImport={!isSelfScoped(viewer)}
+      isAdmin={viewer.role === 'admin'}
     />
   );
 }

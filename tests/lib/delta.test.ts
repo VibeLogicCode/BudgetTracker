@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { monthDelta } from '@/lib/delta';
+import { monthDelta, sameDaysLastMonth } from '@/lib/delta';
 
 /**
  * 2026-09-15, from a real dashboard: a tile read "-1109.4% vs last month" and another
@@ -55,5 +55,43 @@ describe('monthDelta: a percentage that stops being readable becomes a figure', 
   it('holds the percentage right up to the ceiling', () => {
     expect(monthDelta(400, 100, true).delta).toBe('+300.0% vs last month');
     expect(monthDelta(401, 100, true).delta).toMatch(/higher than last month/);
+  });
+});
+
+/**
+ * v1.60.0 item 4. A month in progress is compared with the same days of the month before, and the
+ * sentence names that window instead of claiming "last month".
+ */
+describe('monthDelta: the comparison names its window', () => {
+  it('reads "vs Feb 1-18" in the percentage form', () => {
+    expect(monthDelta(11_000, 10_000, true, 'Feb 1-18')).toEqual({ delta: '+10.0% vs Feb 1-18', deltaTone: 'positive' });
+  });
+
+  it('reads "higher than Feb 1-18" in the large-change form', () => {
+    expect(monthDelta(500_000, 1_000, false, 'Feb 1-18')).toEqual({ delta: '$4,990.00 higher than Feb 1-18', deltaTone: 'negative' });
+  });
+
+  it('keeps "last month" when no window is named', () => {
+    expect(monthDelta(9_000, 10_000, true).delta).toBe('-10.0% vs last month');
+  });
+});
+
+describe('sameDaysLastMonth', () => {
+  it('runs day 1 to the same day of the month before', () => {
+    expect(sameDaysLastMonth('2026-03-18')).toEqual({ from: '2026-02-01', to: '2026-02-18', label: 'Feb 1-18' });
+  });
+
+  it('clamps to the shorter month, so the 31st compares with all of February', () => {
+    expect(sameDaysLastMonth('2026-03-31')).toEqual({ from: '2026-02-01', to: '2026-02-28', label: 'Feb 1-28' });
+    expect(sameDaysLastMonth('2028-03-30')).toEqual({ from: '2028-02-01', to: '2028-02-29', label: 'Feb 1-29' });
+    expect(sameDaysLastMonth('2026-05-31')).toEqual({ from: '2026-04-01', to: '2026-04-30', label: 'Apr 1-30' });
+  });
+
+  it('crosses the year without naming it', () => {
+    expect(sameDaysLastMonth('2026-01-15')).toEqual({ from: '2025-12-01', to: '2025-12-15', label: 'Dec 1-15' });
+  });
+
+  it('names a single day plainly on the 1st', () => {
+    expect(sameDaysLastMonth('2026-03-01')).toEqual({ from: '2026-02-01', to: '2026-02-01', label: 'Feb 1' });
   });
 });

@@ -1,3 +1,4 @@
+import { addMonths, dayLabel, monthEnd, monthOf, monthStart } from '@/lib/dates';
 import { formatCents } from '@/lib/money';
 
 /** What a tile's delta line says, and how it should be coloured. */
@@ -46,6 +47,8 @@ export function monthDelta(
   curr: number,
   prev: number,
   goodWhenUp: boolean,
+  /** v1.60.0 item 4: what `prev` covers, as the sentence names it ("Feb 1-18"). */
+  label: string = 'last month',
 ): { delta?: string; deltaTone?: DeltaTone } {
   const pct = percentChange(curr, prev);
   if (pct === null) return {};
@@ -57,8 +60,26 @@ export function monthDelta(
     // `formatCents` on the magnitude plus a word, rather than a signed figure: "-$5,158.85 vs last
     // month" reads as a negative amount OF something, which is not what a difference is.
     const direction = difference >= 0 ? 'higher' : 'lower';
-    return { delta: `${formatCents(Math.abs(difference))} ${direction} than last month`, deltaTone: tone };
+    return { delta: `${formatCents(Math.abs(difference))} ${direction} than ${label}`, deltaTone: tone };
   }
 
-  return { delta: `${pct > 0 ? '+' : ''}${pct.toFixed(1)}% vs last month`, deltaTone: tone };
+  return { delta: `${pct > 0 ? '+' : ''}${pct.toFixed(1)}% vs ${label}`, deltaTone: tone };
+}
+
+/**
+ * v1.60.0 item 4. A month still in progress, set against the same stretch of the month before:
+ * day 1 to today's day of the month, clamped to that month's length, so March 31 compares with
+ * all of February rather than reaching into March. Comparing eighteen days with a whole month
+ * read as a fall in spending every month until the last day. `today` is the household's own date
+ * (todayIso), never a UTC slice.
+ */
+export function sameDaysLastMonth(today: string): { from: string; to: string; label: string } {
+  const month = addMonths(monthOf(today), -1);
+  const lastDay = monthEnd(month);
+  const day = Math.min(Number(today.slice(8, 10)), Number(lastDay.slice(8, 10)));
+  const from = monthStart(month);
+  const to = `${month}-${String(day).padStart(2, '0')}`;
+  // dayLabel against itself never appends a year: the month before is the one a reader expects.
+  const start = dayLabel(from, from);
+  return { from, to, label: day === 1 ? start : `${start}-${day}` };
 }

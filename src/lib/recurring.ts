@@ -4,7 +4,7 @@ import { accounts, loanMatcherRules, transactions, warrantyItemTypes, warrantyIt
 import { ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { upcomingBills, withinComingUpBound, type UpcomingBill } from '@/lib/bills';
 import { addDaysIso, daysBetweenIso } from '@/lib/dates';
-import { listRecurringMarkRules, recurringMarkFor } from '@/lib/categorize/rules';
+import { listRecurringMarkRules, recurringMarkFor, type MerchantRuleRecord } from '@/lib/categorize/rules';
 import {
   chargesAsOf,
   creepVerdict,
@@ -170,9 +170,16 @@ interface ChargeRow extends SpendRow {
   accountId: number;
 }
 
-function readCharges(sliceStart: string, scope: number | null): ChargeRow[] {
+function chargeClauses(sliceStart: string, scope: number | null): SQL[] {
   const clauses = [gte(transactions.date, sliceStart), ...SPEND_ROW_WHERE, lt(transactions.amountCents, 0)];
   if (scope !== null) clauses.push(eq(transactions.attributedUserId, scope));
+  return clauses;
+}
+
+/** `merchants`, when given, narrows the read to those merchants' charges (the lean read's second step). */
+function readCharges(sliceStart: string, scope: number | null, merchants?: readonly string[]): ChargeRow[] {
+  const clauses = chargeClauses(sliceStart, scope);
+  if (merchants !== undefined) clauses.push(inArray(transactions.normalizedMerchant, [...merchants]));
   return getDb()
     .select({
       id: transactions.id,
@@ -187,6 +194,22 @@ function readCharges(sliceStart: string, scope: number | null): ChargeRow[] {
     .where(and(...clauses))
     .orderBy(asc(transactions.date), asc(transactions.id))
     .all();
+}
+
+/**
+ * v1.60.0 item 13c. The lean read's first step: every merchant charging in the slice, one distinct
+ * pass with no amounts or dates, kept where its mark resolves to 'recurring' -- the same
+ * recurringMarkFor decision buildCandidates makes per merchant. The few merchants a household
+ * marked by hand are what bounds the IN list the charge read then binds.
+ */
+function markedRecurringMerchants(sliceStart: string, scope: number | null, marks: MerchantRuleRecord[]): string[] {
+  return getDb()
+    .selectDistinct({ merchant: transactions.normalizedMerchant })
+    .from(transactions)
+    .where(and(...chargeClauses(sliceStart, scope)))
+    .all()
+    .map((row) => row.merchant)
+    .filter((merchant) => recurringMarkFor(merchant, marks) === 'recurring');
 }
 
 /** Account names in one read of a table that holds a handful of rows. Only ever printed beside a charge the viewer can already see. */
@@ -358,7 +381,21 @@ interface Candidate {
  */
 function buildCandidates(input: { today: string; scope: number | null; marksOnly: boolean }): Candidate[] {
   const scope = input.scope;
-  const slice = readCharges(addDaysIso(input.today, -RECURRING_LOOKBACK_DAYS), scope);
+  const sliceStart = addDaysIso(input.today, -RECURRING_LOOKBACK_DAYS);
+  const marks = listRecurringMarkRules();
+
+  // v1.60.0 item 13c: the lean read lists marked merchants only, so it reads only their charges.
+  // matchRule skips a disabled rule, so with no enabled 'recurring' rule nothing can be listed and
+  // the 1,200-day charge read is skipped outright.
+  let slice: ChargeRow[];
+  if (input.marksOnly) {
+    if (!marks.some((rule) => rule.ruleKind === 'recurring' && rule.disabledAt === null)) return [];
+    const merchants = markedRecurringMerchants(sliceStart, scope, marks);
+    if (merchants.length === 0) return [];
+    slice = readCharges(sliceStart, scope, merchants);
+  } else {
+    slice = readCharges(sliceStart, scope);
+  }
 
   const byMerchant = new Map<string, ChargeRow[]>();
   for (const row of slice) {
@@ -367,7 +404,6 @@ function buildCandidates(input: { today: string; scope: number | null; marksOnly
     else byMerchant.set(row.merchant, [row]);
   }
 
-  const marks = listRecurringMarkRules();
   const names = accountNames();
   const candidates: Candidate[] = [];
   const creepStart = addDaysIso(input.today, -CREEP_BASELINE_DAYS);

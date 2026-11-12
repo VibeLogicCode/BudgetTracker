@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createAccount } from '@/lib/accounts';
 import { createUser } from '@/lib/auth/users';
@@ -889,6 +889,100 @@ describe('expectedRecurringCharges', () => {
     expect(lean.find((charge) => charge.merchant === 'PINE VIDEO')?.typicalCents).toBe(2399);
     expect(lean).toEqual(fromFull);
     expect(expected(ctx)).toEqual(fromFull);
+  });
+});
+
+/**
+ * v1.60.0 item 13c. The Dashboard's Coming up card runs this lean read on every visit, and it used to
+ * scan 1,200 days of every merchant's charges to list the handful a household marked. It now reads
+ * nothing when no rule marks anything recurring, and otherwise only the marked merchants' charges --
+ * with exactly the rows the full model gives.
+ */
+describe('expectedRecurringCharges: the lean read reads only marked merchants (v1.60.0 item 13c)', () => {
+  /** The SQL of every statement prepared while `run` executes -- better-sqlite3 exposes no log. */
+  function statements(run: () => void): string[] {
+    const sqlite = current!.sqlite;
+    const prepared: string[] = [];
+    const original = sqlite.prepare.bind(sqlite);
+    const spy = vi.spyOn(sqlite, 'prepare').mockImplementation(((text: string) => {
+      prepared.push(text);
+      return original(text);
+    }) as TestDb['sqlite']['prepare']);
+    try {
+      run();
+    } finally {
+      spy.mockRestore();
+    }
+    return prepared;
+  }
+  /** The charge read: the only statement on transactions that reads each charge's account. */
+  const chargeReads = (texts: string[]) => texts.filter((text) => /from "transactions"/.test(text) && /"account_id"/.test(text));
+  const lean = (viewer: Viewer) => expectedRecurringCharges({ today: TODAY, days: 30, viewer, bills: [] });
+  /** v1.59.1's answer, from the full model, which still reads every charge. No bills, so nothing stands for a row. */
+  const oracle = (ctx: Ctx, viewer: Viewer) => {
+    const windowEnd = addDaysIso(TODAY, 30);
+    return read(ctx, { viewer })
+      .known.filter((row) => row.knownBy === 'mark')
+      .filter((row) => row.nextExpected !== null && row.typicalCents !== null && row.nextExpected <= windowEnd)
+      .map((row) => ({
+        merchant: row.merchant,
+        expectedDate: row.nextExpected as string,
+        typicalCents: row.typicalCents as number,
+        late: row.late,
+        accountName: row.accounts[0]?.name ?? '',
+      }))
+      .sort((a, b) => (a.expectedDate < b.expectedDate ? -1 : a.expectedDate > b.expectedDate ? 1 : a.merchant < b.merchant ? -1 : a.merchant > b.merchant ? 1 : 0));
+  };
+
+  it('reads no charges when no rule marks anything recurring -- not even a disabled one', async () => {
+    const ctx = await setup();
+    ctx.cadence({ merchant: 'CEDAR PHONE CO', count: 4, endsDaysAgo: 10, cents: 6200 });
+    ctx.cadence({ merchant: 'ASPEN BAKERY', count: 4, endsDaysAgo: 8, cents: 900 });
+    ctx.cadence({ merchant: 'BIRCH MARKET', count: 4, endsDaysAgo: 9, cents: 2500 });
+    ctx.mark('BIRCH MARKET', 'not_recurring');
+    ctx.mark('CEDAR PHONE CO', 'recurring');
+    setRuleDisabledFlag(listRules('recurring')[0]!.id, true);
+
+    let rows: ReturnType<typeof lean> = [];
+    const texts = statements(() => {
+      rows = lean(household(ctx.adultId));
+    });
+    expect(rows).toEqual([]);
+    expect(rows).toEqual(oracle(ctx, household(ctx.adultId)));
+    expect(texts.filter((text) => /from "transactions"/.test(text))).toEqual([]);
+  });
+
+  it('reads charges only for merchants whose mark resolves to recurring, and lists what the full model lists', async () => {
+    const ctx = await setup();
+    // Marked exactly; marked by a contains pattern; unmarked; marked not recurring; a late one; a self viewer's own.
+    ctx.cadence({ merchant: 'CEDAR PHONE CO', count: 4, endsDaysAgo: 10, cents: 6200, accountId: ctx.visaId });
+    ctx.cadence({ merchant: 'HARBOUR PHONE PLAN', count: 4, endsDaysAgo: 12, cents: 4800 });
+    ctx.cadence({ merchant: 'RIVERSIDE GYM', count: 4, endsDaysAgo: 60, cents: 4500 });
+    ctx.cadence({ merchant: 'PINE VIDEO', count: 4, endsDaysAgo: 5, cents: 1599, person: ctx.childId });
+    ctx.cadence({ merchant: 'ASPEN BAKERY', count: 4, endsDaysAgo: 8, cents: 900 });
+    ctx.cadence({ merchant: 'BIRCH MARKET', count: 4, endsDaysAgo: 9, cents: 2500 });
+    ctx.cadence({ merchant: 'MAPLE GROCER', count: 2, endsDaysAgo: 3, cents: 8000 });
+    for (const merchant of ['CEDAR PHONE CO', 'RIVERSIDE GYM', 'PINE VIDEO']) ctx.mark(merchant, 'recurring');
+    ctx.mark('BIRCH MARKET', 'not_recurring');
+    current!.db.run(sql`
+      insert into merchant_rules (pattern, match_type, rule_kind, created_at)
+      values ('HARBOUR PHONE', 'contains', 'recurring', ${nowIso()})`);
+
+    const viewer = household(ctx.adultId);
+    let rows: ReturnType<typeof lean> = [];
+    const texts = statements(() => {
+      rows = lean(viewer);
+    });
+    expect(rows.map((row) => row.merchant)).toEqual(['RIVERSIDE GYM', 'HARBOUR PHONE PLAN', 'CEDAR PHONE CO', 'PINE VIDEO']);
+    expect(rows).toEqual(oracle(ctx, viewer));
+    const reads = chargeReads(texts);
+    expect(reads).toHaveLength(1);
+    // Four marked merchants bound, not seven.
+    expect(/"normalized_merchant" in \(([?, ]+)\)/.exec(reads[0])?.[1].split(',')).toHaveLength(4);
+
+    const kid = selfOnly(ctx.childId);
+    expect(lean(kid).map((row) => row.merchant)).toEqual(['PINE VIDEO']);
+    expect(lean(kid)).toEqual(oracle(ctx, kid));
   });
 });
 

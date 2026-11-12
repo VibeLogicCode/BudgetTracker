@@ -21,6 +21,8 @@ export interface BudgetIncomeLine {
   /** The scope these figures were read for, after a self viewer's own id has won: null is the household. */
   attributedUserId: number | null;
   incomeCents: number;
+  /** v1.60.0 item 2: money in with no category yet, counted in Net but in neither Money in nor Spent. */
+  uncategorizedInCents: number;
   spendCents: number;
   netCents: number;
   /** The complete calendar months typical income reads, oldest first. Never the current month. */
@@ -72,6 +74,7 @@ export function budgetIncomeLine(
     month: input.month,
     attributedUserId: scope,
     incomeCents: own?.incomeCents ?? 0,
+    uncategorizedInCents: own?.uncategorizedInCents ?? 0,
     spendCents: own?.spendCents ?? 0,
     netCents: own?.netCents ?? 0,
     typicalMonths: window.map((row) => row.month),

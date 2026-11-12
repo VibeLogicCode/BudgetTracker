@@ -11,6 +11,9 @@ import {
   savingsProgress,
   savingsStreak,
 } from '@/lib/savings-target';
+import { cashflowTrend } from '@/lib/reports';
+import { cashRunway } from '@/lib/runway';
+import { setTransactionSplits } from '@/lib/splits';
 
 const HOUSEHOLD: Viewer = { id: 1, role: 'admin', visibility: 'household' };
 
@@ -324,5 +327,72 @@ describe('savingsStreak', () => {
 
     expect(savingsStreak('2026-04', HOUSEHOLD, 2)).toBe(2);
     expect(savingsStreak('2026-04', HOUSEHOLD)).toBe(4);
+  });
+});
+
+/**
+ * v1.60.0 item 13c. The Dashboard hands savingsProgress and cashRunway the household rows it has
+ * already read instead of letting each read them again. Every figure must be identical to the
+ * figures they read for themselves, on a fixture with transfers, a split, refunds, uncategorized
+ * rows both ways, two people and a self viewer.
+ */
+describe('held cashflow rows give the same figures as reading them (v1.60.0 item 13c)', () => {
+  function seedMixed() {
+    const ctx = setup();
+    const bob = insertTestUser(ctx.db, { name: 'Bob', username: 'bob' });
+    const gas = categoryIdByName(ctx.db, 'Gas');
+    const add = (date: string, amountCents: number, categoryId: number | null, person: number | null, isTransfer = false) =>
+      ctx.db.get<{ id: number }>(sql`
+        insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, category_id, categorization_source, is_transfer, attributed_user_id, created_by, created_at, updated_at)
+        values (${ctx.chequing}, ${date}, 'MAPLE GROCER', 'MAPLE GROCER', ${amountCents}, ${categoryId}, 'manual', ${isTransfer ? 1 : 0}, ${person}, ${ctx.alice}, ${nowIso()}, ${nowIso()})
+        returning id`).id;
+    for (const month of ['2025-12', '2026-01', '2026-02', '2026-03']) {
+      add(`${month}-01`, 400_000, ctx.salary, ctx.alice);
+      add(`${month}-04`, -95_000, ctx.groceries, bob);
+      add(`${month}-06`, 4_000, ctx.groceries, bob);
+      add(`${month}-09`, -21_000, null, ctx.alice);
+      add(`${month}-11`, 6_500, null, null);
+      add(`${month}-13`, -150_000, null, null, true);
+      const split = add(`${month}-20`, -30_000, ctx.groceries, ctx.alice);
+      setTransactionSplits({
+        txnId: split,
+        parts: [
+          { categoryId: ctx.groceries, amountCents: -18_000 },
+          { categoryId: gas, amountCents: -12_000 },
+        ],
+        userId: ctx.alice,
+      });
+    }
+    saveSavingsTarget({ month: '2026-01', mode: 'percent', value: 20 });
+    saveSavingsTarget({ month: '2026-02', mode: 'amount', value: 200_000 });
+    saveSavingsTarget({ month: '2026-03', mode: 'amount', value: 250_000 });
+    const aliceSelf: Viewer = { id: ctx.alice, role: 'member', visibility: 'self' };
+    return { ...ctx, bob, aliceSelf };
+  }
+
+  it('savingsProgress with the trend row equals savingsProgress reading its own, every month and viewer', () => {
+    const { aliceSelf } = seedMixed();
+    for (const viewer of [HOUSEHOLD, aliceSelf]) {
+      const trend = cashflowTrend(12, { endMonth: '2026-03' }, viewer);
+      for (const month of ['2025-12', '2026-01', '2026-02', '2026-03']) {
+        const row = trend.find((candidate) => candidate.month === month);
+        expect(savingsProgress(month, viewer, { row })).toEqual(savingsProgress(month, viewer));
+      }
+      // A row for another month is never taken for this one.
+      expect(savingsProgress('2026-02', viewer, { row: trend.at(-1) })).toEqual(savingsProgress('2026-02', viewer));
+    }
+  });
+
+  it('cashRunway with the trend equals cashRunway reading its own window, and ignores a trend that does not cover it', () => {
+    const { aliceSelf } = seedMixed();
+    for (const viewer of [HOUSEHOLD, aliceSelf]) {
+      for (const today of ['2026-03-18', '2026-04-02']) {
+        const own = cashRunway({ today }, viewer);
+        const trend = cashflowTrend(12, { endMonth: today.slice(0, 7) }, viewer);
+        expect(own.avgMonthlySpendCents).toBeGreaterThan(0);
+        expect(cashRunway({ today, trend }, viewer)).toEqual(own);
+        expect(cashRunway({ today, trend: trend.slice(-3) }, viewer)).toEqual(own);
+      }
+    }
   });
 });

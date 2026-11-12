@@ -90,6 +90,9 @@ function baseProps(
     // keeps the pre-existing (household-viewer) behavior of offering Export CSV unless a
     // test overrides it.
     showExport: true,
+    // v1.60.0 item 8: an admin household viewer, offered every link, unless a test overrides it.
+    canImport: true,
+    isAdmin: true,
   };
 }
 
@@ -534,6 +537,7 @@ describe('ReportsClient — Cash flow and savings rate card', () => {
   function savingsRow(over: Partial<SavingsMonthRow> & { month: string }): SavingsMonthRow {
     return {
       incomeCents: 0,
+      uncategorizedInCents: 0,
       spendCents: 0,
       netCents: 0,
       targetCents: null,
@@ -590,6 +594,20 @@ describe('ReportsClient — Cash flow and savings rate card', () => {
     const { container } = render(<ReportsClient {...baseProps({ cashflow: rows })} />);
     expect(within(cashflowCard(container)).queryByText(/Target met/)).toBeNull();
   });
+
+  /** v1.60.0 item 2: Saved counts uncategorized money in; the sentence names it so the figures add up. */
+  it('names uncategorized money in beside Income, so Income, Spent and Saved still add up', () => {
+    const rows = [
+      savingsRow({ month: '2026-05', incomeCents: 500000, uncategorizedInCents: 1500, spendCents: 350000, netCents: 151500 }),
+      savingsRow({ month: '2026-06', incomeCents: 500000, uncategorizedInCents: 1000, spendCents: 400000, netCents: 101000 }),
+    ];
+    const { container } = render(<ReportsClient {...baseProps({ cashflow: rows })} />);
+    expect(
+      within(cashflowCard(container)).getByText(
+        'Income $10,000.00 (plus $25.00 not categorized yet) · Spent $7,500.00 · Saved $2,525.00 (25%)',
+      ),
+    ).toBeTruthy();
+  });
 });
 
 /**
@@ -600,7 +618,7 @@ describe('ReportsClient — Cash flow and savings rate card', () => {
 describe('buildSavingsSeries (src/components/charts/SavingsChart.tsx)', () => {
   it('carries Income/Spend/Net through in dollars', () => {
     const [point] = buildSavingsSeries([
-      { month: '2026-06', incomeCents: 500000, spendCents: 350000, netCents: 150000, targetCents: null },
+      { month: '2026-06', incomeCents: 500000, spendCents: 350000, netCents: 150000, uncategorizedInCents: 0, targetCents: null },
     ]);
     expect(point.Income).toBe(5000);
     expect(point.Spend).toBe(3500);
@@ -609,25 +627,25 @@ describe('buildSavingsSeries (src/components/charts/SavingsChart.tsx)', () => {
 
   it('resolves a set target to dollars', () => {
     const [point] = buildSavingsSeries([
-      { month: '2026-06', incomeCents: 500000, spendCents: 350000, netCents: 150000, targetCents: 100000 },
+      { month: '2026-06', incomeCents: 500000, spendCents: 350000, netCents: 150000, uncategorizedInCents: 0, targetCents: 100000 },
     ]);
     expect(point.Target).toBe(1000);
   });
 
   it('a month with no target produces Target: null, never 0 -- a zero would read as "your target was nothing"', () => {
     const [point] = buildSavingsSeries([
-      { month: '2026-06', incomeCents: 500000, spendCents: 350000, netCents: 150000, targetCents: null },
+      { month: '2026-06', incomeCents: 500000, spendCents: 350000, netCents: 150000, uncategorizedInCents: 0, targetCents: null },
     ]);
     expect(point.Target).toBeNull();
   });
 
   it('accumulates the cumulative-saved column across the range, starting back at 0 each call', () => {
     const points = buildSavingsSeries([
-      { month: '2026-04', incomeCents: 500000, spendCents: 400000, netCents: 100000, targetCents: null },
-      { month: '2026-05', incomeCents: 500000, spendCents: 450000, netCents: 50000, targetCents: null },
+      { month: '2026-04', incomeCents: 500000, spendCents: 400000, netCents: 100000, uncategorizedInCents: 0, targetCents: null },
+      { month: '2026-05', incomeCents: 500000, spendCents: 450000, netCents: 50000, uncategorizedInCents: 0, targetCents: null },
       // A deficit month reduces the running total rather than clamping at 0 -- the column is a
       // plain running sum, not a floor.
-      { month: '2026-06', incomeCents: 500000, spendCents: 600000, netCents: -100000, targetCents: null },
+      { month: '2026-06', incomeCents: 500000, spendCents: 600000, netCents: -100000, uncategorizedInCents: 0, targetCents: null },
     ]);
     expect(points.map((p) => p['Cumulative saved'])).toEqual([1000, 1500, 500]);
   });
@@ -642,16 +660,16 @@ describe('buildSavingsSeries (src/components/charts/SavingsChart.tsx)', () => {
 describe('hasAnyTarget (src/components/charts/SavingsChart.tsx)', () => {
   it('false when every point in the window has no target', () => {
     const series = buildSavingsSeries([
-      { month: '2026-05', incomeCents: 500000, spendCents: 400000, netCents: 100000, targetCents: null },
-      { month: '2026-06', incomeCents: 500000, spendCents: 450000, netCents: 50000, targetCents: null },
+      { month: '2026-05', incomeCents: 500000, spendCents: 400000, netCents: 100000, uncategorizedInCents: 0, targetCents: null },
+      { month: '2026-06', incomeCents: 500000, spendCents: 450000, netCents: 50000, uncategorizedInCents: 0, targetCents: null },
     ]);
     expect(hasAnyTarget(series)).toBe(false);
   });
 
   it('true the moment any single point has a target, even if the rest do not', () => {
     const series = buildSavingsSeries([
-      { month: '2026-05', incomeCents: 500000, spendCents: 400000, netCents: 100000, targetCents: null },
-      { month: '2026-06', incomeCents: 500000, spendCents: 450000, netCents: 50000, targetCents: 100000 },
+      { month: '2026-05', incomeCents: 500000, spendCents: 400000, netCents: 100000, uncategorizedInCents: 0, targetCents: null },
+      { month: '2026-06', incomeCents: 500000, spendCents: 450000, netCents: 50000, uncategorizedInCents: 0, targetCents: 100000 },
     ]);
     expect(hasAnyTarget(series)).toBe(true);
   });
@@ -668,7 +686,7 @@ describe('SavingsChart (src/components/charts/SavingsChart.tsx)', () => {
   it('renders the cumulative-saved chart with its own heading, not folded back into one chart', () => {
     const { container } = render(
       <SavingsChart
-        data={[{ month: '2026-06', incomeCents: 500000, spendCents: 400000, netCents: 100000, targetCents: null }]}
+        data={[{ month: '2026-06', incomeCents: 500000, spendCents: 400000, netCents: 100000, uncategorizedInCents: 0, targetCents: null }]}
       />,
     );
     expect(within(container).getByText('Cumulative saved')).toBeTruthy();
@@ -941,5 +959,40 @@ describe('ReportsClient — F-04: Income by source', () => {
   it('shows an empty state rather than a card of nothing when no income landed in the range', () => {
     const { container } = render(<ReportsClient {...baseProps()} income={[]} />);
     expect(within(cardByTitle(container, 'Income by source')).getByText('No income in this range')).toBeTruthy();
+  });
+});
+
+/**
+ * v1.60.0 item 8. /import sends a self viewer back to the dashboard and every /settings page is
+ * admin-only, so a card offers those links only to a viewer who can use them, and otherwise says who
+ * can act.
+ */
+describe('ReportsClient — no link to a page that bounces the viewer (v1.60.0 item 8)', () => {
+  const hrefs = (container: HTMLElement) => [...container.querySelectorAll('a')].map((a) => a.getAttribute('href') ?? '');
+  /** Every card with an Import or Settings action, each in its empty state. */
+  const empty = { debt: [], hasLoans: true, baselineMonthsUsed: 0, income: [], netWorth: [] };
+
+  it('an admin is offered every Import and Settings link', () => {
+    const { container } = render(<ReportsClient {...baseProps({ taxYears: [], taxYear: null, taxRows: [] })} {...empty} />);
+    const all = hrefs(container);
+    expect(all.filter((href) => href === '/import')).toHaveLength(2);
+    expect(all.filter((href) => href === '/settings/managers')).toHaveLength(2);
+    expect(all.filter((href) => href === '/settings/accounts')).toHaveLength(1);
+  });
+
+  it('a viewer who is not an admin gets no Settings link, and each card says who can act', () => {
+    const { container } = render(<ReportsClient {...baseProps()} {...empty} isAdmin={false} />);
+    expect(hrefs(container).filter((href) => href.startsWith('/settings'))).toEqual([]);
+    expect(hrefs(container).filter((href) => href === '/import')).toHaveLength(2);
+    expect(within(cardByTitle(container, 'Income by source')).getByText(/An admin marks income categories in Settings\./)).toBeTruthy();
+    expect(within(cardByTitle(container, 'Net worth')).getByText(/once an admin records a balance/)).toBeTruthy();
+    expect(within(cardByTitle(container, 'Tax year')).getByText(/once an admin marks them as tax relevant/)).toBeTruthy();
+  });
+
+  it('a viewer who cannot import gets no Import link, and is told who can', () => {
+    const { container } = render(<ReportsClient {...baseProps()} {...empty} canImport={false} />);
+    expect(hrefs(container).filter((href) => href.startsWith('/import'))).toEqual([]);
+    expect(within(cardByTitle(container, 'Category baselines')).getByText(/A household member or an admin can import older statements\./)).toBeTruthy();
+    expect(within(cardByTitle(container, 'Debt over time')).getByText(/A household member or an admin can import older/)).toBeTruthy();
   });
 });

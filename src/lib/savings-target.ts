@@ -5,7 +5,7 @@ import { listAccounts } from '@/lib/accounts';
 import type { Viewer } from '@/lib/auth/viewer';
 import { nowIso } from '@/lib/clock';
 import { addMonths, isMonthKey, monthEnd, monthStart } from '@/lib/dates';
-import { cashflowTrend } from '@/lib/reports';
+import { cashflowTrend, type MonthTrendRow } from '@/lib/reports';
 
 /**
  * Savings targets (spec docs/superpowers/plans/2026-08-30-savings-targets.md, Lane 1, v1.17.0).
@@ -200,11 +200,15 @@ function movedToSavings(month: string, viewer: Viewer): { movedToSavingsCents: n
  * `met` is `netCents >= targetCents` with `targetCents !== null`; a month with no target is
  * never "met" and never "missed", it simply has no opinion (matches this file's docblock and
  * the plan's own wording).
+ *
+ * v1.60.0 item 13c: `opts.row` is that same row when the caller already holds it -- a
+ * cashflowTrend row read for this viewer with no person filter. It is used only when its month is
+ * `month`; otherwise the row is read here as before.
  */
-export function savingsProgress(month: string, viewer: Viewer): SavingsProgress {
+export function savingsProgress(month: string, viewer: Viewer, opts: { row?: MonthTrendRow } = {}): SavingsProgress {
   assertMonth(month);
   const target = getSavingsTarget(month);
-  const [row] = cashflowTrend(1, { endMonth: month }, viewer);
+  const [row] = opts.row?.month === month ? [opts.row] : cashflowTrend(1, { endMonth: month }, viewer);
   const incomeCents = row?.incomeCents ?? 0;
   const spendCents = row?.spendCents ?? 0;
   const netCents = row?.netCents ?? incomeCents - spendCents;

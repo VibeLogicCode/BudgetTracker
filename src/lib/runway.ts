@@ -1,9 +1,9 @@
 import { listAccounts } from '@/lib/accounts';
 import type { Viewer } from '@/lib/auth/viewer';
-import { addMonths, monthLabel, monthOf } from '@/lib/dates';
+import { addMonths, monthLabel, monthOf, monthRange } from '@/lib/dates';
 import { formatCents } from '@/lib/money';
 import { latestSnapshots } from '@/lib/networth';
-import { cashflowTrend, trimLeadingEmptyMonths } from '@/lib/reports';
+import { cashflowTrend, trimLeadingEmptyMonths, type MonthTrendRow } from '@/lib/reports';
 
 /**
  * Cash runway (spec docs/superpowers/plans/2026-08-30-savings-targets.md, Lane 1, v1.17.0):
@@ -75,8 +75,15 @@ const THIN_HISTORY_MONTHS = 3;
  *
  * An account with no snapshot at all is OMITTED from `liquidCents` (contributes 0) and counted in
  * `accountsMissing` instead of being silently treated as an honest zero balance.
+ *
+ * v1.60.0 item 13c: `opts.trend` is cashflowTrend rows the caller already read for this viewer with
+ * no person filter (the Dashboard's household chart). When they hold every month of the window
+ * below they are used as-is; otherwise the window is read here as before.
  */
-export function cashRunway(opts: { today: string; months?: number }, viewer: Viewer): CashRunway {
+export function cashRunway(
+  opts: { today: string; months?: number; trend?: readonly MonthTrendRow[] },
+  viewer: Viewer,
+): CashRunway {
   const trailingMonths = opts.months ?? DEFAULT_TRAILING_MONTHS;
 
   const liquidAccountIds = new Set(
@@ -108,7 +115,12 @@ export function cashRunway(opts: { today: string; months?: number }, viewer: Vie
   // first transaction never happened for them and must not be averaged, while an interior quiet
   // month is a month they genuinely lived through and spent nothing in, which is real signal
   // about their pace and belongs in the divisor.
-  const trend = trimLeadingEmptyMonths(cashflowTrend(trailingMonths, { endMonth: lastFullMonth }, viewer));
+  const window = monthRange(addMonths(lastFullMonth, -(trailingMonths - 1)), lastFullMonth);
+  const held = new Map((opts.trend ?? []).map((row) => [row.month, row]));
+  const rows = window.every((month) => held.has(month))
+    ? window.map((month) => held.get(month) as MonthTrendRow)
+    : cashflowTrend(trailingMonths, { endMonth: lastFullMonth }, viewer);
+  const trend = trimLeadingEmptyMonths(rows);
   const avgMonthlySpendCents =
     trend.length === 0 ? 0 : Math.round(trend.reduce((sum, row) => sum + row.spendCents, 0) / trend.length);
 

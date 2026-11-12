@@ -4,10 +4,10 @@ import { acceptsTransactions, listAccounts } from '@/lib/accounts';
 import { isSelfScoped, ownerScope } from '@/lib/auth/viewer';
 import { findUserById, listAttributablePeople } from '@/lib/auth/users';
 import { safeToSpend, upcomingBills } from '@/lib/bills';
-import { budgetProgress, budgetTotals } from '@/lib/budgets';
+import { budgetProgress, budgetTotals, uncategorizedSpend } from '@/lib/budgets';
 import { listCategories } from '@/lib/categories';
 import { reviewQueueCount } from '@/lib/categorize/engine';
-import { addMonths, currentMonth, isMonthKey, monthEnd, monthLabel, monthStart, todayIso } from '@/lib/dates';
+import { addMonths, isMonthKey, monthEnd, monthLabel, monthOf, monthStart, todayIso } from '@/lib/dates';
 import { listGoals } from '@/lib/goals';
 import { householdInsights } from '@/lib/insights';
 import { insightsHref } from '@/lib/insights-links';
@@ -15,7 +15,14 @@ import { unreviewedRuleImports } from '@/lib/import/commit';
 import { listLoanSummaries, ruleLinkedPayments } from '@/lib/loans';
 import { netWorthHint, netWorthOverTime } from '@/lib/networth';
 import { onboardingSteps } from '@/lib/onboarding';
-import { cashflowTrend, categoryBreakdown, topMerchants, trimLeadingEmptyMonths, type MonthTrendRow } from '@/lib/reports';
+import {
+  cashflowForRange,
+  cashflowTrend,
+  topMerchants,
+  trimLeadingEmptyMonths,
+  type CashflowTotals,
+  type MonthTrendRow,
+} from '@/lib/reports';
 import { expectedRecurringCharges, recurringLoad } from '@/lib/recurring';
 import { cashRunway, cashRunwayHint, type CashRunway } from '@/lib/runway';
 // F-01 (v1.31.0): the same link builder the Reports cards use. A plain, client-safe module, so
@@ -47,7 +54,7 @@ import { PillNav } from '@/components/ui/PillNav';
 import { ProgressBar } from '@/components/ui/ProgressBar';
 import { SectionHeader } from '@/components/ui/SectionHeader';
 import { StatTile } from '@/components/ui/StatTile';
-import { monthDelta } from '@/lib/delta';
+import { monthDelta, sameDaysLastMonth } from '@/lib/delta';
 import { TableWrap } from '@/components/ui/Table';
 import { ExpiringSoonCard, EXPIRING_WIDGET_LIMIT } from '@/components/warranty/ExpiringSoonCard';
 import { buttonClass } from '@/components/ui/Button';
@@ -61,6 +68,13 @@ import { buttonClass } from '@/components/ui/Button';
 const deltaProps = monthDelta;
 
 export const dynamic = 'force-dynamic';
+
+/**
+ * v1.60.0 item 8. Where a self viewer's empty-state action goes: Transactions' own quick-add form,
+ * which opens itself on this hash (the PWA shortcut's target). The dashboard's header trigger only
+ * opens a form at the top of this page, out of sight of a card further down.
+ */
+const SELF_ADD_HREF = '/transactions#quick-add';
 
 export default async function DashboardPage({
   searchParams,
@@ -84,8 +98,13 @@ export default async function DashboardPage({
   // budgets/page.tsx already uses -- a bad month string is a reason to show the current month,
   // never a reason to throw.
   const rawMonth = Array.isArray(params.month) ? params.month[0] : params.month;
-  const month = rawMonth && isMonthKey(rawMonth) ? rawMonth : currentMonth();
-  const isCurrentMonth = month === currentMonth();
+  // One `today` for the whole page, read once: the month this page calls current, the chart's
+  // last bar, the like-for-like comparison window (v1.60.0 item 4) and every "as of today" read
+  // below can never disagree across midnight.
+  const today = todayIso();
+  const thisMonth = monthOf(today);
+  const month = rawMonth && isMonthKey(rawMonth) ? rawMonth : thisMonth;
+  const isCurrentMonth = month === thisMonth;
 
   const rows = scopeUserId === null ? budgetProgress(month) : budgetProgress(month, 'personal', scopeUserId);
   const totals = budgetTotals(rows);
@@ -93,7 +112,7 @@ export default async function DashboardPage({
   // trailing 12 months ending TODAY regardless of which month is being drilled into, so a look
   // back at March does not also truncate the household's own trend line to end in March. The
   // person-pill scoping is unaffected; only which month is the rightmost bar is fixed.
-  const trend = cashflowTrend(12, { endMonth: currentMonth(), attributedUserId: scopeUserId }, viewer);
+  const trend = cashflowTrend(12, { endMonth: thisMonth, attributedUserId: scopeUserId }, viewer);
   // Item 5 (2026-08-30 plan): drop the leading run of months before this scope's first
   // transaction -- see trimLeadingEmptyMonths' own docblock (src/lib/reports.ts, where it now
   // lives so the runway average can share the same judgement). `monthsOfHistory` (below) is
@@ -131,21 +150,36 @@ export default async function DashboardPage({
       : ` Always the trailing ${monthsOfHistory === 1 ? 'month' : `${monthsOfHistory} months`} to today, not ${monthLabel(month)}.`
   }`;
   // The headline Money-in/Net tiles DO follow the chosen month (ruling T7), and unlike the chart
-  // above they need to work for a month outside the chart's own trailing-12 window -- a
-  // dedicated one-month query, not a lookup into `trend`, which cashflowTrend already supports
-  // (Lane 1's own note: "every function the page calls already takes a month or a range").
-  const monthCashflow = cashflowTrend(1, { endMonth: month, attributedUserId: scopeUserId }, viewer)[0] ?? null;
-  // Item 1: the prior-period twin of `monthCashflow` above, purely to power each tile's "vs last
-  // month" delta -- same function, same scoping, one month earlier than whatever is being VIEWED
-  // (not calendar-"last month" when a past month is being drilled into).
+  // above they need to work for a month outside the chart's own trailing-12 window. v1.60.0 item
+  // 13c: a month inside that window is the trend's own row (same query, same scope), so only a
+  // month older than the chart costs a one-month read of its own.
+  const monthCashflow =
+    trend.find((row) => row.month === month) ??
+    cashflowTrend(1, { endMonth: month, attributedUserId: scopeUserId }, viewer)[0] ??
+    null;
+  // Item 1: the prior-period twin of `monthCashflow` above, purely to power each tile's delta --
+  // same query helper, same scoping, one month earlier than whatever is being VIEWED (not
+  // calendar-"last month" when a past month is being drilled into).
+  //
+  // v1.60.0 item 4: like with like. The current month is still running, so it is set against day 1
+  // to the same day of the month before (clamped to that month's length), named in the delta
+  // ("vs Feb 1-18"); eighteen days against a whole month read as a fall in spending until the last
+  // day. A past month is complete, so it keeps the whole previous month and "last month".
   //
   // Item 4 (2026-08-30 plan): this used to also carry `prevRows`/`prevTotals`
   // (budgetProgress/budgetTotals for prevMonth), purely to power the old "Spent this month"
-  // delta. That delta now compares spentCents/prevSpentCents (both cashflowTrend figures, below)
+  // delta. That delta now compares spentCents/prevSpentCents (both cashflow figures, below)
   // instead, so the budget-scoped prior-month query was dropped rather than left computing a
   // number nothing on this page reads any more.
   const prevMonth = addMonths(month, -1);
-  const prevMonthCashflow = cashflowTrend(1, { endMonth: prevMonth, attributedUserId: scopeUserId }, viewer)[0] ?? null;
+  const comparison = isCurrentMonth ? sameDaysLastMonth(today) : null;
+  const prevMonthCashflow: CashflowTotals | null =
+    comparison !== null
+      ? cashflowForRange({ from: comparison.from, to: comparison.to }, { attributedUserId: scopeUserId }, viewer)
+      : (trend.find((row) => row.month === prevMonth) ??
+        cashflowTrend(1, { endMonth: prevMonth, attributedUserId: scopeUserId }, viewer)[0] ??
+        null);
+  const comparisonLabel = comparison?.label ?? 'last month';
   const merchants = topMerchants(
     { from: monthStart(month), to: monthEnd(month), limit: 8, attributedUserId: scopeUserId },
     viewer,
@@ -172,23 +206,31 @@ export default async function DashboardPage({
   // is the honest thing to show instead of a card whose buttons would bounce them. Once
   // accounts exist, importing is something a member can do, so the card comes back minus the
   // step that was never theirs.
+  // v1.60.0 item 8: a self viewer cannot import either -- /import sends them back here -- so the
+  // import step is never theirs, the same way the account step is never a member's.
   const setupSteps =
     viewer.role === 'admin' || hasAccounts
-      ? onboardingSteps().filter((step) => viewer.role === 'admin' || step.key !== 'account')
+      ? onboardingSteps().filter(
+          (step) => (viewer.role === 'admin' || step.key !== 'account') && !(selfScoped && step.key === 'import'),
+        )
       : [];
 
-  // MUST-10.6: the widget respects the dashboard's existing person switcher. Household
-  // shows every item, a selected person shows only items they own.
-  const today = todayIso();
-
+  // v1.60.0 item 13c: on the Household pill, `trend` and `monthCashflow` are exactly the household
+  // rows these two read, so they are handed over rather than read again. A person pill's rows are
+  // that person's, so with one selected both query their own household rows as before.
+  const householdRows = scopeUserId === null;
   // Ruling T3: household scope only -- there is no per-person savings target, so this is null
   // for a self viewer, the same pairing net worth below already uses.
-  const savings: SavingsProgress | null = selfScoped ? null : savingsProgress(month, viewer);
+  const savings: SavingsProgress | null = selfScoped
+    ? null
+    : savingsProgress(month, viewer, { row: householdRows ? (monthCashflow ?? undefined) : undefined });
   // Cash runway takes `today`, not a month (Lane 1's own signature) -- it cannot follow the
   // chosen month even in principle, so it is always "as of today" and says so in its own hint
   // rather than needing the "as of today" note the loans/goals/etc. sections below carry.
-  const runway: CashRunway | null = selfScoped ? null : cashRunway({ today }, viewer);
+  const runway: CashRunway | null = selfScoped ? null : cashRunway({ today, trend: householdRows ? trend : undefined }, viewer);
 
+  // MUST-10.6: the widget respects the dashboard's existing person switcher. Household
+  // shows every item, a selected person shows only items they own.
   const expiring = expiringSoonItems(EXPIRING_WIDGET_LIMIT, scopeUserId, today, viewer);
   /**
    * F-05 (2026-09-02 review, v1.31.0). What the household has RECORDED as recurring billing --
@@ -243,39 +285,43 @@ export default async function DashboardPage({
   const spendPlan = safeToSpend({ month, today, viewer });
   const householdTotals = selfScoped ? totals : scopeUserId === null ? totals : budgetTotals(budgetProgress(month));
 
-  // monthCashflow (above) is the SAME query cashflowTrend always was, just no longer read off
-  // the 12-month `trend` -- ruling T7 pinned that one to today, so a viewed month outside its
-  // trailing-12 window would otherwise silently zero out these two tiles.
+  // monthCashflow (above) is the SAME query cashflowTrend always was -- read off the 12-month
+  // `trend` when the viewed month is inside it, and on its own otherwise, since ruling T7 pinned
+  // the chart to today and a month outside its window would silently zero out these tiles.
   const incomeCents = monthCashflow?.incomeCents ?? 0;
+  // v1.60.0 item 2: money in with no category yet. Net counts it; Money in and Spent do not, so
+  // the Money in tile names it and the three tiles still reconcile on screen.
+  const uncategorizedInCents = monthCashflow?.uncategorizedInCents ?? 0;
 
   /**
-   * Item 4 (2026-08-30 plan): "Spent this month" now counts EVERYTHING cashflowTrend counts --
-   * every non-income, non-transfer row (uncategorized included), minus item 8a's loan-principal
-   * exclusions -- the same source Money in/Net already read, so the three headline tiles
-   * reconcile on their face: Money in - Spent = Net, always. Before this, the tile read
-   * `totals.totalSpentCents` (budgetProgress, CATEGORIZED rows only), which could -- and on the
-   * a real reported case, did -- disagree with Net by exactly the amount of uncategorized
-   * spend. `totals.totalSpentCents` keeps its home in this tile's own hint and the progress bar
-   * below it, where a budget-relative comparison belongs; it is not deleted, only demoted.
+   * Item 4 (2026-08-30 plan): "Spent this month" counts EVERYTHING cashflowTrend counts as
+   * spending -- categorized rows net of their refunds, and uncategorized money out in full, minus
+   * item 8a's loan-principal exclusions -- the same source Money in/Net already read, so the
+   * headline tiles reconcile on their face: Money in + uncategorized money in - Spent = Net.
+   * Before this, the tile read `totals.totalSpentCents` (budgetProgress, CATEGORIZED rows only),
+   * which could -- and on a real reported case, did -- disagree with Net by exactly the amount of
+   * uncategorized spend. `totals.totalSpentCents` keeps its home in this tile's own hint and the
+   * progress bar below it, where a budget-relative comparison belongs.
    */
   const spentCents = monthCashflow?.spendCents ?? 0;
   const prevSpentCents = prevMonthCashflow?.spendCents ?? 0;
-  const netCents = monthCashflow?.netCents ?? incomeCents - spentCents;
+  const netCents = monthCashflow?.netCents ?? incomeCents + uncategorizedInCents - spentCents;
 
   /**
    * Item 4: the gap between "everything spent" (spentCents, above) and "spend that has a
-   * category" (totals.totalSpentCents) is uncategorized spend -- but it is read directly off
-   * categoryBreakdown's own null-category bucket rather than diffed between those two numbers.
-   * A diff would also include item 8a's loan-principal exclusions the moment a CATEGORIZED
-   * transaction happens to be a loan link (assigning to a loan never touches category_id, so a
-   * previously-categorized row can do exactly this) -- a real gap, but a different one, and
-   * mislabelling it "not categorized yet" would send someone to the review queue to fix a row
-   * that was never uncategorized in the first place.
+   * category" (totals.totalSpentCents) is uncategorized money out. v1.60.0 item 2: read from
+   * Budgets' own Not categorized yet figure (`uncategorizedSpend`, money out only, decision 9),
+   * the same definition Spent now counts, rather than a net of every uncategorized row, which
+   * let a deposit with no category shrink it. Never a diff of the two totals either: that would
+   * also include item 8a's loan-principal exclusions the moment a CATEGORIZED transaction is a
+   * loan link -- a real gap, but a different one, and mislabelling it "not categorized yet" would
+   * send someone to the review queue to fix a row that was never uncategorized.
    */
-  const uncategorizedSpentCents =
-    categoryBreakdown({ from: monthStart(month), to: monthEnd(month), attributedUserId: scopeUserId }, viewer).find(
-      (row) => row.categoryId === null,
-    )?.spentCents ?? 0;
+  const uncategorizedSpentCents = uncategorizedSpend(
+    month,
+    scopeUserId === null ? { scope: 'household', attributedUserId: null } : { scope: 'personal', attributedUserId: scopeUserId },
+    viewer,
+  ).totalCents;
 
   const budgetRows = rows.filter((row) => !row.isIncome && (row.limitCents !== null || row.spentCents !== 0));
   /** Of the rows this page actually draws -- see the budgets CardHeader below for why it says this. */
@@ -504,8 +550,8 @@ export default async function DashboardPage({
           // compares the SAME figure the tile displays (spentCents/prevSpentCents), not the
           // budget-relative totalSpentCents pair -- a "+12% vs last month" describing a different
           // number than the one shown above it would be its own version of this item's original
-          // defect.
-          {...deltaProps(spentCents, prevSpentCents, false)}
+          // defect. v1.60.0 item 4: and over the same stretch of days, which the label names.
+          {...deltaProps(spentCents, prevSpentCents, false, comparisonLabel)}
           footer={
             totals.budgetedLimitCents > 0 ? (
               <ProgressBar
@@ -531,8 +577,20 @@ export default async function DashboardPage({
           label="Money in"
           value={formatCents(incomeCents)}
           tone="positive"
-          hint="Transfers excluded"
-          {...deltaProps(incomeCents, prevMonthCashflow?.incomeCents ?? 0, true)}
+          hint={
+            <>
+              Transfers excluded
+              {/* v1.60.0 item 2: money in with no category is in neither this figure nor Spent,
+                  but Net counts it -- so it is named here, quietly, and the three still add up. */}
+              {uncategorizedInCents > 0 ? (
+                <>
+                  <br />
+                  <span>{`plus ${formatCents(uncategorizedInCents)} not categorized yet`}</span>
+                </>
+              ) : null}
+            </>
+          }
+          {...deltaProps(incomeCents, prevMonthCashflow?.incomeCents ?? 0, true, comparisonLabel)}
         />
         <StatTile
           label="Net this month"
@@ -565,8 +623,10 @@ export default async function DashboardPage({
             // (cashflowTrend(1, ...) always returns exactly one row), kept only so a delta
             // computed from a hypothetically-missing monthCashflow point could never describe a
             // different number than the tile itself would then be showing.
-            prevMonthCashflow?.netCents ?? (prevMonthCashflow?.incomeCents ?? 0) - prevSpentCents,
+            prevMonthCashflow?.netCents ??
+              (prevMonthCashflow?.incomeCents ?? 0) + (prevMonthCashflow?.uncategorizedInCents ?? 0) - prevSpentCents,
             true,
+            comparisonLabel,
           )}
         />
         {/* Task 7: self-hiding, in the manner of LoansCard -- rendered unconditionally, absent
@@ -607,13 +667,19 @@ export default async function DashboardPage({
             hint={
               <>
                 {netWorthHint(netWorthLatest)}
+                {/* v1.60.0 item 8: Settings is admin-only (requireAdmin), so a member is told who
+                    can record the balance rather than sent to a page that bounces them. */}
                 {netWorthLatest.accountsMissing > 0 ? (
-                  <>
-                    {' '}
-                    <Link href="/settings/accounts" className="underline hover:text-ink">
-                      Update in Settings and Accounts
-                    </Link>
-                  </>
+                  viewer.role === 'admin' ? (
+                    <>
+                      {' '}
+                      <Link href="/settings/accounts" className="underline hover:text-ink">
+                        Update in Settings and Accounts
+                      </Link>
+                    </>
+                  ) : (
+                    ` · an admin can record ${netWorthLatest.accountsMissing === 1 ? 'it' : 'them'} in Settings`
+                  )
                 ) : null}
                 {!isCurrentMonth ? ' · as of today' : ''}
               </>
@@ -771,15 +837,30 @@ export default async function DashboardPage({
                     (tests/ops/onboarding-coverage.test.ts) requires a real action on every
                     EmptyState; the honest next step for "nothing spent yet" is the same one the
                     sentence already names -- go import a statement. */}
-                <EmptyState
-                  size="compact"
-                  title="Nothing spent yet this month. Import a statement and the categories will fill in here."
-                  action={
-                    <Link href="/import" className={buttonClass('secondary', 'sm')}>
-                      Import a statement
-                    </Link>
-                  }
-                />
+                {/* v1.60.0 item 8: /import sends a self viewer straight back here, so they are
+                    offered what they can do -- add a transaction by hand, on Transactions' own
+                    open quick-add form -- rather than a button that bounces them. */}
+                {selfScoped ? (
+                  <EmptyState
+                    size="compact"
+                    title="Nothing spent yet this month. Add a transaction and the categories will fill in here."
+                    action={
+                      <Link href={SELF_ADD_HREF} className={buttonClass('secondary', 'sm')}>
+                        Add a transaction
+                      </Link>
+                    }
+                  />
+                ) : (
+                  <EmptyState
+                    size="compact"
+                    title="Nothing spent yet this month. Import a statement and the categories will fill in here."
+                    action={
+                      <Link href="/import" className={buttonClass('secondary', 'sm')}>
+                        Import a statement
+                      </Link>
+                    }
+                  />
+                )}
               </CardBody>
             ) : (
               <TableWrap bare className="border-t border-line" responsive>
@@ -879,13 +960,20 @@ export default async function DashboardPage({
               // Item 5: a chart with nothing plotted on it is not a chart, it is an empty
               // rectangle -- the same "go import a statement" action every other empty first-run
               // card on this page already offers (Guard 1: tests/ops/onboarding-coverage.test.ts).
+              // v1.60.0 item 8: same split as the budgets card above.
               <EmptyState
                 size="compact"
                 title="No transactions yet to chart."
                 action={
-                  <Link href="/import" className={buttonClass('secondary', 'sm')}>
-                    Import a statement
-                  </Link>
+                  selfScoped ? (
+                    <Link href={SELF_ADD_HREF} className={buttonClass('secondary', 'sm')}>
+                      Add a transaction
+                    </Link>
+                  ) : (
+                    <Link href="/import" className={buttonClass('secondary', 'sm')}>
+                      Import a statement
+                    </Link>
+                  )
                 }
               />
             ) : (

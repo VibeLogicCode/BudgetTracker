@@ -15,7 +15,11 @@ import { createWarrantyItem } from '@/lib/warranty/items';
 import { createItemType } from '@/lib/warranty/types';
 import { addDaysIso, addMonths, currentMonth, monthEnd, monthLabel, monthStart, todayIso } from '@/lib/dates';
 // Lane 1 (src/lib/savings-target.ts): not mocked, real DB, same as every other lib import here.
-import { saveSavingsTarget } from '@/lib/savings-target';
+import { saveSavingsTarget, savingsProgress } from '@/lib/savings-target';
+import { formatCents } from '@/lib/money';
+import { cashflowTrend } from '@/lib/reports';
+import { cashRunway } from '@/lib/runway';
+import { setTransactionSplits } from '@/lib/splits';
 import { createTestDb, type TestDb } from '../helpers/db';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -1776,7 +1780,8 @@ describe('DashboardPage — the stat tiles say one thing each', () => {
   it('never prints an unreadable percentage', async () => {
     await household();
     const { container } = await dash();
-    const absurd = [...(container.textContent ?? '').matchAll(/([-+]?\d+(?:\.\d+)?)%\s+vs last month/g)]
+    // v1.60.0 item 4: the comparison names its window ("vs Feb 1-18"), so any "vs" counts.
+    const absurd = [...(container.textContent ?? '').matchAll(/([-+]?\d+(?:\.\d+)?)%\s+vs /g)]
       .map((m) => Math.abs(Number(m[1])))
       .filter((pct) => pct > 300);
     expect(absurd).toEqual([]);
@@ -2005,5 +2010,252 @@ describe('DashboardPage — Coming up lists expected recurring charges', () => {
     const inCard = within(card);
     expect(inCard.getByText('MAPLE STREAMING')).toBeTruthy();
     expect(inCard.getByText('Expected')).toBeTruthy();
+  });
+});
+
+/**
+ * v1.60.0 (trust the numbers), Lane B. The headline figures: uncategorized money in (item 2), a
+ * like-for-like "vs" window (item 4), no link that bounces the viewer (item 8), and each cashflow
+ * read done once (item 13c) with every figure unchanged. Date is pinned to 2026-03-18 for the
+ * whole file; the March 31 case moves it and puts it back.
+ */
+describe('DashboardPage — v1.60.0: the money figures', () => {
+  let t: TestDb | null = null;
+  const PINNED = new Date('2026-03-18T16:00:00.000Z');
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+    vi.setSystemTime(PINNED);
+  });
+
+  async function household() {
+    t = createTestDb();
+    const alex = await createUser({ name: 'Alex', username: 'alex', password: 'correct horse battery', role: 'admin' });
+    const sam = await createUser({ name: 'Sam', username: 'sam', password: 'correct horse battery', role: 'member' });
+    const accountId = createAccount({ name: 'Chequing', type: 'chequing', ownerUserId: alex.id });
+    const salary = createCategory({ name: 'Salary', parentId: null, isIncome: true });
+    const groceries = createCategory({ name: 'Groceries', parentId: null });
+    const gas = createCategory({ name: 'Gas', parentId: null });
+    const add = (date: string, amountCents: number, categoryId: number | null, person: number = alex.id, description = 'MAPLE GROCER') =>
+      createManualTransaction({ accountId, date, description, amountCents, categoryId, attributedUserId: person, userId: alex.id, actorRole: 'admin' });
+    return { alex, sam, accountId, salary, groceries, gas, add };
+  }
+
+  const signIn = (user: { id: number; name: string; username: string }, role: 'admin' | 'member', visibility: 'household' | 'self') => {
+    currentUser.value = { id: user.id, name: user.name, username: user.username, role, visibility };
+  };
+  const dash = async (params: Record<string, string> = {}) =>
+    render(await (await import('@/app/(app)/dashboard/page')).default({ searchParams: Promise.resolve(params) }));
+  const tile = (label: string) => screen.getByText(label).closest('div') as HTMLElement;
+
+  describe('item 2: uncategorized money in never lowers Spent', () => {
+    it('names it under Money in, and Money in, Spent and Net still add up', async () => {
+      const { alex, salary, groceries, add } = await household();
+      add('2026-03-01', 100_000, salary, alex.id, 'PAYROLL');
+      add('2026-03-04', -8_000, null);
+      add('2026-03-06', 2_500, null);
+      add('2026-03-08', -4_000, groceries);
+      add('2026-03-09', 1_000, groceries);
+      signIn(alex, 'admin', 'household');
+      await dash();
+
+      // 80.00 uncategorized out + 40.00 groceries - 10.00 refund. The 25.00 credit no longer nets.
+      expect(tile('Spent this month').textContent).toContain('$110.00');
+      expect(screen.getByText('$80.00 not categorized yet').closest('a')?.getAttribute('href')).toBe('/transactions?review=1');
+      const moneyIn = tile('Money in');
+      expect(moneyIn.textContent).toContain('$1,000.00');
+      expect(within(moneyIn).getByText('plus $25.00 not categorized yet')).toBeTruthy();
+      // 1,000.00 + 25.00 - 110.00, the same Net v1.59.1 showed.
+      expect(tile('Net this month').textContent).toContain('+$915.00');
+    });
+
+    it('adds no line when no uncategorized money came in', async () => {
+      const { alex, salary, groceries, add } = await household();
+      add('2026-03-01', 100_000, salary, alex.id, 'PAYROLL');
+      add('2026-03-08', -4_000, groceries);
+      signIn(alex, 'admin', 'household');
+      await dash();
+      expect(tile('Money in').textContent).not.toMatch(/not categorized yet/);
+    });
+  });
+
+  describe('item 4: "vs" compares like with like', () => {
+    it('on March 18 compares March 1-18 with Feb 1-18, and says so', async () => {
+      const { alex, salary, groceries, add } = await household();
+      add('2026-02-10', -10_000, groceries);
+      add('2026-02-12', 50_000, salary, alex.id, 'PAYROLL');
+      // After Feb 18: outside the window, so a whole February cannot swamp eighteen days of March.
+      add('2026-02-25', -90_000, groceries);
+      add('2026-02-26', 200_000, salary, alex.id, 'PAYROLL');
+      add('2026-03-05', -11_000, groceries);
+      add('2026-03-12', 55_000, salary, alex.id, 'PAYROLL');
+      signIn(alex, 'admin', 'household');
+      await dash();
+
+      for (const label of ['Spent this month', 'Money in', 'Net this month']) {
+        expect(tile(label).textContent).toContain('+10.0% vs Feb 1-18');
+        expect(tile(label).textContent).not.toContain('vs last month');
+      }
+    });
+
+    it('on March 31 the window is the whole of February, Feb 1-28', async () => {
+      vi.setSystemTime(new Date('2026-03-31T16:00:00.000Z'));
+      const { alex, groceries, add } = await household();
+      add('2026-02-10', -10_000, groceries);
+      add('2026-02-27', -10_000, groceries);
+      add('2026-03-30', -22_000, groceries);
+      signIn(alex, 'admin', 'household');
+      await dash();
+      expect(tile('Spent this month').textContent).toContain('+10.0% vs Feb 1-28');
+    });
+
+    it('a viewed past month is complete, so it keeps the whole month before and "last month"', async () => {
+      const { alex, groceries, add } = await household();
+      add('2026-01-25', -10_000, groceries);
+      add('2026-02-25', -11_000, groceries);
+      signIn(alex, 'admin', 'household');
+      await dash({ month: '2026-02' });
+      expect(tile('Spent this month').textContent).toContain('+10.0% vs last month');
+    });
+  });
+
+  describe('item 13c: each cashflow read once, every figure unchanged', () => {
+    /** Transfers, a split, refunds, uncategorized rows both ways and two people, Dec-Mar. */
+    async function mixed() {
+      const ctx = await household();
+      const { alex, sam, salary, groceries, gas, add } = ctx;
+      for (const month of ['2025-12', '2026-01', '2026-02', '2026-03']) {
+        add(`${month}-01`, 400_000, salary, alex.id, 'PAYROLL');
+        add(`${month}-04`, -95_000, groceries, sam.id);
+        add(`${month}-06`, 4_000, groceries, sam.id);
+        add(`${month}-09`, -21_000, null, alex.id, 'FUEL STOP 12');
+        add(`${month}-11`, 6_500, null, sam.id, 'E-TRANSFER');
+        const transfer = add(`${month}-13`, -150_000, null, alex.id, 'TO SAVINGS');
+        t!.db.run(sql`update transactions set is_transfer = 1 where id = ${transfer}`);
+        const split = add(`${month}-15`, -30_000, groceries, alex.id);
+        setTransactionSplits({
+          txnId: split,
+          parts: [
+            { categoryId: groceries, amountCents: -18_000 },
+            { categoryId: gas, amountCents: -12_000 },
+          ],
+          userId: alex.id,
+        });
+      }
+      recordBalanceSnapshot({ accountId: ctx.accountId, date: '2026-03-18', balanceCents: 900_000, source: 'manual' });
+      saveSavingsTarget({ month: '2026-03', mode: 'amount', value: 200_000 });
+      return ctx;
+    }
+
+    /** Cashflow queries prepared during `run` -- the grouped month-by-income read, old shape or new. */
+    async function cashflowReads(run: () => Promise<unknown>): Promise<number> {
+      const sqlite = t!.sqlite;
+      const original = sqlite.prepare.bind(sqlite);
+      let count = 0;
+      const spy = vi.spyOn(sqlite, 'prepare').mockImplementation(((text: string) => {
+        if (/group by substr\("transactions"\."date", 1, 7\), (?:case\s+when )?"categories"\."is_income"/.test(text)) count += 1;
+        return original(text);
+      }) as TestDb['sqlite']['prepare']);
+      try {
+        await run();
+      } finally {
+        spy.mockRestore();
+      }
+      return count;
+    }
+
+    it('on the Household pill reads the trend and the comparison window only (v1.59.1 read five)', async () => {
+      const { alex } = await mixed();
+      signIn(alex, 'admin', 'household');
+      // Trend, month, last month, savingsProgress and cashRunway each read their own before.
+      expect(await cashflowReads(() => dash())).toBe(2);
+    });
+
+    it('shows the figures savingsProgress, cashRunway and a one-month cashflowTrend give on their own', async () => {
+      const { alex } = await mixed();
+      const viewer = { id: alex.id, role: 'admin' as const, visibility: 'household' as const };
+      signIn(alex, 'admin', 'household');
+      await dash();
+
+      const month = cashflowTrend(1, { endMonth: '2026-03' }, viewer)[0];
+      expect(tile('Spent this month').textContent).toContain(formatCents(month.spendCents));
+      expect(tile('Money in').textContent).toContain(formatCents(month.incomeCents));
+      expect(tile('Net this month').textContent).toContain(formatCents(month.netCents, { showSign: true }));
+      const progress = savingsProgress('2026-03', viewer);
+      expect(tile('Saved this month').textContent).toContain(`${formatCents(progress.netCents)} of ${formatCents(progress.targetCents!)} target`);
+      const runway = cashRunway({ today: '2026-03-18' }, viewer);
+      expect(runway.avgMonthlySpendCents).toBeGreaterThan(0);
+      expect(tile('Cash runway').textContent).toContain(`${formatCents(runway.avgMonthlySpendCents)} average monthly spend`);
+      expect(tile('Cash runway').textContent).toContain(`${runway.months!.toFixed(1)} months covered`);
+    });
+
+    it("a person pill shows that person's month and still the household's savings and runway", async () => {
+      const { alex, sam } = await mixed();
+      const viewer = { id: alex.id, role: 'admin' as const, visibility: 'household' as const };
+      signIn(alex, 'admin', 'household');
+      await dash({ person: String(sam.id) });
+
+      const month = cashflowTrend(1, { endMonth: '2026-03', attributedUserId: sam.id }, viewer)[0];
+      expect(tile('Spent this month').textContent).toContain(formatCents(month.spendCents));
+      expect(tile('Net this month').textContent).toContain(formatCents(month.netCents, { showSign: true }));
+      const progress = savingsProgress('2026-03', viewer);
+      expect(tile('Saved this month').textContent).toContain(`${formatCents(progress.netCents)} of ${formatCents(progress.targetCents!)} target`);
+      expect(tile('Cash runway').textContent).toContain(`${formatCents(cashRunway({ today: '2026-03-18' }, viewer).avgMonthlySpendCents)} average monthly spend`);
+    });
+
+    it('a self viewer sees their own month, whatever the URL asks for, and no household tile', async () => {
+      const { alex, sam } = await mixed();
+      const samSelf = { id: sam.id, role: 'member' as const, visibility: 'self' as const };
+      signIn(sam, 'member', 'self');
+      await dash({ person: String(alex.id) });
+
+      const month = cashflowTrend(1, { endMonth: '2026-03' }, samSelf)[0];
+      expect(tile('Spent this month').textContent).toContain(formatCents(month.spendCents));
+      expect(tile('Money in').textContent).toContain(`plus ${formatCents(month.uncategorizedInCents)} not categorized yet`);
+      expect(tile('Net this month').textContent).toContain(formatCents(month.netCents, { showSign: true }));
+      expect(screen.queryByText('Saved this month')).toBeNull();
+      expect(screen.queryByText('Cash runway')).toBeNull();
+    });
+  });
+
+  describe('item 8: no link to a page that bounces the viewer', () => {
+    const hrefs = (container: HTMLElement) => [...container.querySelectorAll('a')].map((a) => a.getAttribute('href') ?? '');
+
+    it('a self viewer is offered Add a transaction, never Import or Settings', async () => {
+      const { sam } = await household();
+      createAccount({ name: 'Sam cash', type: 'cash', ownerUserId: sam.id });
+      signIn(sam, 'member', 'self');
+      const { container } = await dash();
+
+      expect(hrefs(container).filter((href) => href.startsWith('/import') || href.startsWith('/settings'))).toEqual([]);
+      // The budgets card and the cashflow card, both empty.
+      const adds = screen.getAllByRole('link', { name: 'Add a transaction' });
+      expect(adds.map((link) => link.getAttribute('href'))).toEqual(['/transactions#quick-add', '/transactions#quick-add']);
+      expect(screen.getByText('Nothing spent yet this month. Add a transaction and the categories will fill in here.')).toBeTruthy();
+    });
+
+    it('a member who is not an admin is told who records a missing balance, with no Settings link', async () => {
+      const { alex, sam, accountId } = await household();
+      recordBalanceSnapshot({ accountId, date: '2026-03-18', balanceCents: 500_000, source: 'manual' });
+      createAccount({ name: 'Travel Visa', type: 'credit', ownerUserId: alex.id });
+      signIn(sam, 'member', 'household');
+      const { container } = await dash();
+
+      expect(tile('Net worth').textContent).toContain('an admin can record it in Settings');
+      expect(hrefs(container).filter((href) => href.startsWith('/settings'))).toEqual([]);
+      // A household member can import, so those stay.
+      expect(hrefs(container)).toContain('/import');
+    });
+
+    it('an admin keeps every link', async () => {
+      const { alex, accountId } = await household();
+      recordBalanceSnapshot({ accountId, date: '2026-03-18', balanceCents: 500_000, source: 'manual' });
+      createAccount({ name: 'Travel Visa', type: 'credit', ownerUserId: alex.id });
+      signIn(alex, 'admin', 'household');
+      const { container } = await dash();
+      expect(hrefs(container)).toContain('/settings/accounts');
+      expect(hrefs(container)).toContain('/import');
+      expect(screen.queryByRole('link', { name: 'Add a transaction' })).toBeNull();
+    });
   });
 });
