@@ -21,6 +21,17 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.60.1] - 2026-11-12
+
+### Security
+
+- zod 4.6.7 for an open advisory. Forms and imports accept the same input and show the same messages
+  as before; schemas now go through one shared module.
+
+### Fixed
+
+- A few error messages that showed a block of technical detail now show one plain sentence.
+
 ## [1.60.0] - 2026-11-12
 
 Migration 0030. Accounts closed before this release get a closing date of the day after their last
