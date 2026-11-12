@@ -6,7 +6,8 @@ import { createSeededTestDb, insertTestUser, type TestDb } from '../../helpers/d
 import { createAccount } from '@/lib/accounts';
 import { getBuiltinPreset, getProfileByName, listProfiles } from '@/lib/import/presets';
 import { stagedFilePath, writeStagedFile } from '@/lib/import/staging';
-import { ImportLimitError, MAX_FILE_BYTES } from '@/lib/import/parse';
+import { ImportLimitError, MAX_FILE_BYTES, parseCsv } from '@/lib/import/parse';
+import { computeRowHashes } from '@/lib/import/dedup';
 
 const fixture = (name: string) => fs.readFileSync(path.join(process.cwd(), 'fixtures', name));
 
@@ -259,5 +260,98 @@ describe('commitStagedImport - OFX without a profile', () => {
     );
     expect((sqlite.prepare('select count(*) as c from imports').get() as { c: number }).c).toBe(0);
     expect(fs.existsSync(stagedFilePath(stagingId))).toBe(true);
+  });
+});
+
+/**
+ * v1.61.0 item 1c. commitStagedImport tells commitImport the road (`ofx` or `csv`) and hands it
+ * the preview's Leave out choices by key; it reports what was left out and what was held.
+ */
+describe('commitStagedImport - possible duplicates (v1.61.0)', () => {
+  function withTypedRow() {
+    const ids = setup();
+    // Typed by hand on 2026-03-09; the statement row below says 2026-03-10.
+    ids.sqlite
+      .prepare(
+        `insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, origin, created_by, created_at, updated_at)
+         values (?, '2026-03-09', 'MAPLE GROCER', 'MAPLE GROCER', -4217, 'manual', ?, '2026-03-09T12:00:00.000Z', '2026-03-09T12:00:00.000Z')`,
+      )
+      .run(ids.accountId, ids.userId);
+    const csv = Buffer.from('2026-03-10,MAPLE GROCER,42.17,,\n2026-03-11,CORNER BAKERY,8.25,,\n', 'utf8');
+    const key = computeRowHashes(ids.accountId, parseCsv(csv, getBuiltinPreset('TD Chequing/Debit')).rows)[0]!.dedupHash;
+    return { ...ids, csv, key };
+  }
+
+  const count = (sqlite: TestDb['sqlite'], sql: string) => (sqlite.prepare(sql).get() as { c: number }).c;
+
+  it('leaves out a row the preview ticked', () => {
+    const { sqlite, userId, accountId, profileId, csv, key } = withTypedRow();
+    const result = commitStagedImport({
+      stagingId: writeStagedFile(csv),
+      filename: 'march.csv',
+      accountId,
+      profileId,
+      mapping: getBuiltinPreset('TD Chequing/Debit'),
+      userId,
+      rowDecisions: [{ key, action: 'skip' }],
+    });
+    expect(result).toMatchObject({ rowsAdded: 1, rowsSetAside: 1, rowsHeld: 0 });
+    expect(count(sqlite, `select count(*) as c from transactions where amount_cents = -4217`)).toBe(1);
+    expect(count(sqlite, `select count(*) as c from set_aside_rows where state = 'dismissed'`)).toBe(1);
+  });
+
+  it('imports a row the preview unticked', () => {
+    const { sqlite, userId, accountId, profileId, csv, key } = withTypedRow();
+    const result = commitStagedImport({
+      stagingId: writeStagedFile(csv),
+      filename: 'march.csv',
+      accountId,
+      profileId,
+      mapping: getBuiltinPreset('TD Chequing/Debit'),
+      userId,
+      rowDecisions: [{ key, action: 'import' }],
+    });
+    expect(result).toMatchObject({ rowsAdded: 2, rowsSetAside: 0, rowsHeld: 0 });
+    expect(count(sqlite, `select count(*) as c from transactions where amount_cents = -4217`)).toBe(2);
+  });
+
+  it('holds a possible duplicate nobody decided on, and counts it nowhere', () => {
+    const { sqlite, userId, accountId, profileId, csv } = withTypedRow();
+    const result = commitStagedImport({
+      stagingId: writeStagedFile(csv),
+      filename: 'march.csv',
+      accountId,
+      profileId,
+      mapping: getBuiltinPreset('TD Chequing/Debit'),
+      userId,
+    });
+    expect(result).toMatchObject({ rowsAdded: 1, rowsSetAside: 0, rowsHeld: 1 });
+    expect(count(sqlite, `select count(*) as c from transactions where amount_cents = -4217`)).toBe(1);
+    expect(count(sqlite, `select count(*) as c from set_aside_rows where state = 'waiting' and origin = 'csv'`)).toBe(1);
+  });
+
+  it('stores origin ofx for a QFX file and csv for a CSV', () => {
+    const { sqlite, userId, accountId, profileId } = setup();
+    const qfx = [
+      'OFXHEADER:100',
+      'DATA:OFXSGML',
+      '',
+      '<OFX><BANKMSGSRSV1><STMTTRNRS><STMTRS><CURDEF>CAD<BANKTRANLIST>',
+      '<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20260403120000<TRNAMT>-18.40<FITID>FIT-0400<NAME>CORNER BAKERY</STMTTRN>',
+      '</BANKTRANLIST></STMTRS></STMTTRNRS></BANKMSGSRSV1></OFX>',
+    ].join('\n');
+    commitStagedImport({ stagingId: writeStagedFile(Buffer.from(qfx, 'utf8')), filename: 'april.qfx', accountId, profileId: null, mapping: null, userId });
+    commitStagedImport({
+      stagingId: writeStagedFile(fixture('td-chequing.csv')),
+      filename: 'march.csv',
+      accountId,
+      profileId,
+      mapping: getBuiltinPreset('TD Chequing/Debit'),
+      userId,
+    });
+    expect(sqlite.prepare(`select origin, count(*) as c from transactions group by origin order by origin`).all()).toEqual([
+      { origin: 'csv', c: 9 },
+      { origin: 'ofx', c: 1 },
+    ]);
   });
 });

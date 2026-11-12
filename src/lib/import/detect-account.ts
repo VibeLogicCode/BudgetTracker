@@ -3,6 +3,7 @@ import { getDb } from '@/db/client';
 import { imports } from '@/db/schema';
 import { computeRowHashes, findExistingByExternalIds, findExistingByHashes } from './dedup';
 import type { CandidateRow } from './parse';
+import { findSetAsideByKeys } from './set-aside';
 
 /** One account the import page is willing to land rows in: active, and of a type that takes them. */
 export interface AccountCandidate {
@@ -131,6 +132,11 @@ function decide(input: {
  * Provider ids are checked alongside, for the same reason buildPreview checks both: an OFX row
  * commits with dedup_hash NULL and its FITID in external_id, so a hash lookup alone would report
  * an already-imported OFX statement as matching nothing anywhere.
+ *
+ * v1.61.0. A row this account set aside (set_aside_rows: deleted after an import, left out as a
+ * duplicate, or waiting in Needs review) counts too. The account has seen it, and importing the
+ * file again would not add it, so a fully imported statement with one row since deleted still
+ * reads as already imported, and still points at this account.
  */
 function overlapCount(accountId: number, rows: CandidateRow[]): number {
   if (rows.length === 0) return 0;
@@ -143,10 +149,13 @@ function overlapCount(accountId: number, rows: CandidateRow[]): number {
     .map((row) => row.externalId ?? null)
     .filter((value): value is string => value !== null && value.length > 0);
   const byExternalId = findExistingByExternalIds(accountId, externalIds);
-  return hashed.filter(
-    (row) =>
-      byHash.has(row.dedupHash) || (row.externalId !== null && row.externalId !== undefined && byExternalId.has(row.externalId)),
-  ).length;
+  const held = (row: (typeof hashed)[number]) =>
+    byHash.has(row.dedupHash) || (row.externalId !== null && row.externalId !== undefined && byExternalId.has(row.externalId));
+  // The key commitImport stores a row under: a provider id ('' is none) wins over the hash.
+  const keyOf = (row: (typeof hashed)[number]) => row.externalId || row.dedupHash;
+  const rest = hashed.filter((row) => !held(row));
+  const setAside = rest.length === 0 ? new Map() : findSetAsideByKeys(accountId, rest.map(keyOf));
+  return hashed.length - rest.length + rest.filter((row) => setAside.has(keyOf(row))).length;
 }
 
 /** The newest import of a file with exactly this name, if it landed in an account still on offer. */

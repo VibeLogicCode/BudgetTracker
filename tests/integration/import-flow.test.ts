@@ -11,6 +11,7 @@ import { BUILTIN_PRESET_NAMES, getBuiltinPreset, getProfileByName, listProfiles 
 import { listImportHistory, previewUndoImport, undoImport } from '@/lib/import/commit';
 import { confirmCategory, reviewQueueCount } from '@/lib/categorize/engine';
 import { getVocabSize } from '@/lib/categorize/bayes';
+import { createManualTransaction } from '@/lib/transactions';
 
 const fixture = (name: string) => fs.readFileSync(path.join(process.cwd(), 'fixtures', name));
 
@@ -157,5 +158,109 @@ describe('the Amex fixture end to end', () => {
     }[];
     expect(rows.map((r) => r.amount_cents)).toEqual([-1875, -4420, 35000, -660, 5999, -2745]);
     expect(rows[2].is_transfer).toBe(1); // AMEX PAYMENT RECEIVED - THANK YOU
+  });
+});
+
+/**
+ * v1.61.0 item 1e. The same purchase arriving by two roads is counted once: the preview lists the
+ * overlap with Leave out ticked, the commit honours it, and undoing the second import never takes
+ * a row the first one brought in.
+ */
+describe('the same purchase by two roads (v1.61.0)', () => {
+  const TD = () => getBuiltinPreset('TD Chequing/Debit');
+  /** What the import screen posts when nobody touches a box. */
+  const defaults = (preview: ReturnType<typeof buildPreview>) =>
+    preview.setAside
+      .filter((row) => row.decidable)
+      .map((row) => ({ key: row.key, action: row.defaultSkip ? ('skip' as const) : ('import' as const) }));
+  const amounts = (sqlite: TestDb['sqlite'], accountId: number) =>
+    (sqlite.prepare('select date, amount_cents as a from transactions where account_id = ? order by date, id').all(accountId) as {
+      date: string;
+      a: number;
+    }[]).map((row) => `${row.date} ${row.a}`);
+
+  it('a quick-added purchase and the statement row for it end as one row', () => {
+    const { sqlite, accountId, profileId } = setup();
+    const alex = insertTestUser(current!.db, { name: 'Alex', username: 'alex' });
+    createManualTransaction({
+      accountId,
+      date: '2026-03-09',
+      description: 'MAPLE GROCER',
+      amountCents: -4217,
+      categoryId: null,
+      attributedUserId: alex,
+      userId: alex,
+      actorRole: 'admin',
+    });
+    const csv = Buffer.from('2026-03-10,MAPLE GROCER #12,42.17,,\n2026-03-11,CORNER BAKERY,8.25,,\n', 'utf8');
+    const stagingId = writeStagedFile(csv);
+
+    const preview = buildPreview({ stagingId, filename: 'march.csv', accountId, profileId, mapping: TD() });
+    expect(preview.setAside).toEqual([
+      expect.objectContaining({
+        date: '2026-03-10',
+        kind: 'possible_duplicate',
+        defaultSkip: true,
+        candidates: [expect.objectContaining({ date: '2026-03-09', amountCents: -4217, origin: 'manual', personName: 'Alex' })],
+      }),
+    ]);
+
+    const result = commitStagedImport({ stagingId, filename: 'march.csv', accountId, profileId, mapping: TD(), userId: alex, rowDecisions: defaults(preview) });
+
+    expect(result).toMatchObject({ rowsAdded: 1, rowsDuplicate: 0, rowsSetAside: 1, rowsHeld: 0 });
+    expect(amounts(sqlite, accountId)).toEqual(['2026-03-09 -4217', '2026-03-11 -825']);
+  });
+
+  it('a QFX overlapping a March CSV adds only April, and undoing it keeps every March row', () => {
+    const { sqlite, userId, accountId, profileId } = setup();
+    const march = Buffer.from(
+      [
+        '2026-03-03,MAPLE GROCER,42.17,,',
+        '2026-03-16,FUEL STOP 12,61.30,,',
+        '2026-03-22,CORNER BAKERY,8.25,,',
+        '2026-03-28,MAPLE GROCER,55.10,,',
+      ].join('\n'),
+      'utf8',
+    );
+    commitStagedImport({ stagingId: writeStagedFile(march), filename: 'march.csv', accountId, profileId, mapping: TD(), userId });
+    const marchRows = amounts(sqlite, accountId);
+    expect(marchRows).toHaveLength(4);
+
+    const qfx = [
+      'OFXHEADER:100',
+      'DATA:OFXSGML',
+      '',
+      '<OFX><BANKMSGSRSV1><STMTTRNRS><STMTRS><CURDEF>CAD<BANKTRANLIST>',
+      '<DTSTART>20260315<DTEND>20260415',
+      '<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20260316120000<TRNAMT>-61.30<FITID>FIT-0316<NAME>FUEL STOP 12</STMTTRN>',
+      '<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20260322120000<TRNAMT>-8.25<FITID>FIT-0322<NAME>CORNER BAKERY</STMTTRN>',
+      '<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20260328120000<TRNAMT>-55.10<FITID>FIT-0328<NAME>MAPLE GROCER</STMTTRN>',
+      '<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20260404120000<TRNAMT>-38.90<FITID>FIT-0404<NAME>MAPLE GROCER</STMTTRN>',
+      '<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20260412120000<TRNAMT>-58.75<FITID>FIT-0412<NAME>FUEL STOP 12</STMTTRN>',
+      '</BANKTRANLIST></STMTRS></STMTTRNRS></BANKMSGSRSV1></OFX>',
+    ].join('\n');
+    const stagingId = writeStagedFile(Buffer.from(qfx, 'utf8'));
+
+    const preview = buildPreview({ stagingId, filename: 'march-april.qfx', accountId, profileId: null, mapping: TD() });
+    expect(preview.setAside.map((row) => [row.key, row.kind, row.defaultSkip, row.candidates.map((c) => c.origin)])).toEqual([
+      ['FIT-0316', 'possible_duplicate', true, ['csv']],
+      ['FIT-0322', 'possible_duplicate', true, ['csv']],
+      ['FIT-0328', 'possible_duplicate', true, ['csv']],
+    ]);
+
+    const qfxImport = commitStagedImport({
+      stagingId,
+      filename: 'march-april.qfx',
+      accountId,
+      profileId: null,
+      mapping: null,
+      userId,
+      rowDecisions: defaults(preview),
+    });
+    expect(qfxImport).toMatchObject({ rowsAdded: 2, rowsSetAside: 3, rowsHeld: 0 });
+    expect(amounts(sqlite, accountId)).toEqual([...marchRows, '2026-04-04 -3890', '2026-04-12 -5875']);
+
+    expect(undoImport(qfxImport.importId)).toMatchObject({ deleted: 2, kept: 3 });
+    expect(amounts(sqlite, accountId)).toEqual(marchRows);
   });
 });

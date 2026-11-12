@@ -9,6 +9,8 @@ import { commitImport } from '@/lib/import/commit';
 import { computeRowHashes } from '@/lib/import/dedup';
 import { createProfile } from '@/lib/import/presets';
 import { detectImportAccount } from '@/lib/import/detect-account';
+import { classifyDetection } from '@/lib/import/batch';
+import { recordSetAside } from '@/lib/import/set-aside';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -253,5 +255,59 @@ describe('detectImportAccount: the fallbacks, in order', () => {
     });
 
     expect(result.account?.id).toBe(rowsAccount);
+  });
+});
+
+/**
+ * v1.61.0 item 1d. Deleting one imported row leaves a dismissed `deleted` record in set_aside_rows,
+ * so importing the statement again leaves that row out. The statement therefore still adds nothing,
+ * and the batch screen must still call it already imported rather than ready.
+ */
+describe('detectImportAccount: a row deleted since the import (v1.61.0)', () => {
+  it('still reads a fully imported statement with one row since deleted as already imported', () => {
+    current = createSeededTestDb();
+    const user = insertTestUser(current.db, { role: 'admin' });
+    const chequing = insertTestAccount(current.db, { name: 'TD Chequing' });
+    const committed = importInto(chequing, user, 'td-chequing.csv');
+    const rows = fixtureRows('td-chequing.csv');
+    const first = computeRowHashes(chequing, rows)[0]!;
+
+    // What a single delete of an imported row leaves behind: the transaction gone, its key kept.
+    recordSetAside({
+      accountId: chequing,
+      importId: committed.importId,
+      state: 'dismissed',
+      reason: 'deleted',
+      origin: 'csv',
+      date: first.date,
+      amountCents: first.amountCents,
+      rawDescription: first.rawDescription,
+      attributedUserId: null,
+      dedupHash: first.dedupHash,
+      externalId: null,
+      hashVersion: first.hashVersion,
+      candidateTxnId: null,
+      decidedBy: user,
+    });
+    const gone = committed.insertedTransactionIds[0]!;
+    current.sqlite.prepare('delete from transaction_imports where transaction_id = ?').run(gone);
+    current.sqlite.prepare('delete from transactions where id = ?').run(gone);
+
+    const account = detectImportAccount({
+      rows,
+      filename: 'td-chequing.csv',
+      profileId: null,
+      accounts: [{ id: chequing, name: 'TD Chequing', importProfileId: null }],
+    });
+    expect(account.scores).toEqual([{ accountId: chequing, name: 'TD Chequing', matchedRows: rows.length }]);
+
+    const verdict = classifyDetection({
+      stagingId: '11111111-1111-4111-8111-111111111111',
+      filename: 'td-chequing.csv',
+      rowCount: rows.length,
+      account,
+      profile: { profile: { id: 1, name: 'TD Chequing/Debit' }, confidence: 'certain', reason: 'Read every row.', source: 'csv', scores: [] },
+    });
+    expect(verdict.status).toBe('already-imported');
   });
 });

@@ -5,7 +5,7 @@ import { isSelfScoped } from '@/lib/auth/viewer';
 import { acceptsTransactions, getAccount } from '@/lib/accounts';
 import { importMappingSchema } from '@/lib/import/mapping';
 import { getProfile } from '@/lib/import/presets';
-import { commitStagedImport } from '@/lib/import/flow';
+import { commitStagedImport, rowDecisionsSchema } from '@/lib/import/flow';
 import { looksLikeOfx } from '@/lib/import/ofx';
 import { StagingError, readStagedFile } from '@/lib/import/staging';
 import { ImportLimitError, MAX_FILE_BYTES } from '@/lib/import/parse';
@@ -34,6 +34,10 @@ const entrySchema = z.object({
   // below, the same staged-bytes check the single-file commit route makes.
   profileId: z.number().int().positive().optional(),
   mapping: importMappingSchema.optional(),
+  // v1.61.0. Accepted in the same shape as the single-file route, but the batch screen posts
+  // none: nobody looked at these rows, so each possible duplicate is held in Needs review rather
+  // than counted (owner decision 1).
+  rowDecisions: rowDecisionsSchema.optional(),
 });
 
 const bodySchema = z.object({ files: z.array(entrySchema).min(1).max(MAX_BATCH_FILES) });
@@ -46,6 +50,9 @@ export interface BatchCommitResult {
   rowsAdded?: number;
   rowsDuplicate?: number;
   rowsError?: number;
+  /** v1.61.0. Present when ok: rows left out as already here, and rows held in Needs review. */
+  rowsSetAside?: number;
+  rowsHeld?: number;
   needsReview?: number;
   importId?: number;
   /** v1.59.0. Present when ok: CommitFlowResult's two attribution sentences, each null when silent. */
@@ -114,6 +121,7 @@ export async function POST(request: Request): Promise<Response> {
         profileId: entry.profileId ?? null,
         mapping: entry.mapping ?? null,
         userId: user.id,
+        rowDecisions: entry.rowDecisions,
       });
       results.push({
         ...base,
@@ -122,6 +130,8 @@ export async function POST(request: Request): Promise<Response> {
         rowsAdded: result.rowsAdded,
         rowsDuplicate: result.rowsDuplicate,
         rowsError: result.rowsError,
+        rowsSetAside: result.rowsSetAside,
+        rowsHeld: result.rowsHeld,
         needsReview: result.needsReview,
         attributionSummary: result.attributionSummary,
         unlinkedCardSummary: result.unlinkedCardSummary,

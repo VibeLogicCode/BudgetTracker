@@ -34,7 +34,12 @@ export interface DetectionResult {
   accountConfidence: 'certain' | 'likely' | 'none';
 }
 import { STAGED_FILE_GONE_SENTENCE, STAGED_FILE_MISSING, addBankHref, type HeldFile } from '@/lib/import/held-file';
-import type { CardValueSummary, PreviewResult } from '@/lib/import/preview';
+import type { CardValueSummary, PreviewResult, PreviewSetAsideRow } from '@/lib/import/preview';
+// v1.61.0. Pure modules: the origin labels (origin.ts says why it imports nothing), and the two
+// formatters the candidate line uses. The rows themselves arrive in the preview response.
+import { originLabel, type DuplicateCandidate } from '@/lib/import/origin';
+import { dayLabel } from '@/lib/dates';
+import { formatCents } from '@/lib/money';
 import type { ImportHistoryRow } from '@/lib/import/commit';
 // F-03 (v1.31.0): the sentence half of the post-commit balance check. Pure module (formatCents
 // plus a TYPE import of Discrepancy) so this 'use client' file never drags balance-reconcile.ts
@@ -65,8 +70,41 @@ export interface ImportedFile {
   rowsAdded: number;
   rowsDuplicate: number;
   rowsError: number;
+  /** v1.61.0. Rows left out as already here, and possible duplicates held in Needs review. */
+  rowsSetAside: number;
+  rowsHeld: number;
   needsReview: number;
   engineFailed: boolean;
+}
+
+/**
+ * v1.61.0. `MAPLE GROCER -$42.17 on Mar 9, added by hand, Alex`. The incoming row's own date
+ * stands in for today in dayLabel, so a candidate from the same year reads without one.
+ */
+function candidateLine(candidate: DuplicateCandidate, incomingDate: string): string {
+  const person = candidate.personName ? `, ${candidate.personName}` : '';
+  return `${candidate.description} ${formatCents(candidate.amountCents)} on ${dayLabel(candidate.date, incomingDate)}, ${originLabel(candidate.origin)}${person}`;
+}
+
+/** Why a listed row with no candidate is listed. A waiting row says so beside where the box would be. */
+const SET_ASIDE_REASON: Record<Exclude<PreviewSetAsideRow['kind'], 'possible_duplicate'>, string> = {
+  deleted_before: 'Deleted after an earlier import of this statement.',
+  left_out_before: 'Left out as already here in an earlier import.',
+  waiting: 'Held from an earlier import as a possible duplicate.',
+};
+
+/** `1 left out as already here`, `2 wait in Needs review as possible duplicates`; empty when zero. */
+function setAsideClauses(rowsSetAside: number, rowsHeld: number): string[] {
+  const clauses: string[] = [];
+  if (rowsSetAside > 0) clauses.push(`${rowsSetAside} left out as already here`);
+  if (rowsHeld > 0) {
+    clauses.push(
+      rowsHeld === 1
+        ? '1 waits in Needs review as a possible duplicate'
+        : `${rowsHeld} wait in Needs review as possible duplicates`,
+    );
+  }
+  return clauses;
 }
 
 /**
@@ -344,6 +382,20 @@ export function ImportClient({
   // outcome into them would make it unclear which action a message was actually reporting on.
   const [forkAccountName, setForkAccountName] = useState('');
   const [mappingSaveState, setMappingSaveState] = useState<SaveMappingState | null>(null);
+  /**
+   * v1.61.0. The Leave out boxes a person has changed, by row key. A box nobody touched reads its
+   * row's `defaultSkip`. Cleared whenever a fresh preview arrives: a new reading starts from its
+   * own defaults.
+   */
+  const [leaveOutChoices, setLeaveOutChoices] = useState<Record<string, boolean>>({});
+  /** Every listed row of the whole file. `?? []` for a response from a server older than v1.61.0. */
+  const setAsideRows: PreviewSetAsideRow[] = preview?.setAside ?? [];
+  /** Whether the commit will leave this row out: a waiting row always, any other as its box says. */
+  function leavesOut(row: PreviewSetAsideRow): boolean {
+    return !row.decidable || (leaveOutChoices[row.key] ?? row.defaultSkip);
+  }
+  const leftOutCount = setAsideRows.filter(leavesOut).length;
+  const setAsideByKey = new Map(setAsideRows.map((row) => [row.key, row]));
 
   // F1 fix: patches the ONE row that was just saved inside `preview.cardValues`, leaving
   // everything else (including the rest of `preview`, e.g. `rows`/`errors`) untouched. This is
@@ -492,6 +544,7 @@ export function ImportClient({
     const previewed = body as PreviewResult;
     setStaged({ stagingId: previewed.stagingId, filename: previewed.filename, source: previewed.source });
     setPreview(body as PreviewResult);
+    setLeaveOutChoices({});
     setMapping((body as PreviewResult).mapping);
     setForkAccountName(accounts.find((a) => a.id === accountId)?.name ?? '');
     setMappingSaveState(null);
@@ -574,6 +627,7 @@ export function ImportClient({
         return;
       }
       setPreview(body as PreviewResult);
+      setLeaveOutChoices({});
     } finally {
       setBusy(false);
     }
@@ -589,14 +643,21 @@ export function ImportClient({
     const held = staged;
     setBusy(true);
     try {
+      // v1.61.0. A choice for every row the preview listed and a person can decide. Sent only
+      // when there is one: no list is the same as an empty one to the server, which holds any
+      // possible duplicate it finds with no choice rather than inserting it.
+      const rowDecisions = setAsideRows
+        .filter((row) => row.decidable)
+        .map((row) => ({ key: row.key, action: leavesOut(row) ? 'skip' : 'import' }));
       const response = await fetch('/api/import/commit', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(
-          isOfx
+        body: JSON.stringify({
+          ...(isOfx
             ? { stagingId: held.stagingId, filename: held.filename, accountId }
-            : { stagingId: held.stagingId, filename: held.filename, accountId, profileId, mapping },
-        ),
+            : { stagingId: held.stagingId, filename: held.filename, accountId, profileId, mapping }),
+          ...(rowDecisions.length > 0 ? { rowDecisions } : {}),
+        }),
       });
       const body = await response.json();
       if (!response.ok) {
@@ -614,9 +675,12 @@ export function ImportClient({
       // itself failed (flow.ts catches runEngine and reports engineFailed
       // instead of throwing) — they're categoryless, so the review queue
       // picks them up regardless of whether the engine ran.
+      // v1.61.0: the rows this import left out as already here, and the ones it held for Needs
+      // review, named beside the exact duplicates. Nothing is added when both are zero.
+      const clauses = setAsideClauses(Number(body.rowsSetAside ?? 0), Number(body.rowsHeld ?? 0));
       const base = body.engineFailed
-        ? `${body.rowsAdded} imported, categorization failed — rows are in the review queue.`
-        : `${body.rowsAdded} added, ${body.rowsDuplicate} duplicates skipped, ${body.rowsError} errors, ${body.needsReview} need review.`;
+        ? `${body.rowsAdded} imported, categorization failed — rows are in the review queue.${clauses.length > 0 ? ` ${clauses.join(', ')}.` : ''}`
+        : `${body.rowsAdded} added, ${body.rowsDuplicate} duplicates skipped, ${clauses.map((clause) => `${clause}, `).join('')}${body.rowsError} errors, ${body.needsReview} need review.`;
       // Carry 2 (spec 2026-08-22 v1.6.0, Task 6): SHOULD-3.6's per-card attribution split,
       // already flowing through CommitFlowResult.attributionSummary (Task 3) -- null
       // whenever there is nothing card-specific to report, so nothing is appended then.
@@ -648,6 +712,8 @@ export function ImportClient({
         rowsAdded: Number(body.rowsAdded ?? 0),
         rowsDuplicate: Number(body.rowsDuplicate ?? 0),
         rowsError: Number(body.rowsError ?? 0),
+        rowsSetAside: Number(body.rowsSetAside ?? 0),
+        rowsHeld: Number(body.rowsHeld ?? 0),
         needsReview: Number(body.needsReview ?? 0),
         engineFailed: body.engineFailed === true,
       });
@@ -707,6 +773,12 @@ export function ImportClient({
           Re-uploading a file, or uploading one whose dates overlap a file you already brought
           in, is safe: matching rows are marked as duplicates in the preview and left out of the
           count you import. Every import is listed under History with an undo beside it.
+        </p>
+        <p>
+          A row that looks like one the account already has from somewhere else &mdash; typed in by
+          hand, or from another kind of statement &mdash; is listed under{' '}
+          <strong className="font-semibold text-ink">Rows that may already be here</strong>, ticked
+          to be left out when only one row matches. Untick it to import it anyway.
         </p>
         <p>
           If a statement covers a card that more than one person uses, the preview lists each
@@ -1079,6 +1151,72 @@ export function ImportClient({
               </div>
             ) : null}
 
+            {/* v1.61.0. Rows with no exact duplicate that the account may still hold: the same
+                amount within a few days from another source (typed by hand, another file format,
+                SimpleFIN), or a row left out or deleted after an earlier import. The whole file is
+                listed, not only the rows the table below shows. One candidate starts ticked, two
+                or more start unticked so a person picks; a row held in Needs review is decided
+                there and has no box. */}
+            {setAsideRows.length > 0 ? (
+              <section aria-label="Rows that may already be here" className="rounded-lg border border-line bg-surface-2/50 p-4">
+                <SectionHeader title={`Rows that may already be here (${setAsideRows.length})`} />
+                <p className="mt-1 text-sm text-muted">
+                  Each of these may be a purchase the account already has. A ticked row is left out of this import;
+                  untick it to import it anyway.
+                </p>
+                <ul className="mt-3 flex flex-col gap-2">
+                  {setAsideRows.map((row) => (
+                    <li
+                      key={row.key}
+                      className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 rounded-md border border-line bg-surface px-3 py-2"
+                    >
+                      <div className="min-w-0 flex-1 text-sm">
+                        <p className="flex flex-wrap items-baseline gap-x-2 text-ink">
+                          <span className="tabnum whitespace-nowrap text-muted">{row.date}</span>
+                          <span className="min-w-0 break-words">{row.rawDescription}</span>
+                          <Money cents={row.amountCents} />
+                        </p>
+                        {row.kind === 'possible_duplicate' ? (
+                          row.candidates.length === 1 ? (
+                            <p className="mt-0.5 text-xs text-muted">Looks like {candidateLine(row.candidates[0], row.date)}</p>
+                          ) : (
+                            <div className="mt-0.5 text-xs text-muted">
+                              <p>Looks like one of these:</p>
+                              <ul className="list-inside list-disc">
+                                {row.candidates.map((candidate) => (
+                                  <li key={candidate.id}>{candidateLine(candidate, row.date)}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )
+                        ) : (
+                          <p className="mt-0.5 text-xs text-muted">{SET_ASIDE_REASON[row.kind]}</p>
+                        )}
+                      </div>
+                      {row.decidable ? (
+                        <label className="flex shrink-0 items-center gap-2 text-sm text-ink">
+                          <input
+                            type="checkbox"
+                            checked={leavesOut(row)}
+                            onChange={(event) => {
+                              const checked = event.target.checked;
+                              setLeaveOutChoices((previous) => ({ ...previous, [row.key]: checked }));
+                            }}
+                            disabled={busy}
+                            aria-label={`Leave out ${row.rawDescription} on ${row.date}`}
+                            className="accent-accent"
+                          />
+                          Leave out
+                        </label>
+                      ) : (
+                        <span className="shrink-0 text-sm text-muted">Waiting in Needs review</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
+
             {/* Ruling S4: this is a spreadsheet preview -- raw CSV columns side by side, exactly
                 what a person is here to compare -- so it stays a plain table with sideways
                 scroll, and gets no `responsive` and no cell-stack-* classes. The data-label
@@ -1100,21 +1238,32 @@ export function ImportClient({
                 </tr>
               </thead>
               <tbody>
-                {preview.rows.map((row) => (
-                  <tr key={`${row.rowIndex}-${row.dedupHash}`} className={row.isDuplicate ? 'opacity-50' : ''}>
-                    <td className="tabnum whitespace-nowrap text-muted" data-label="Date">{row.date}</td>
-                    <td data-label="Description">{row.rawDescription}</td>
-                    <td className="text-muted" data-label="Merchant">{row.normalizedMerchant}</td>
-                    <td className="text-right" data-label="Amount"><Money cents={row.amountCents} /></td>
-                    <td className="text-muted" data-label="Category">{row.predictedCategoryName ?? '—'}{row.predictedSource === 'bayes' ? ' (guess)' : ''}</td>
-                    <td data-label="Flags">
-                      <span className="flex flex-wrap gap-1">
-                        {row.isDuplicate ? <span className="badge badge--slate">duplicate</span> : null}
-                        {row.isTransfer ? <span className="badge badge--blue">transfer</span> : null}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                {preview.rows.map((row) => {
+                  // v1.61.0: a row the commit will leave out reads as dimmed as an exact duplicate.
+                  const listed = setAsideByKey.get(row.externalId || row.dedupHash);
+                  const leftOut = listed !== undefined && leavesOut(listed);
+                  return (
+                    <tr key={`${row.rowIndex}-${row.dedupHash}`} className={row.isDuplicate || leftOut ? 'opacity-50' : ''}>
+                      <td className="tabnum whitespace-nowrap text-muted" data-label="Date">{row.date}</td>
+                      <td data-label="Description">{row.rawDescription}</td>
+                      <td className="text-muted" data-label="Merchant">{row.normalizedMerchant}</td>
+                      <td className="text-right" data-label="Amount"><Money cents={row.amountCents} /></td>
+                      <td className="text-muted" data-label="Category">{row.predictedCategoryName ?? '—'}{row.predictedSource === 'bayes' ? ' (guess)' : ''}</td>
+                      <td data-label="Flags">
+                        <span className="flex flex-wrap gap-1">
+                          {row.isDuplicate ? <span className="badge badge--slate">duplicate</span> : null}
+                          {row.setAsideKind === 'possible_duplicate' || row.setAsideKind === 'waiting' ? (
+                            <span className="badge badge--amber">possible duplicate</span>
+                          ) : null}
+                          {row.setAsideKind === 'deleted_before' || row.setAsideKind === 'left_out_before' ? (
+                            <span className="badge badge--slate">left out before</span>
+                          ) : null}
+                          {row.isTransfer ? <span className="badge badge--blue">transfer</span> : null}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </TableWrap>
 
@@ -1140,7 +1289,7 @@ export function ImportClient({
             <div className="flex flex-wrap items-center gap-3 border-t border-line pt-4">
               <StepMark n={3} state="active" />
               <button type="button" onClick={() => void commit()} disabled={busy} className={buttonClass('primary', 'lg')}>
-                Import {preview.totalRows - preview.duplicateCount} transactions
+                Import {preview.totalRows - preview.duplicateCount - leftOutCount} transactions
               </button>
               {onDiscard === undefined ? null : (
                 <button type="button" onClick={onDiscard} disabled={busy} className={buttonClass('secondary')}>

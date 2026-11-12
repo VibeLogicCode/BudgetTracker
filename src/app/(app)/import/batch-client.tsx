@@ -58,12 +58,28 @@ interface CommitOutcome {
   /** Rows the file had that could not be read. Shown only when there were some. */
   rowsError?: number;
   /**
+   * v1.61.0. Rows left out as already here (deleted or left out after an earlier import), and
+   * possible duplicates held in Needs review: "Import all ready" posts no Leave out choices, so
+   * every possible duplicate it meets waits there (owner decision 1). Shown only when non-zero.
+   */
+  rowsSetAside?: number;
+  rowsHeld?: number;
+  /**
    * v1.59.0, from "Import all ready" only: who the rows went to, and the card values nobody is
    * linked to yet. A file imported on its own screen already showed both there.
    */
   attributionSummary?: string | null;
   unlinkedCardSummary?: string | null;
   error?: string;
+}
+
+/** `13 added, 4 already there, 1 left out as already here, 2 wait in Needs review, 1 unreadable`. */
+function outcomeLine(outcome: CommitOutcome): string {
+  const parts = [`${outcome.rowsAdded ?? 0} added`, `${outcome.rowsDuplicate ?? 0} already there`];
+  if ((outcome.rowsSetAside ?? 0) > 0) parts.push(`${outcome.rowsSetAside} left out as already here`);
+  if ((outcome.rowsHeld ?? 0) > 0) parts.push(`${outcome.rowsHeld} ${outcome.rowsHeld === 1 ? 'waits' : 'wait'} in Needs review`);
+  if ((outcome.rowsError ?? 0) > 0) parts.push(`${outcome.rowsError} unreadable`);
+  return parts.join(', ');
 }
 
 const STATUS_LABEL: Record<BatchRow['status'], string> = {
@@ -263,6 +279,8 @@ export function BatchClient(props: {
               rowsAdded: imported.rowsAdded,
               rowsDuplicate: imported.rowsDuplicate,
               rowsError: imported.rowsError,
+              rowsSetAside: imported.rowsSetAside,
+              rowsHeld: imported.rowsHeld,
             },
           ]);
         }}
@@ -328,11 +346,7 @@ export function BatchClient(props: {
               <li key={outcome.stagingId ?? outcome.filename} className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3 last:border-b-0 sm:px-5">
                 <span className="font-medium text-ink">{outcome.filename}</span>
                 <span className="text-muted">
-                  {outcome.ok
-                    ? `${outcome.rowsAdded ?? 0} added, ${outcome.rowsDuplicate ?? 0} already there${
-                        (outcome.rowsError ?? 0) > 0 ? `, ${outcome.rowsError} unreadable` : ''
-                      }`
-                    : (outcome.error ?? 'Could not be imported')}
+                  {outcome.ok ? outcomeLine(outcome) : (outcome.error ?? 'Could not be imported')}
                 </span>
                 {outcome.ok && (outcome.attributionSummary || outcome.unlinkedCardSummary) ? (
                   <span className="basis-full text-xs text-muted">

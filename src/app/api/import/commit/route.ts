@@ -5,7 +5,7 @@ import { isSelfScoped } from '@/lib/auth/viewer';
 import { acceptsTransactions, getAccount } from '@/lib/accounts';
 import { importMappingSchema } from '@/lib/import/mapping';
 import { getProfile } from '@/lib/import/presets';
-import { commitStagedImport } from '@/lib/import/flow';
+import { commitStagedImport, rowDecisionsSchema } from '@/lib/import/flow';
 import { looksLikeOfx } from '@/lib/import/ofx';
 import { StagingError, readStagedFile } from '@/lib/import/staging';
 import { ImportLimitError, MAX_FILE_BYTES } from '@/lib/import/parse';
@@ -17,6 +17,9 @@ const bodySchema = z.object({
   // Both optional only for an OFX/QFX file, which names its own fields; checked below.
   profileId: z.number().int().positive().optional(),
   mapping: importMappingSchema.optional(),
+  // v1.61.0. The preview's Leave out choice for each row it listed. Absent, a possible duplicate
+  // is held in Needs review rather than inserted.
+  rowDecisions: rowDecisionsSchema.optional(),
 });
 
 export async function POST(request: Request): Promise<Response> {
@@ -75,6 +78,7 @@ export async function POST(request: Request): Promise<Response> {
       profileId: profileId ?? null,
       mapping: mapping ?? null,
       userId: user.id,
+      rowDecisions: parsed.data.rowDecisions,
     });
     return Response.json(result);
   } catch (error) {

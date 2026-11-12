@@ -12,7 +12,7 @@ import { createAccount } from '@/lib/accounts';
 import { setUserVisibility } from '@/lib/auth/users';
 import { listAudit } from '@/lib/audit';
 import { getBuiltinPreset, getProfileByName } from '@/lib/import/presets';
-import { MAX_FILE_BYTES } from '@/lib/import/parse';
+import { MAX_FILE_BYTES, MAX_ROWS } from '@/lib/import/parse';
 import { writeStagedFile } from '@/lib/import/staging';
 
 const fixture = (name: string) => fs.readFileSync(path.join(process.cwd(), 'fixtures', name));
@@ -583,5 +583,98 @@ describe('import routes - OFX without a profile', () => {
       expect.objectContaining({ ok: false, error: 'Choose an import profile for this file.' }),
     ]);
     expect((current!.sqlite.prepare('select count(*) as c from imports').get() as { c: number }).c).toBe(0);
+  });
+});
+
+/**
+ * v1.61.0 item 1c. The commit routes take the preview's Leave out choices; the batch screen posts
+ * none, so its possible duplicates wait in Needs review (owner decision 1).
+ */
+describe('import routes - possible duplicates (v1.61.0)', () => {
+  /** Two purchases from td-chequing.csv, typed by hand a day or so before the statement has them. */
+  function typeTwoByHand() {
+    const insert = current!.sqlite.prepare(
+      `insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, origin, created_by, created_at, updated_at)
+       values (?, ?, ?, ?, ?, 'manual', ?, '2026-03-04T12:00:00.000Z', '2026-03-04T12:00:00.000Z')`,
+    );
+    const typedBy = (current!.sqlite.prepare('select id from users order by id limit 1').get() as { id: number }).id;
+    insert.run(accountId, '2026-03-04', 'METRO', 'METRO', -8631, typedBy);
+    insert.run(accountId, '2026-03-09', 'ACCOUNT FEE', 'ACCOUNT FEE', -1095, typedBy);
+  }
+  const count = (sql: string) => (current!.sqlite.prepare(sql).get() as { c: number }).c;
+  const commitBody = (stagingId: string, extra: Record<string, unknown> = {}) => ({
+    stagingId,
+    filename: 'td-chequing.csv',
+    accountId,
+    profileId,
+    mapping: getBuiltinPreset('TD Chequing/Debit'),
+    ...extra,
+  });
+
+  it('400s a decision key longer than 255 characters, and a list longer than a file can be', async () => {
+    const stagingId = writeStagedFile(fixture('td-chequing.csv'));
+    const longKey = await commitRoute(
+      jsonRequest('http://nas.local:3000/api/import/commit', commitBody(stagingId, { rowDecisions: [{ key: 'k'.repeat(256), action: 'skip' }] })),
+    );
+    expect(longKey.status).toBe(400);
+    const longList = await commitRoute(
+      jsonRequest(
+        'http://nas.local:3000/api/import/commit',
+        commitBody(stagingId, { rowDecisions: Array.from({ length: MAX_ROWS + 1 }, (_, n) => ({ key: `k${n}`, action: 'import' })) }),
+      ),
+    );
+    expect(longList.status).toBe(400);
+    const badAction = await commitRoute(
+      jsonRequest('http://nas.local:3000/api/import/commit', commitBody(stagingId, { rowDecisions: [{ key: 'k1', action: 'delete' }] })),
+    );
+    expect(badAction.status).toBe(400);
+    const batch = await batchCommitRoute(
+      jsonRequest('http://nas.local:3000/api/import/batch/commit', {
+        files: [commitBody(stagingId, { rowDecisions: [{ key: '', action: 'skip' }] })],
+      }),
+    );
+    expect(batch.status).toBe(400);
+    expect(count('select count(*) as c from imports')).toBe(0);
+  });
+
+  it('commits the preview choices: a ticked row is left out, an unticked one imported', async () => {
+    typeTwoByHand();
+    const previewResponse = await previewRoute(uploadRequest());
+    const preview = (await previewResponse.json()) as {
+      stagingId: string;
+      setAside: { key: string; amountCents: number; kind: string; defaultSkip: boolean }[];
+    };
+    expect(preview.setAside.map((row) => [row.amountCents, row.kind, row.defaultSkip])).toEqual([
+      [-8631, 'possible_duplicate', true],
+      [-1095, 'possible_duplicate', true],
+    ]);
+
+    const response = await commitRoute(
+      jsonRequest(
+        'http://nas.local:3000/api/import/commit',
+        commitBody(preview.stagingId, {
+          rowDecisions: [
+            { key: preview.setAside[0]!.key, action: 'skip' },
+            { key: preview.setAside[1]!.key, action: 'import' },
+          ],
+        }),
+      ),
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ rowsAdded: 8, rowsDuplicate: 0, rowsSetAside: 1, rowsHeld: 0 });
+    expect(count('select count(*) as c from transactions where amount_cents = -8631')).toBe(1);
+    expect(count('select count(*) as c from transactions where amount_cents = -1095')).toBe(2);
+  });
+
+  it('batch: holds a file\'s possible duplicates in Needs review and inserts none of them', async () => {
+    typeTwoByHand();
+    const response = await batchCommitRoute(
+      jsonRequest('http://nas.local:3000/api/import/batch/commit', { files: [commitBody(writeStagedFile(fixture('td-chequing.csv')))] }),
+    );
+    expect(response.status).toBe(200);
+    const { results } = (await response.json()) as { results: Record<string, unknown>[] };
+    expect(results[0]).toMatchObject({ ok: true, rowsAdded: 7, rowsDuplicate: 0, rowsSetAside: 0, rowsHeld: 2 });
+    expect(count('select count(*) as c from transactions where amount_cents in (-8631, -1095)')).toBe(2);
+    expect(count(`select count(*) as c from set_aside_rows where state = 'waiting'`)).toBe(2);
   });
 });

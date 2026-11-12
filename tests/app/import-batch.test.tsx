@@ -335,6 +335,34 @@ describe('BatchClient: nothing commits without a confirmation', () => {
     // The one that still needs a person stays; the finished one goes.
     expect(screen.getByText('x.csv')).toBeTruthy();
   });
+
+  /**
+   * v1.61.0. "Import all ready" posts no Leave out choices, so a possible duplicate it meets waits
+   * in Needs review (owner decision 1). The file's line says so, and names rows left out because
+   * someone deleted or left them out before. Neither clause appears when it is zero (above).
+   */
+  it('names the rows left out as already here and the rows waiting in Needs review', async () => {
+    const fetchMock = answerDetect([row({ filename: 'jan.csv', rowCount: 10 })]);
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).includes('/api/import/batch/detect')) {
+        return { ok: true, json: async () => ({ rows: [row({ filename: 'jan.csv', rowCount: 10 })] }) } as unknown as Response;
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          results: [{ filename: 'jan.csv', ok: true, rowsAdded: 7, rowsDuplicate: 0, rowsSetAside: 1, rowsHeld: 2 }],
+        }),
+      } as unknown as Response;
+    });
+    render(<BatchClient {...props} />);
+    dropFiles(['jan.csv']);
+    await waitFor(() => expect(screen.getByText('Import the 1 ready one')).toBeTruthy());
+    fireEvent.click(screen.getByText('Import the 1 ready one'));
+    fireEvent.click(screen.getByText('Yes, import them'));
+    await waitFor(() =>
+      expect(screen.getByText('7 added, 0 already there, 1 left out as already here, 2 wait in Needs review')).toBeTruthy(),
+    );
+  });
 });
 
 describe('BatchClient: opening one row', () => {

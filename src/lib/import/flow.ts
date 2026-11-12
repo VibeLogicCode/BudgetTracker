@@ -3,16 +3,28 @@ import { reconcileAccount, type Discrepancy } from '@/lib/balance-reconcile';
 import { REVIEW_WHERE, runEngine, type EngineResult } from '@/lib/categorize/engine';
 import { applyPaymentMatchers } from '@/lib/loans';
 import { isSimplefinManaged } from '@/lib/simplefin/connection';
-import { commitImport } from './commit';
+import { z } from '@/lib/zod';
+import { commitImport, type RowDecision } from './commit';
 import { computeRowHashes } from './dedup';
 import type { ImportMapping } from './mapping';
 import { looksLikeOfx, parseOfx } from './ofx';
-import { closingBalancesByDate, parseCsv } from './parse';
+import { closingBalancesByDate, MAX_ROWS, parseCsv } from './parse';
 import { forkProfileIfBuiltin, setAccountProfile } from './presets';
 import { deleteStagedFile, readStagedFile } from './staging';
 import { getDb } from '@/db/client';
 import { transactions } from '@/db/schema';
 import { and, eq, inArray, sql } from 'drizzle-orm';
+
+/**
+ * v1.61.0. What the preview's Leave out boxes post: one entry per listed row, by the key the
+ * preview gave it. A file holds at most MAX_ROWS rows, so no honest list is longer; a key is a
+ * sha256 hash or a bank's id, never longer than 255. The commit and batch routes share it.
+ */
+export const rowDecisionsSchema = z
+  .array(z.object({ key: z.string().min(1).max(255), action: z.enum(['skip', 'import']) }))
+  .max(MAX_ROWS);
+
+export type RowDecisionInput = { key: string; action: RowDecision };
 
 export interface CommitFlowResult {
   importId: number;
@@ -21,6 +33,13 @@ export interface CommitFlowResult {
   rowsAdded: number;
   rowsDuplicate: number;
   rowsError: number;
+  /**
+   * v1.61.0, passed straight through from CommitResult. Rows left out as already here (a Leave
+   * out tick, or a key someone left out or deleted before), and possible duplicates nobody
+   * decided on, now waiting in Needs review and counted in no figure.
+   */
+  rowsSetAside: number;
+  rowsHeld: number;
   needsReview: number;
   /**
    * v1.26.0 Lane 2 item 4. How many of the rows this import ADDED came out of the engine carrying
@@ -71,6 +90,12 @@ export function commitStagedImport(input: {
   profileId: number | null;
   mapping: ImportMapping | null;
   userId: number;
+  /**
+   * v1.61.0. The preview's Leave out choices. A possible duplicate with no entry is held in Needs
+   * review rather than inserted: that is the batch import, which posts none (owner decision 1),
+   * and any client that skipped the preview.
+   */
+  rowDecisions?: RowDecisionInput[];
 }): CommitFlowResult {
   const account = getAccount(input.accountId);
   if (!account) throw new Error(`No account ${input.accountId}`);
@@ -140,6 +165,13 @@ export function commitStagedImport(input: {
     // correct physical row of a same-date group. Only this real CSV path (and SimpleFIN,
     // which has no file to detect direction from and omits this) ever has one to pass.
     dateOrder: parsed.dateOrder,
+    // v1.61.0. The road, said outright (buildPreview tells classifyNewRows the same), and the
+    // preview's choices by key. Absent choices hold a possible duplicate rather than insert it.
+    origin: ofx ? 'ofx' : 'csv',
+    rowDecisions:
+      input.rowDecisions === undefined
+        ? undefined
+        : new Map(input.rowDecisions.map((decision) => [decision.key, decision.action] as const)),
   });
 
   // F-03 (v1.31.0). closingBalancesByDate (src/lib/import/parse.ts) recomputed here over the
@@ -229,6 +261,8 @@ export function commitStagedImport(input: {
     rowsAdded: committed.rowsAdded,
     rowsDuplicate: committed.rowsDuplicate,
     rowsError: committed.rowsError,
+    rowsSetAside: committed.rowsSetAside,
+    rowsHeld: committed.rowsHeld,
     needsReview,
     rulesApplied,
     attributionSummary: committed.attributionSummary,

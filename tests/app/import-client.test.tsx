@@ -1975,6 +1975,9 @@ describe('ImportClient — tells the batch list what it imported', () => {
       rowsAdded: 8,
       rowsDuplicate: 3,
       rowsError: 1,
+      // v1.61.0: none left out or held by this commit.
+      rowsSetAside: 0,
+      rowsHeld: 0,
       needsReview: 2,
       engineFailed: false,
     });
@@ -2063,5 +2066,187 @@ describe('ImportClient — no profile pick for an OFX/QFX file', () => {
     );
     expect(queryByText('Import profile')).not.toBeNull();
     expect((getByRole('button', { name: /^preview$/i }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+/**
+ * v1.61.0 item 1b. Rows with no exact duplicate that the account may already hold, listed above
+ * the row table with a Leave out box seeded from the preview's default. The Import count and the
+ * posted decisions follow the boxes; a row waiting in Needs review has no box.
+ */
+describe('ImportClient — rows that may already be here (v1.61.0)', () => {
+  const STAGED = '13131313-1313-4131-8131-131313131313';
+  const ACCOUNTS = [{ id: 51, name: 'Sample Chequing', importProfileId: 1 }];
+  const HELD = {
+    stagingId: STAGED,
+    filename: 'sample-march.csv',
+    profile: { id: 1, name: 'TD Chequing/Debit' },
+    profileReason: 'TD Chequing/Debit read all 11 of 11 rows in this file.',
+    profileConfidence: 'certain' as const,
+    source: 'csv' as const,
+    account: { id: 51, name: 'Sample Chequing' },
+    accountReason: '1 of 11 rows in this file are already in Sample Chequing.',
+    accountConfidence: 'certain' as const,
+  };
+  const KEY_ONE = 'a'.repeat(64);
+  const KEY_TWO = 'b'.repeat(64);
+  const KEY_WAIT = 'c'.repeat(64);
+  const candidate = (id: number, date: string, description: string, amountCents: number, origin: string, personName: string | null) => ({
+    id,
+    date,
+    description,
+    amountCents,
+    origin,
+    personName,
+  });
+  const SET_ASIDE = [
+    {
+      key: KEY_ONE,
+      rowIndex: 0,
+      date: '2026-03-10',
+      rawDescription: 'MAPLE GROCER',
+      amountCents: -4217,
+      kind: 'possible_duplicate',
+      candidates: [candidate(7, '2026-03-09', 'MAPLE GROCER', -4217, 'manual', 'Alex')],
+      defaultSkip: true,
+      decidable: true,
+    },
+    {
+      key: KEY_TWO,
+      rowIndex: 1,
+      date: '2026-03-15',
+      rawDescription: 'FUEL STOP 12',
+      amountCents: -6130,
+      kind: 'possible_duplicate',
+      candidates: [
+        candidate(8, '2026-03-14', 'FUEL STOP 12', -6130, 'manual', 'Sam'),
+        candidate(9, '2026-03-17', 'FUEL STOP 12', -6130, 'ofx', null),
+      ],
+      defaultSkip: false,
+      decidable: true,
+    },
+    {
+      key: KEY_WAIT,
+      rowIndex: 2,
+      date: '2026-03-18',
+      rawDescription: 'CORNER BAKERY',
+      amountCents: -825,
+      kind: 'waiting',
+      candidates: [],
+      defaultSkip: true,
+      decidable: false,
+    },
+  ];
+  const ROW = {
+    rowIndex: 0,
+    rawDate: '2026-03-10',
+    date: '2026-03-10',
+    rawDescription: 'MAPLE GROCER',
+    normalizedMerchant: 'MAPLE GROCER',
+    amountCents: -4217,
+    occurrenceIndex: 0,
+    dedupHash: KEY_ONE,
+    externalId: null,
+    isDuplicate: false,
+    duplicateTransactionId: null,
+    predictedCategoryId: null,
+    predictedCategoryName: null,
+    predictedSource: 'none',
+    isTransfer: false,
+    setAsideKind: 'possible_duplicate',
+  };
+
+  function stub(preview: Record<string, unknown>, commitBody: Record<string, unknown> = {}) {
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) =>
+      String(url).includes('/commit')
+        ? {
+            ok: true,
+            json: async () => ({ rowsAdded: 8, rowsDuplicate: 1, rowsError: 0, needsReview: 3, engineFailed: false, rulesApplied: 0, importId: 9, ...commitBody }),
+          }
+        : { ok: true, json: async () => previewBody({ stagingId: STAGED, filename: 'sample-march.csv', accountId: 51, totalRows: 11, duplicateCount: 1, ...preview }) },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+  const posted = (fetchMock: ReturnType<typeof stub>) =>
+    JSON.parse(String(fetchMock.mock.calls.find(([url]) => String(url).includes('/commit'))?.[1]?.body)) as Record<string, unknown>;
+
+  it('lists each row with what it looks like, a Leave out box seeded from the default, and no box for a waiting row', async () => {
+    stub({ setAside: SET_ASIDE, rows: [ROW] });
+    const { findByText, getByRole, queryByRole, container } = render(
+      <ImportClient accounts={ACCOUNTS} profiles={PROFILES} simplefinManaged={[]} initialDetection={HELD} />,
+    );
+
+    expect(await findByText('Rows that may already be here (3)')).toBeTruthy();
+    expect(container.textContent).toContain('Looks like MAPLE GROCER -$42.17 on Mar 9, added by hand, Alex');
+    expect(container.textContent).toContain('Looks like one of these:');
+    expect(container.textContent).toContain('FUEL STOP 12 -$61.30 on Mar 14, added by hand, Sam');
+    expect(container.textContent).toContain('FUEL STOP 12 -$61.30 on Mar 17, from a QFX/OFX statement');
+    expect((getByRole('checkbox', { name: 'Leave out MAPLE GROCER on 2026-03-10' }) as HTMLInputElement).checked).toBe(true);
+    expect((getByRole('checkbox', { name: 'Leave out FUEL STOP 12 on 2026-03-15' }) as HTMLInputElement).checked).toBe(false);
+    expect(queryByRole('checkbox', { name: /CORNER BAKERY/ })).toBeNull();
+    expect(getByRole('region', { name: 'Rows that may already be here' }).querySelectorAll('input[type="checkbox"]')).toHaveLength(2);
+    expect(container.textContent).toContain('Waiting in Needs review');
+    // The table row carries the badge.
+    expect(container.querySelector('tbody')!.textContent).toContain('possible duplicate');
+    // 11 rows, 1 exact duplicate, MAPLE GROCER ticked and CORNER BAKERY waiting.
+    expect(getByRole('button', { name: 'Import 8 transactions' })).toBeTruthy();
+  });
+
+  it('moves the Import count and the posted decisions as boxes change', async () => {
+    const fetchMock = stub({ setAside: SET_ASIDE, rows: [ROW] });
+    const { findByRole, getByRole } = render(
+      <ImportClient accounts={ACCOUNTS} profiles={PROFILES} simplefinManaged={[]} initialDetection={HELD} />,
+    );
+    await findByRole('button', { name: 'Import 8 transactions' });
+
+    fireEvent.click(getByRole('checkbox', { name: 'Leave out MAPLE GROCER on 2026-03-10' }));
+    expect(getByRole('button', { name: 'Import 9 transactions' })).toBeTruthy();
+    fireEvent.click(getByRole('checkbox', { name: 'Leave out FUEL STOP 12 on 2026-03-15' }));
+    fireEvent.click(getByRole('button', { name: 'Import 8 transactions' }));
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/commit'))).toBe(true));
+    // Every decidable row, as its box stands; the waiting row is Needs review's to decide.
+    expect(posted(fetchMock).rowDecisions).toEqual([
+      { key: KEY_ONE, action: 'import' },
+      { key: KEY_TWO, action: 'skip' },
+    ]);
+  });
+
+  it('posts the defaults when nothing is touched', async () => {
+    const fetchMock = stub({ setAside: SET_ASIDE });
+    const { findByRole } = render(<ImportClient accounts={ACCOUNTS} profiles={PROFILES} simplefinManaged={[]} initialDetection={HELD} />);
+    fireEvent.click(await findByRole('button', { name: 'Import 8 transactions' }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/commit'))).toBe(true));
+    expect(posted(fetchMock).rowDecisions).toEqual([
+      { key: KEY_ONE, action: 'skip' },
+      { key: KEY_TWO, action: 'import' },
+    ]);
+  });
+
+  it('names the rows left out and the rows waiting in Needs review in the summary', async () => {
+    stub({ setAside: SET_ASIDE }, { rowsSetAside: 1, rowsHeld: 2 });
+    const onImported = vi.fn();
+    const { findByRole, findByText } = render(
+      <ImportClient accounts={ACCOUNTS} profiles={PROFILES} simplefinManaged={[]} initialDetection={HELD} onImported={onImported} />,
+    );
+    fireEvent.click(await findByRole('button', { name: 'Import 8 transactions' }));
+    expect(
+      await findByText(
+        /8 added, 1 duplicates skipped, 1 left out as already here, 2 wait in Needs review as possible duplicates, 0 errors, 3 need review\./,
+      ),
+    ).toBeTruthy();
+    expect(onImported).toHaveBeenCalledWith(expect.objectContaining({ rowsSetAside: 1, rowsHeld: 2 }));
+  });
+
+  it('renders no section, posts no decisions and counts as before for a file with no matches', async () => {
+    const fetchMock = stub({ setAside: [] });
+    const { findByRole, queryByRole } = render(
+      <ImportClient accounts={ACCOUNTS} profiles={PROFILES} simplefinManaged={[]} initialDetection={HELD} />,
+    );
+    fireEvent.click(await findByRole('button', { name: 'Import 10 transactions' }));
+    expect(queryByRole('region', { name: 'Rows that may already be here' })).toBeNull();
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/commit'))).toBe(true));
+    expect('rowDecisions' in posted(fetchMock)).toBe(false);
   });
 });

@@ -4,15 +4,63 @@ import { categories } from '@/db/schema';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { buildContext, categorizeTransaction } from '@/lib/categorize/engine';
 import { listAccountCardPeople } from './card-people';
+import { classifyNewRows, type ClassifyRow, type RowClassification } from './cross-source';
 import { detectDateFormat, type DateFormatDetection } from './detect-date-format';
 import { computeRowHashes, findExistingByExternalIds, findExistingByHashes, type HashedRow } from './dedup';
 import { normalizeCardValue, type ImportMapping } from './mapping';
 import { looksLikeOfx, parseOfx } from './ofx';
+import type { DuplicateCandidate, ImportOrigin } from './origin';
 import { parseCsv, previewRawRows, type CandidateRow, type ParseResult, type RowError } from './parse';
 import { readStagedFile } from './staging';
 import type { DetectedEncoding } from './decode';
 
 export const PREVIEW_ROW_LIMIT = 200;
+
+/**
+ * v1.61.0. Why a row of this file may not be imported even though nothing in the account has its
+ * hash or provider id:
+ * - `possible_duplicate`: the account holds a row from another road (typed by hand, another file
+ *   format, SimpleFIN) with the same amount within a few days;
+ * - `deleted_before`: someone deleted this very row after an earlier import;
+ * - `left_out_before`: an earlier preview left it out as already here;
+ * - `waiting`: an earlier import or sync holds it in Needs review, where it is decided.
+ */
+export type SetAsideKind = 'possible_duplicate' | 'deleted_before' | 'left_out_before' | 'waiting';
+
+/** One row the preview lists under "Rows that may already be here", with its Leave out default. */
+export interface PreviewSetAsideRow {
+  /** externalId || dedupHash, the key the commit's `rowDecisions` names it by. */
+  key: string;
+  rowIndex: number;
+  date: string;
+  rawDescription: string;
+  amountCents: number;
+  kind: SetAsideKind;
+  /** The rows it may be a copy of, nearest first. Empty for the three set-aside kinds. */
+  candidates: DuplicateCandidate[];
+  /**
+   * Whether Leave out starts ticked: one candidate, or a row left out or deleted before. Two or
+   * more candidates start unticked (owner decision 4). A waiting row is left out whatever the
+   * screen says, so it reads true.
+   */
+  defaultSkip: boolean;
+  /** False for `waiting`: Needs review decides it, so the preview offers no box and posts nothing. */
+  decidable: boolean;
+}
+
+function setAsideRowFor(verdict: RowClassification): Pick<PreviewSetAsideRow, 'kind' | 'candidates' | 'defaultSkip' | 'decidable'> | null {
+  if (verdict.kind === 'new') return null;
+  if (verdict.kind === 'possible_duplicate') {
+    return { kind: 'possible_duplicate', candidates: verdict.candidates, defaultSkip: verdict.defaultSkip, decidable: true };
+  }
+  if (verdict.state === 'waiting') return { kind: 'waiting', candidates: [], defaultSkip: true, decidable: false };
+  return {
+    kind: verdict.reason === 'deleted' ? 'deleted_before' : 'left_out_before',
+    candidates: [],
+    defaultSkip: true,
+    decidable: true,
+  };
+}
 
 export interface PreviewRow {
   rowIndex: number;
@@ -32,6 +80,8 @@ export interface PreviewRow {
   predictedCategoryName: string | null;
   predictedSource: 'rule' | 'bayes' | 'none';
   isTransfer: boolean;
+  /** v1.61.0. Set when this row is listed in PreviewResult.setAside, for the row's badge. */
+  setAsideKind: SetAsideKind | null;
 }
 
 export interface ColumnOption {
@@ -59,10 +109,18 @@ export interface PreviewResult {
   rows: PreviewRow[];
   errors: RowError[];
   totalRows: number;
+  /** Exact duplicates only (same hash or provider id). `setAside` rows are counted there. */
   duplicateCount: number;
   errorCount: number;
   skipped: number;
   truncated: boolean;
+  /**
+   * v1.61.0. Every row of the WHOLE file (not only the first PREVIEW_ROW_LIMIT) that the commit
+   * would not simply insert although it has no exact duplicate, in file order, one per key.
+   * Classified by classifyNewRows, the same call commitImport makes, so the screen can never
+   * promise what the commit will not do.
+   */
+  setAside: PreviewSetAsideRow[];
   /**
    * Which reader produced this preview. v1.13.1 (item BP, ruling P18): the client had no way to
    * ask, so it rendered the CSV mapping editor over an OFX file -- whose controls preview and
@@ -141,6 +199,24 @@ export function buildPreview(input: {
     .filter((value): value is string => value !== null && value.length > 0);
   const existingByExternalId = findExistingByExternalIds(input.accountId, externalIds);
 
+  // Mirrors commitImport's own resolution exactly (src/lib/import/commit.ts): a provider id,
+  // when present, is authoritative; only its absence falls back to the CSV dedup hash.
+  const exactMatchOf = (row: HashedRow): number | null => {
+    const providerId = row.externalId || null;
+    return providerId ? (existingByExternalId.get(providerId) ?? null) : (existing.get(row.dedupHash) ?? null);
+  };
+  // v1.61.0. The same key commitImport stores a row under, and the same road flow.ts tells it.
+  const keyOf = (row: HashedRow): string => row.externalId || row.dedupHash;
+  const origin: ImportOrigin = ofx ? 'ofx' : 'csv';
+
+  // v1.61.0. Every row with no exact match, across the whole file, classified once by the call
+  // commitImport makes over the same rows. The table below stops at PREVIEW_ROW_LIMIT; this does
+  // not, so a possible duplicate at row 230 is still listed and still decided.
+  const unmatched: ClassifyRow[] = hashed
+    .filter((row) => exactMatchOf(row) === null)
+    .map((row) => ({ key: keyOf(row), rowIndex: row.rowIndex, date: row.date, amountCents: row.amountCents }));
+  const verdicts = classifyNewRows({ accountId: input.accountId, origin, rows: unmatched });
+
   const ctx = buildContext();
   const categoryNames = new Map<number, string>(
     getDb().select({ id: categories.id, name: categories.name }).from(categories).all().map((row) => [row.id, row.name]),
@@ -148,13 +224,21 @@ export function buildPreview(input: {
 
   let duplicateCount = 0;
   const rows: PreviewRow[] = [];
+  const setAside: PreviewSetAsideRow[] = [];
+  const listedKeys = new Set<string>();
 
   for (const row of hashed) {
-    // Mirrors commitImport's own resolution exactly (src/lib/import/commit.ts): a provider id,
-    // when present, is authoritative; only its absence falls back to the CSV dedup hash.
     const providerId = row.externalId || null;
-    const duplicateTransactionId = providerId ? (existingByExternalId.get(providerId) ?? null) : (existing.get(row.dedupHash) ?? null);
+    const duplicateTransactionId = exactMatchOf(row);
     if (duplicateTransactionId !== null) duplicateCount += 1;
+
+    const key = keyOf(row);
+    const verdict = duplicateTransactionId === null ? verdicts.get(key) : undefined;
+    const listed = verdict === undefined ? null : setAsideRowFor(verdict);
+    if (listed !== null && !listedKeys.has(key)) {
+      listedKeys.add(key);
+      setAside.push({ key, rowIndex: row.rowIndex, date: row.date, rawDescription: row.rawDescription, amountCents: row.amountCents, ...listed });
+    }
 
     if (rows.length < PREVIEW_ROW_LIMIT) {
       const normalizedMerchant = normalizeMerchant(row.rawDescription);
@@ -178,6 +262,7 @@ export function buildPreview(input: {
         predictedCategoryName: outcome.categoryId === null ? null : categoryNames.get(outcome.categoryId) ?? null,
         predictedSource: outcome.source,
         isTransfer: outcome.isTransfer,
+        setAsideKind: listed?.kind ?? null,
       });
     }
   }
@@ -193,6 +278,7 @@ export function buildPreview(input: {
     errors: parsed.errors,
     totalRows: hashed.length,
     duplicateCount,
+    setAside,
     errorCount: parsed.errors.length,
     // OfxParseResult has no skip-rules concept (ruling R9: an OFX file skips the CSV mapping
     // entirely, so there is no mapping.skipRules to apply against it either).

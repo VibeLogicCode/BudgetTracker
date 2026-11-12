@@ -5,7 +5,7 @@ import path from 'node:path';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
 import { buildPreview, PREVIEW_ROW_LIMIT } from '@/lib/import/preview';
 import { writeStagedFile } from '@/lib/import/staging';
-import { getBuiltinPreset } from '@/lib/import/presets';
+import { getBuiltinPreset, getProfileByName } from '@/lib/import/presets';
 import { commitImport } from '@/lib/import/commit';
 import { commitStagedImport } from '@/lib/import/flow';
 import { computeRowHashes } from '@/lib/import/dedup';
@@ -13,6 +13,7 @@ import { parseCsv } from '@/lib/import/parse';
 import { parseOfx } from '@/lib/import/ofx';
 import { upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { upsertAccountCardPerson } from '@/lib/import/card-people';
+import { recordSetAside } from '@/lib/import/set-aside';
 import type { ImportMapping } from '@/lib/import/mapping';
 
 const fixture = (name: string) => fs.readFileSync(path.join(process.cwd(), 'fixtures', name));
@@ -450,5 +451,209 @@ NEWFILEUID:NONE
       expect(preview.dateFormatDetection.status).toBe('none');
       expect(preview.columnOptions).toEqual([]);
     });
+  });
+});
+
+/**
+ * v1.61.0 item 1a. Rows with no exact duplicate that the account may still hold: a row from another
+ * source with the same amount within 3 days, or a key set aside before. Listed over the WHOLE file,
+ * with the Leave out default the screen seeds its box from.
+ */
+describe('buildPreview: rows that may already be here (v1.61.0)', () => {
+  const TD = () => getBuiltinPreset('TD Chequing/Debit');
+
+  function setupHousehold() {
+    current = createSeededTestDb();
+    const alex = insertTestUser(current.db, { name: 'Alex', username: 'alex' });
+    const accountId = insertTestAccount(current.db, { name: 'Joint Chequing', ownerUserId: alex });
+    const t = current;
+    /** One row already in the account, arrived by `origin` (default: typed by hand). */
+    const existing = (date: string, amountCents: number, origin = 'manual', description = 'MAPLE GROCER') =>
+      (
+        t.sqlite
+          .prepare(
+            `insert into transactions (account_id, attributed_user_id, date, raw_description, normalized_merchant,
+               amount_cents, origin, created_by, created_at, updated_at)
+             values (?, ?, ?, ?, ?, ?, ?, ?, '2026-03-01T00:00:00.000Z', '2026-03-01T00:00:00.000Z') returning id`,
+          )
+          .get(accountId, alex, date, description, description, amountCents, origin, alex) as { id: number }
+      ).id;
+    return { alex, accountId, existing, sqlite: t.sqlite };
+  }
+
+  const csv = (lines: string[]) => Buffer.from(lines.join('\n'), 'utf8');
+
+  /** What a single delete of an imported row, or a Leave out tick, leaves behind. */
+  function setAside(over: {
+    accountId: number;
+    alex: number;
+    row: { dedupHash: string; hashVersion: number; date: string; amountCents: number; rawDescription: string };
+    state: 'waiting' | 'dismissed';
+    reason: 'possible_duplicate' | 'deleted';
+    importId?: number | null;
+  }) {
+    recordSetAside({
+      accountId: over.accountId,
+      importId: over.importId ?? null,
+      state: over.state,
+      reason: over.reason,
+      origin: 'csv',
+      date: over.row.date,
+      amountCents: over.row.amountCents,
+      rawDescription: over.row.rawDescription,
+      attributedUserId: over.alex,
+      dedupHash: over.row.dedupHash,
+      externalId: null,
+      hashVersion: over.row.hashVersion,
+      candidateTxnId: null,
+      decidedBy: over.state === 'dismissed' ? over.alex : null,
+    });
+  }
+
+  it('lists a possible duplicate at row 230 of a 250-row file, past the table limit', () => {
+    const { accountId, existing } = setupHousehold();
+    // Every row a different amount, so only SHOP 230 (-$231.00) meets the hand-typed row.
+    const lines = Array.from({ length: 250 }, (_, n) => `2026-03-10,SHOP ${n},${n + 1}.00,,`);
+    const typed = existing('2026-03-09', -23100);
+
+    const preview = buildPreview({ stagingId: writeStagedFile(csv(lines)), filename: 'march.csv', accountId, profileId: null, mapping: TD() });
+
+    expect(preview.rows).toHaveLength(PREVIEW_ROW_LIMIT);
+    expect(preview.setAside).toHaveLength(1);
+    expect(preview.setAside[0]).toMatchObject({
+      rawDescription: 'SHOP 230',
+      date: '2026-03-10',
+      amountCents: -23100,
+      kind: 'possible_duplicate',
+      defaultSkip: true,
+      decidable: true,
+    });
+    expect(preview.setAside[0]!.candidates.map((candidate) => candidate.id)).toEqual([typed]);
+    // The preview names the row by the key the commit stores it under.
+    const hashed = computeRowHashes(accountId, parseCsv(csv(lines), TD()).rows);
+    expect(preview.setAside[0]!.key).toBe(hashed[230]!.dedupHash);
+    expect(preview.duplicateCount).toBe(0);
+  });
+
+  it('ticks one candidate by default and leaves two unticked, with both listed', () => {
+    const { accountId, existing } = setupHousehold();
+    const only = existing('2026-03-08', -4217);
+    const near = existing('2026-03-14', -6130, 'manual', 'FUEL STOP 12');
+    const far = existing('2026-03-17', -6130, 'manual', 'FUEL STOP 12');
+    const stagingId = writeStagedFile(csv(['2026-03-09,MAPLE GROCER,42.17,,', '2026-03-15,FUEL STOP 12,61.30,,']));
+
+    const preview = buildPreview({ stagingId, filename: 'march.csv', accountId, profileId: null, mapping: TD() });
+
+    expect(preview.setAside.map((row) => [row.rawDescription, row.defaultSkip, row.candidates.map((c) => c.id)])).toEqual([
+      ['MAPLE GROCER', true, [only]],
+      ['FUEL STOP 12', false, [near, far]],
+    ]);
+    expect(preview.rows.map((row) => row.setAsideKind)).toEqual(['possible_duplicate', 'possible_duplicate']);
+    expect(preview.setAside[0]!.candidates[0]).toMatchObject({ date: '2026-03-08', origin: 'manual', personName: 'Alex' });
+  });
+
+  it('lists a row deleted after an earlier import, and one left out before, both ticked', () => {
+    const { accountId, alex, sqlite } = setupHousehold();
+    const lines = ['2026-03-09,MAPLE GROCER,42.17,,', '2026-03-10,FUEL STOP 12,61.30,,', '2026-03-11,CORNER BAKERY,8.25,,'];
+    const hashed = computeRowHashes(accountId, parseCsv(csv(lines), TD()).rows);
+    const first = commitImport({ accountId, profileId: null, filename: 'march.csv', importedBy: alex, rows: hashed, errors: [] });
+    for (const id of first.insertedTransactionIds.slice(0, 2)) {
+      sqlite.prepare('delete from transaction_imports where transaction_id = ?').run(id);
+      sqlite.prepare('delete from transactions where id = ?').run(id);
+    }
+    setAside({ accountId, alex, row: hashed[0]!, state: 'dismissed', reason: 'deleted', importId: first.importId });
+    setAside({ accountId, alex, row: hashed[1]!, state: 'dismissed', reason: 'possible_duplicate', importId: first.importId });
+
+    const preview = buildPreview({ stagingId: writeStagedFile(csv(lines)), filename: 'march.csv', accountId, profileId: null, mapping: TD() });
+
+    expect(preview.duplicateCount).toBe(1);
+    expect(preview.setAside.map((row) => [row.rawDescription, row.kind, row.defaultSkip, row.decidable])).toEqual([
+      ['MAPLE GROCER', 'deleted_before', true, true],
+      ['FUEL STOP 12', 'left_out_before', true, true],
+    ]);
+    expect(preview.rows.map((row) => row.setAsideKind)).toEqual(['deleted_before', 'left_out_before', null]);
+  });
+
+  it('lists a key waiting in Needs review as not decidable', () => {
+    const { accountId, alex } = setupHousehold();
+    const lines = ['2026-03-09,MAPLE GROCER,42.17,,'];
+    const hashed = computeRowHashes(accountId, parseCsv(csv(lines), TD()).rows);
+    setAside({ accountId, alex, row: hashed[0]!, state: 'waiting', reason: 'possible_duplicate' });
+
+    const preview = buildPreview({ stagingId: writeStagedFile(csv(lines)), filename: 'march.csv', accountId, profileId: null, mapping: TD() });
+
+    expect(preview.setAside).toEqual([
+      expect.objectContaining({ key: hashed[0]!.dedupHash, kind: 'waiting', decidable: false, candidates: [] }),
+    ]);
+  });
+
+  it('lists nothing for a file with no matches, and never compares a file with its own rows', () => {
+    const { accountId } = setupHousehold();
+    // Two identical same-day purchases from one file are two purchases.
+    const stagingId = writeStagedFile(csv(['2026-03-09,MAPLE GROCER,42.17,,', '2026-03-09,MAPLE GROCER,42.17,,']));
+    const preview = buildPreview({ stagingId, filename: 'march.csv', accountId, profileId: null, mapping: TD() });
+    expect(preview.setAside).toEqual([]);
+    expect(preview.rows.map((row) => row.setAsideKind)).toEqual([null, null]);
+  });
+
+  it('flags a QFX statement that overlaps rows a CSV already brought in', () => {
+    const { accountId, alex } = setupHousehold();
+    const history = computeRowHashes(accountId, parseCsv(csv(['2026-08-02,MAPLE GROCER #12,42.10,,']), TD()).rows);
+    const csvImport = commitImport({ accountId, profileId: null, filename: 'august.csv', importedBy: alex, rows: history, errors: [], origin: 'csv' });
+    const qfx = [
+      'OFXHEADER:100',
+      'DATA:OFXSGML',
+      'VERSION:102',
+      '',
+      '<OFX>',
+      '<BANKMSGSRSV1><STMTTRNRS><STMTRS>',
+      '<CURDEF>CAD',
+      '<BANKTRANLIST>',
+      '<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20260803120000<TRNAMT>-42.10<FITID>FIT-0001<NAME>MAPLE GROCER</STMTTRN>',
+      '<STMTTRN><TRNTYPE>CREDIT<DTPOSTED>20260815120000<TRNAMT>2100.00<FITID>FIT-0003<NAME>PAYROLL DEPOSIT</STMTTRN>',
+      '</BANKTRANLIST>',
+      '</STMTRS></STMTTRNRS></BANKMSGSRSV1>',
+      '</OFX>',
+    ].join('\n');
+
+    const preview = buildPreview({
+      stagingId: writeStagedFile(Buffer.from(qfx, 'utf8')),
+      filename: 'august.qfx',
+      accountId,
+      profileId: null,
+      mapping: TD(),
+    });
+
+    expect(preview.source).toBe('ofx');
+    expect(preview.setAside).toEqual([
+      expect.objectContaining({
+        key: 'FIT-0001',
+        kind: 'possible_duplicate',
+        defaultSkip: true,
+        candidates: [expect.objectContaining({ id: csvImport.insertedTransactionIds[0], origin: 'csv', date: '2026-08-02' })],
+      }),
+    ]);
+  });
+
+  it('agrees with the commit past the table limit: the listed row is held when nobody decides', () => {
+    const { accountId, alex, existing, sqlite } = setupHousehold();
+    const lines = Array.from({ length: 250 }, (_, n) => `2026-03-10,SHOP ${n},${n + 1}.00,,`);
+    existing('2026-03-09', -23100);
+    const preview = buildPreview({ stagingId: writeStagedFile(csv(lines)), filename: 'march.csv', accountId, profileId: null, mapping: TD() });
+
+    const result = commitStagedImport({
+      stagingId: writeStagedFile(csv(lines)),
+      filename: 'march.csv',
+      accountId,
+      profileId: getProfileByName('TD Chequing/Debit')!.id,
+      mapping: TD(),
+      userId: alex,
+    });
+
+    expect(preview.setAside).toHaveLength(1);
+    expect(result).toMatchObject({ rowsAdded: 249, rowsHeld: 1, rowsSetAside: 0 });
+    expect((sqlite.prepare(`select dedup_hash as h from set_aside_rows where state = 'waiting'`).get() as { h: string }).h).toBe(
+      preview.setAside[0]!.key,
+    );
   });
 });
