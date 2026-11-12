@@ -2,7 +2,7 @@
 
 import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
-import { z } from 'zod';
+import { z } from '@/lib/zod';
 import { CROSS_ORIGIN_ERROR, isSameOrigin } from '@/lib/auth/csrf';
 import { requireAdmin, requireUser } from '@/lib/auth/session';
 import {
@@ -72,13 +72,13 @@ const smtpSchema = z
     security: z.enum(['tls', 'starttls', 'none']),
     username: z.string().min(1).max(254),
     password: z.string().max(512),
-    fromEmail: z.string().email().max(254),
+    fromEmail: z.email().max(254),
     fromName: z.string().min(1).max(64),
     enabled: z.boolean(),
   })
   // MUST-8.16: plaintext is accepted only for a relay on the user's own LAN.
   .refine((value) => value.security !== 'none' || value.preset === 'custom', {
-    message: 'Unencrypted SMTP is only available with the Custom SMTP preset.',
+    error: 'Unencrypted SMTP is only available with the Custom SMTP preset.',
     path: ['security'],
   });
 
@@ -99,7 +99,7 @@ const telegramSchema = z.object({
 });
 
 const emailTargetSchema = z.object({
-  destination: z.string().email().max(254),
+  destination: z.email().max(254),
   enabled: z.boolean(),
 });
 
@@ -126,7 +126,7 @@ const householdTelegramSchema = z.object({
 });
 
 const householdEmailSchema = z.object({
-  destination: z.string().email().max(254),
+  destination: z.email().max(254),
 });
 
 const knobsSchema = z.object({

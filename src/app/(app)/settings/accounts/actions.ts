@@ -2,7 +2,7 @@
 
 import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
-import { z } from 'zod';
+import { errorText, z } from '@/lib/zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireAdmin } from '@/lib/auth/session';
 import { createAccount, getAccount, renameAccount, setAccountActive, setAccountImportCadence, setAccountOwner } from '@/lib/accounts';
@@ -85,7 +85,7 @@ export async function createAccountAction(_prev: AccountsFormState, formData: Fo
       ownerUserId,
     });
   } catch (error) {
-    return { error: error instanceof Error ? error.message : 'Could not create the account.' };
+    return { error: errorText(error, 'Could not create the account.') };
   }
 
   revalidatePath('/settings/accounts');

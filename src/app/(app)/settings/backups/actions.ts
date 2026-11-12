@@ -2,7 +2,7 @@
 
 import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
-import { z } from 'zod';
+import { z } from '@/lib/zod';
 import { CROSS_ORIGIN_ERROR, isSameOrigin } from '@/lib/auth/csrf';
 import { requireAdmin } from '@/lib/auth/session';
 import { pruneBackups, runNightlyJob, setBackupRetention } from '@/lib/backup';
@@ -44,9 +44,9 @@ export async function runBackupNowAction(): Promise<BackupActionState> {
 
 const stageRestoreSchema = z.object({
   name: z.string().refine((n) => ARCHIVE_NAME_RE.test(n) || LEGACY_NAME_RE.test(n), {
-    message: 'That is not one of the listed backups.',
+    error: 'That is not one of the listed backups.',
   }),
-  confirm: z.literal('on', { errorMap: () => ({ message: 'Tick the confirmation box first.' }) }),
+  confirm: z.literal('on', { error: 'Tick the confirmation box first.' }),
 });
 
 /**

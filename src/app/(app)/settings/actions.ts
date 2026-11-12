@@ -3,7 +3,7 @@
 import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
-import { z } from 'zod';
+import { z } from '@/lib/zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { passwordSchema, verifyPassword } from '@/lib/auth/password';
 import {

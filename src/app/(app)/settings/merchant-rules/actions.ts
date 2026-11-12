@@ -2,7 +2,7 @@
 
 import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
-import { z } from 'zod';
+import { z } from '@/lib/zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireAdmin } from '@/lib/auth/session';
 import { listCategories } from '@/lib/categories';
@@ -111,7 +111,7 @@ export async function saveRuleAction(_prev: RuleActionState, formData: FormData)
       amountMax: z.string().trim().max(30),
       /** '' is Household on an attribution rule, and is ignored on every other kind. */
       attributedUserId: z.string().trim().refine((v) => v === '' || /^\d+$/.test(v), {
-        message: 'Invalid person selection.',
+        error: 'Invalid person selection.',
       }),
     })
     .safeParse({
@@ -328,7 +328,7 @@ const scopeSchema = z
     to: z.string().regex(ISO_DATE, 'Use a YYYY-MM-DD date.').nullable(),
   })
   .refine((scope) => scope.from === null || scope.to === null || scope.from <= scope.to, {
-    message: 'That date range ends before it starts -- swap the From and To dates.',
+    error: 'That date range ends before it starts -- swap the From and To dates.',
   });
 
 function parseScope(from: unknown, to: unknown): { ok: true; scope: RuleScope } | { ok: false; error: string } {
