@@ -868,7 +868,7 @@ describe('TransactionsPage: possible duplicates (v1.61.0)', () => {
     const item = screen.getByText('FUEL STOP 12 TORONTO').closest('li') as HTMLElement;
     expect(item.textContent).toContain('from SimpleFIN');
     expect(item.textContent).toMatch(/Looks like: FUEL STOP 12 -61\.30 on Mar 9(, \d{4})?, added by hand, Alex/);
-    expect(within(item).getByRole('button', { name: 'Keep both' })).toBeTruthy();
-    expect(within(item).getByRole('button', { name: 'Delete this one' })).toBeTruthy();
+    expect(within(item).getByRole('button', { name: /^Keep both/ })).toBeTruthy();
+    expect(within(item).getByRole('button', { name: /^Delete this one/ })).toBeTruthy();
   });
 });

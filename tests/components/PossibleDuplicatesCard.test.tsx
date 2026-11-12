@@ -58,8 +58,8 @@ describe('PossibleDuplicatesCard', () => {
     expect(item.textContent).toContain('simplefin 2026-03-10 09:15');
     expect(within(item).getByText('Possible duplicate')).toBeTruthy();
     expect(item.textContent).toContain('Looks like: MAPLE GROCER -42.17 on Mar 9, added by hand, Alex');
-    expect(within(item).getByRole('button', { name: 'Keep both' })).toBeTruthy();
-    expect(within(item).getByRole('button', { name: 'Delete this one' })).toBeTruthy();
+    expect(within(item).getByRole('button', { name: /^Keep both/ })).toBeTruthy();
+    expect(within(item).getByRole('button', { name: /^Delete this one/ })).toBeTruthy();
     expect(item.textContent).toContain("To keep the bank's copy instead, choose Keep both, then delete the hand-typed row.");
   });
 
@@ -87,7 +87,7 @@ describe('PossibleDuplicatesCard', () => {
 
   it('Keep both posts the held row id', async () => {
     render(<PossibleDuplicatesCard rows={[held()]} today="2026-03-12" viewerId={ALEX} isAdmin />);
-    fireEvent.click(screen.getByRole('button', { name: 'Keep both' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Keep both/ }));
     await waitFor(() => expect(keepPossibleDuplicateAction).toHaveBeenCalled());
     const formData = vi.mocked(keepPossibleDuplicateAction).mock.calls[0]?.[1] as FormData;
     expect(formData.get('setAsideId')).toBe('5');
@@ -96,7 +96,7 @@ describe('PossibleDuplicatesCard', () => {
   it('Delete this one asks first, and a refusal posts nothing', () => {
     const asked = vi.spyOn(window, 'confirm').mockReturnValue(false);
     render(<PossibleDuplicatesCard rows={[held()]} today="2026-03-12" viewerId={ALEX} isAdmin />);
-    fireEvent.click(screen.getByRole('button', { name: 'Delete this one' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Delete this one/ }));
     expect(asked).toHaveBeenCalledWith(expect.stringMatching(/leave it out/i));
     expect(dismissPossibleDuplicateAction).not.toHaveBeenCalled();
   });
@@ -104,7 +104,7 @@ describe('PossibleDuplicatesCard', () => {
   it('Delete this one posts the held row id once confirmed', async () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     render(<PossibleDuplicatesCard rows={[held()]} today="2026-03-12" viewerId={ALEX} isAdmin />);
-    fireEvent.click(screen.getByRole('button', { name: 'Delete this one' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Delete this one/ }));
     await waitFor(() => expect(dismissPossibleDuplicateAction).toHaveBeenCalled());
     const formData = vi.mocked(dismissPossibleDuplicateAction).mock.calls[0]?.[1] as FormData;
     expect(formData.get('setAsideId')).toBe('5');
@@ -112,16 +112,54 @@ describe('PossibleDuplicatesCard', () => {
 
   it("offers Delete this one to the row's person and on a shared row, but not to another member", () => {
     render(<PossibleDuplicatesCard rows={[held()]} today="2026-03-12" viewerId={SAM} isAdmin={false} />);
-    expect(screen.getByRole('button', { name: 'Keep both' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Delete this one' })).toBeNull();
+    expect(screen.getByRole('button', { name: /^Keep both/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^Delete this one/ })).toBeNull();
     cleanup();
 
     render(<PossibleDuplicatesCard rows={[held()]} today="2026-03-12" viewerId={ALEX} isAdmin={false} />);
-    expect(screen.getByRole('button', { name: 'Delete this one' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Delete this one/ })).toBeTruthy();
     cleanup();
 
     render(<PossibleDuplicatesCard rows={[held({ attributedUserId: null, personName: null })]} today="2026-03-12" viewerId={SAM} isAdmin={false} />);
-    expect(screen.getByRole('button', { name: 'Delete this one' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Delete this one/ })).toBeTruthy();
+  });
+
+  /** Fix round: every row has the same two buttons, so each names the row it acts on. */
+  it('names the row in each button, so the buttons make sense read on their own', () => {
+    render(
+      <PossibleDuplicatesCard
+        rows={[held(), held({ id: 6, rawDescription: 'CORNER COFFEE', amountCents: -450, date: '2026-03-11' })]}
+        today="2026-03-12"
+        viewerId={ALEX}
+        isAdmin
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Keep both: MAPLE GROCER #12 on Mar 10' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Delete this one: MAPLE GROCER #12 on Mar 10' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Keep both: CORNER COFFEE on Mar 11' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Delete this one: CORNER COFFEE on Mar 11' })).toBeTruthy();
+  });
+
+  it('shows and announces what Keep both did, in a live region already on the page', async () => {
+    vi.mocked(keepPossibleDuplicateAction).mockResolvedValueOnce({ message: 'Kept both rows.' });
+    render(<PossibleDuplicatesCard rows={[held()]} today="2026-03-12" viewerId={ALEX} isAdmin />);
+    const live = screen.getByRole('status');
+    expect(live.getAttribute('aria-live')).toBe('polite');
+    expect(live.textContent).toBe('');
+    fireEvent.click(screen.getByRole('button', { name: /^Keep both/ }));
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe('Kept both rows.'));
+  });
+
+  it('keeps the message once the row has left the list', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.mocked(dismissPossibleDuplicateAction).mockResolvedValueOnce({ message: 'Deleted the possible duplicate.' });
+    const { rerender } = render(<PossibleDuplicatesCard rows={[held()]} today="2026-03-12" viewerId={ALEX} isAdmin />);
+    fireEvent.click(screen.getByRole('button', { name: /^Delete this one/ }));
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe('Deleted the possible duplicate.'));
+    // The page revalidates and the row is gone; the card's region and its message stay.
+    rerender(<PossibleDuplicatesCard rows={[]} today="2026-03-12" viewerId={ALEX} isAdmin />);
+    expect(screen.getByRole('status').textContent).toBe('Deleted the possible duplicate.');
+    expect(screen.queryByRole('listitem')).toBeNull();
   });
 
   it('renders nothing when nothing waits, and an empty state on its own view', () => {

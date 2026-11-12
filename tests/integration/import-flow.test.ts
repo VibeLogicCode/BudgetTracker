@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createSeededTestDb, categoryIdByName, insertTestUser, type TestDb } from '../helpers/db';
 import { createAccount } from '@/lib/accounts';
 import { buildPreview } from '@/lib/import/preview';
+import { fileCounts } from '@/lib/import/batch';
 import { commitStagedImport } from '@/lib/import/flow';
 import { stagedFilePath, writeStagedFile } from '@/lib/import/staging';
 import { BUILTIN_PRESET_NAMES, getBuiltinPreset, getProfileByName, listProfiles } from '@/lib/import/presets';
@@ -209,6 +210,33 @@ describe('the same purchase by two roads (v1.61.0)', () => {
 
     expect(result).toMatchObject({ rowsAdded: 1, rowsDuplicate: 0, rowsSetAside: 1, rowsHeld: 0 });
     expect(amounts(sqlite, accountId)).toEqual(['2026-03-09 -4217', '2026-03-11 -825']);
+  });
+
+  /**
+   * Fix round. The batch screen's "will import" is fileCounts over this very preview, and "Import
+   * all ready" posts no choices, so a possible duplicate is held: the count has to say so.
+   */
+  it('the batch count leaves out a held row, and matches what a batch commit adds', () => {
+    const { accountId, profileId } = setup();
+    const alex = insertTestUser(current!.db, { name: 'Alex', username: 'alex' });
+    createManualTransaction({
+      accountId,
+      date: '2026-03-09',
+      description: 'CORNER COFFEE',
+      amountCents: -450,
+      categoryId: null,
+      attributedUserId: alex,
+      userId: alex,
+      actorRole: 'admin',
+    });
+    const csv = Buffer.from('2026-03-09,CORNER COFFEE,4.50,,\n2026-03-11,CORNER BAKERY,8.25,,\n', 'utf8');
+    const stagingId = writeStagedFile(csv);
+
+    const counts = fileCounts(buildPreview({ stagingId, filename: 'march.csv', accountId, profileId, mapping: TD() }));
+    expect(counts).toEqual({ totalRows: 2, duplicateCount: 0, errorCount: 0, setAsideCount: 1, willImport: 1 });
+
+    const result = commitStagedImport({ stagingId, filename: 'march.csv', accountId, profileId, mapping: TD(), userId: alex });
+    expect(result).toMatchObject({ rowsAdded: counts.willImport, rowsHeld: 1 });
   });
 
   it('a QFX overlapping a March CSV adds only April, and undoing it keeps every March row', () => {

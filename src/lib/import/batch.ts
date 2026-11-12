@@ -115,6 +115,11 @@ export interface FileCounts {
   totalRows: number;
   duplicateCount: number;
   errorCount: number;
+  /**
+   * v1.61.0. Rows with no exact duplicate that the batch commit will still not insert: possible
+   * duplicates it holds in Needs review, and rows a person deleted or left out before.
+   */
+  setAsideCount: number;
   /** Rows that will actually arrive. The number the household is really asking for. */
   willImport: number;
 }
@@ -132,13 +137,25 @@ export interface FileCounts {
  * as well since those never arrive either. The inputs come from `buildPreview`, the very call the
  * preview screen makes -- a count derived any other way could disagree with the screen two clicks
  * later, and a household with no way to tell which was right would be correct to trust neither.
+ *
+ * v1.61.0 fix round: every row in `preview.setAside` is taken off too. buildPreview lists them by
+ * classifyNewRows, the call commitImport makes, and "Import all ready" posts no Leave out choices,
+ * so commitImport inserts none of them: a possible duplicate is held, and a row deleted, left out
+ * or already waiting stays out. Absent on a preview built before v1.61.0, which listed none.
  */
-export function fileCounts(preview: { totalRows: number; duplicateCount: number; errorCount: number }): FileCounts {
+export function fileCounts(preview: {
+  totalRows: number;
+  duplicateCount: number;
+  errorCount: number;
+  setAside?: readonly unknown[];
+}): FileCounts {
+  const setAsideCount = preview.setAside?.length ?? 0;
   return {
     totalRows: preview.totalRows,
     duplicateCount: preview.duplicateCount,
     errorCount: preview.errorCount,
-    willImport: Math.max(0, preview.totalRows - preview.duplicateCount - preview.errorCount),
+    setAsideCount,
+    willImport: Math.max(0, preview.totalRows - preview.duplicateCount - setAsideCount - preview.errorCount),
   };
 }
 

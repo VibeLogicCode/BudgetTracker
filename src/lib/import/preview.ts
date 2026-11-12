@@ -39,9 +39,10 @@ export interface PreviewSetAsideRow {
   /** The rows it may be a copy of, nearest first. Empty for the three set-aside kinds. */
   candidates: DuplicateCandidate[];
   /**
-   * Whether Leave out starts ticked: one candidate, or a row left out or deleted before. Two or
-   * more candidates start unticked (owner decision 4). A waiting row is left out whatever the
-   * screen says, so it reads true.
+   * Whether Leave out starts ticked: a possible duplicate whose match is clear, or a row left out
+   * or deleted before. A row with two equally near candidates on different dates starts unticked
+   * (owner decision 4; cross-source.ts says when a match is clear). A waiting row is left out
+   * whatever the screen says, so it reads true.
    */
   defaultSkip: boolean;
   /** False for `waiting`: Needs review decides it, so the preview offers no box and posts nothing. */

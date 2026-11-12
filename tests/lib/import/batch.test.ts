@@ -207,7 +207,23 @@ describe('fileCounts', () => {
       totalRows: 7,
       duplicateCount: 6,
       errorCount: 0,
+      setAsideCount: 0,
       willImport: 1,
+    });
+  });
+
+  /**
+   * v1.61.0 fix round. "Import all ready" posts no Leave out choices, so every row the preview lists
+   * as possibly already here is held or left out by the commit, never added.
+   */
+  it('takes off every row the preview sets aside: held, deleted, left out or already waiting', () => {
+    const setAside = [{ kind: 'possible_duplicate' }, { kind: 'deleted_before' }, { kind: 'left_out_before' }, { kind: 'waiting' }];
+    expect(fileCounts({ totalRows: 10, duplicateCount: 2, errorCount: 1, setAside })).toEqual({
+      totalRows: 10,
+      duplicateCount: 2,
+      errorCount: 1,
+      setAsideCount: 4,
+      willImport: 3,
     });
   });
 

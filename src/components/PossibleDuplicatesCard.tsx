@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState } from 'react';
+import { useActionState, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { CheckIcon } from '@/components/icons';
 import { SubmitButton } from '@/components/SubmitButton';
@@ -32,12 +32,40 @@ function candidateLine(candidate: DuplicateCandidate, today: string): string {
   return `${candidate.description} ${formatCents(candidate.amountCents, { currency: false })} on ${dayLabel(candidate.date, today)}, ${originLabel(candidate.origin)}${person}`;
 }
 
-function HeldRow({ row, today, mayDelete }: { row: WaitingSetAsideRow; today: string; mayDelete: boolean }) {
-  const [keepState, keepAction] = useActionState(keepPossibleDuplicateAction, initial);
-  const [dismissState, dismissAction] = useActionState(dismissPossibleDuplicateAction, initial);
+/**
+ * The server action, with its success message handed up to the card. The row itself is gone once
+ * the page revalidates, so a message kept in the row would vanish unread; the card's live region
+ * stays and says it.
+ */
+function reporting(
+  action: (prev: ActionState, formData: FormData) => Promise<ActionState>,
+  onDone: (message: string | null) => void,
+): (prev: ActionState, formData: FormData) => Promise<ActionState> {
+  return async (prev, formData) => {
+    const result = await action(prev, formData);
+    onDone(result.message ?? null);
+    return result;
+  };
+}
+
+function HeldRow({
+  row,
+  today,
+  mayDelete,
+  onDone,
+}: {
+  row: WaitingSetAsideRow;
+  today: string;
+  mayDelete: boolean;
+  onDone: (message: string | null) => void;
+}) {
+  const [keepState, keepAction] = useActionState(reporting(keepPossibleDuplicateAction, onDone), initial);
+  const [dismissState, dismissAction] = useActionState(reporting(dismissPossibleDuplicateAction, onDone), initial);
   const where = [dayLabel(row.date, today), row.accountName, originLabel(row.origin), row.importFilename]
     .filter((part): part is string => part !== null && part !== '')
     .join(' · ');
+  // Every row has the same two buttons, so each says which row it acts on when read on its own.
+  const which = `${row.rawDescription} on ${dayLabel(row.date, today)}`;
   return (
     <li className="flex flex-col gap-2 border-b border-line px-4 py-3 last:border-b-0 sm:px-5">
       <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
@@ -56,7 +84,7 @@ function HeldRow({ row, today, mayDelete }: { row: WaitingSetAsideRow; today: st
       <div className="flex flex-wrap items-start gap-2">
         <form action={keepAction}>
           <input type="hidden" name="setAsideId" value={row.id} />
-          <SubmitButton variant="secondary" size="sm" className="min-h-11 sm:min-h-0">
+          <SubmitButton variant="secondary" size="sm" className="min-h-11 sm:min-h-0" ariaLabel={`Keep both: ${which}`}>
             Keep both
           </SubmitButton>
         </form>
@@ -68,7 +96,7 @@ function HeldRow({ row, today, mayDelete }: { row: WaitingSetAsideRow; today: st
             }}
           >
             <input type="hidden" name="setAsideId" value={row.id} />
-            <SubmitButton variant="ghost" size="sm" className="min-h-11 sm:min-h-0">
+            <SubmitButton variant="ghost" size="sm" className="min-h-11 sm:min-h-0" ariaLabel={`Delete this one: ${which}`}>
               Delete this one
             </SubmitButton>
           </form>
@@ -100,8 +128,9 @@ function HeldRow({ row, today, mayDelete }: { row: WaitingSetAsideRow; today: st
  * row's person, anyone for a shared row). The server check in dismissSetAsideRow is the guarantee;
  * hiding the button only keeps a person from finding a control that would then say no.
  *
- * Renders nothing when nothing waits, so the review queue looks as it always did. Under
- * `?queue=duplicates` (`standalone`) an empty list says so instead.
+ * Renders nothing visible when nothing waits, so the review queue looks as it always did (only the
+ * empty live region that carries a decision's message). Under `?queue=duplicates` (`standalone`)
+ * an empty list says so instead.
  */
 export function PossibleDuplicatesCard({
   rows,
@@ -116,9 +145,33 @@ export function PossibleDuplicatesCard({
   isAdmin?: boolean;
   standalone?: boolean;
 }) {
-  if (rows.length === 0) {
-    if (!standalone) return null;
-    return (
+  // The last Keep both / Delete this one's message. Kept here, not in the row, because the row
+  // leaves the list when the page revalidates. The live region is always rendered first, empty until
+  // then, and stays mounted whatever follows it, so a screen reader announces the message.
+  const [done, setDone] = useState<string | null>(null);
+  let body: React.ReactNode = null;
+  if (rows.length > 0) {
+    body = (
+      <Card>
+        <CardHeader
+          title={`Possible duplicates (${rows.length})`}
+          description="Each of these arrived from an import or the bank sync and looks like a row already in the account. It counts in no figure until you choose Keep both."
+        />
+        <ul className="border-t border-line">
+          {rows.map((row) => (
+            <HeldRow
+              key={row.id}
+              row={row}
+              today={today}
+              mayDelete={isAdmin || row.attributedUserId === null || row.attributedUserId === viewerId}
+              onDone={setDone}
+            />
+          ))}
+        </ul>
+      </Card>
+    );
+  } else if (standalone) {
+    body = (
       <Card>
         <EmptyState
           icon={CheckIcon}
@@ -131,21 +184,15 @@ export function PossibleDuplicatesCard({
     );
   }
   return (
-    <Card>
-      <CardHeader
-        title={`Possible duplicates (${rows.length})`}
-        description="Each of these arrived from an import or the bank sync and looks like a row already in the account. It counts in no figure until you choose Keep both."
-      />
-      <ul className="border-t border-line">
-        {rows.map((row) => (
-          <HeldRow
-            key={row.id}
-            row={row}
-            today={today}
-            mayDelete={isAdmin || row.attributedUserId === null || row.attributedUserId === viewerId}
-          />
-        ))}
-      </ul>
-    </Card>
+    <>
+      <p
+        role="status"
+        aria-live="polite"
+        className={done === null ? 'sr-only' : 'rounded-md bg-positive-soft px-3.5 py-3 text-sm text-positive-soft-fg'}
+      >
+        {done}
+      </p>
+      {body}
+    </>
   );
 }

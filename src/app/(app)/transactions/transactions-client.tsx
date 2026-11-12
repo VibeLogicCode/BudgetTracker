@@ -493,6 +493,7 @@ export function TransactionsClient({
   possibleDuplicateCount = 0,
   viewerId = null,
   isAdmin = false,
+  importedRowIds = [],
 }: {
   page: TransactionPage;
   accounts: Option[];
@@ -582,7 +583,14 @@ export function TransactionsClient({
    */
   viewerId?: number | null;
   isAdmin?: boolean;
+  /**
+   * v1.61.0 fix round. The ids of this page's rows that deleteTransaction treats as imported
+   * (importedTransactionIds: an import_id, an import link, or an origin other than `manual`). A
+   * row's own import_id still counts when this is not passed.
+   */
+  importedRowIds?: number[];
 }) {
+  const importedRows = new Set(importedRowIds);
   const [selected, setSelected] = useState<number[]>([]);
   // Backlog BZ: the bulk toolbar's category, now that its control is a combobox rather than a
   // <select> the form could read on its own. null is "nothing chosen yet" -- the hidden field
@@ -1514,9 +1522,10 @@ export function TransactionsClient({
             offered to whoever deleteTransaction (src/lib/transactions.ts) will let delete it -- an
             admin, the row's person, or anyone for a shared row, never a self-scoped viewer. The
             server rule is the guarantee; this condition is a courtesy. Its confirm says what the
-            delete does to the next import, which is the part a person cannot guess. Last in the
-            menu, where every destructive item in this app sits. */}
-        {row.importId === null ? (
+            delete does to the next import, which is the part a person cannot guess. "Imported" is
+            the server's own rule, handed over as importedRowIds (origin and import links), not only
+            import_id. Last in the menu, where every destructive item in this app sits. */}
+        {row.importId === null && !importedRows.has(row.id) ? (
           <RowMenuForm
             action={deleteTransaction}
             fields={{ transactionId: String(row.id) }}

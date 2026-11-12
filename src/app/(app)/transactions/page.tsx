@@ -14,7 +14,7 @@ import { resolveRenameRule, reviewQueueCount } from '@/lib/categorize/engine';
 import { alwaysAskRuleFor, listRecurringMarkRules, listRules, recurringMarkFor } from '@/lib/categorize/rules';
 import type { RecurringMark } from '@/lib/categorize/mark-kinds';
 import { splitsForTransactions } from '@/lib/splits';
-import { countMatchingMerchant, groupTransactionsByCategory, listTransactions } from '@/lib/transactions';
+import { countMatchingMerchant, groupTransactionsByCategory, importedTransactionIds, listTransactions } from '@/lib/transactions';
 import { todayIso } from '@/lib/dates';
 import { resolveRange } from '@/lib/date-range';
 import { readEnv } from '@/lib/env';
@@ -188,6 +188,9 @@ export default async function TransactionsPage({
       // a viewer deleteTransaction will let delete it.
       viewerId={viewer.id}
       isAdmin={viewer.role === 'admin'}
+      // v1.61.0 fix round: which rows on this page deleteTransaction treats as imported (origin and
+      // import links, not only import_id), so the menu's confirm and who sees Delete match it.
+      importedRowIds={importedTransactionIds(page.rows.map((row) => row.id))}
       // Ruling R10: an asset account holds a typed balance and takes no transactions/imports, so
       // it is filtered out of every account picker on this page -- the filter select, quick-add
       // and (formerly) the bottom manual-entry form all shared this one `accounts` prop, so

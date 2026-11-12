@@ -191,6 +191,28 @@ describe('linkOverlap', () => {
     add('2026-06-05', 'ofx');
     expect(linkOverlap(accountId, '2026-06-05')).toMatchObject({ newestImported: '2026-06-05', suggestedStart: '2026-06-05' });
   });
+
+  /**
+   * Fix round. Rows an earlier link synced meet the next sync by bank id, so they never move the
+   * start: after an unlink and relink, a start the day after the newest of them would drop every
+   * row the bank posts late as `beforeStart`, for good.
+   */
+  it('ignores rows an earlier link synced: only statements move the suggestion', () => {
+    const { accountId, add } = seed();
+    add('2026-05-20', 'csv');
+    add('2026-06-03', 'simplefin');
+    expect(linkOverlap(accountId, '2026-06-05')).toMatchObject({
+      byOrigin: { manual: 0, csv: 1, ofx: 0, simplefin: 1 },
+      newestImported: '2026-05-20',
+      suggestedStart: '2026-05-21',
+    });
+  });
+
+  it('suggests the window start for an account that only ever synced', () => {
+    const { accountId, add } = seed();
+    add('2026-06-03', 'simplefin');
+    expect(linkOverlap(accountId, '2026-06-05')).toMatchObject({ newestImported: null, suggestedStart: '2026-03-08' });
+  });
 });
 
 describe('the link start date (v1.61.0 item 3b)', () => {

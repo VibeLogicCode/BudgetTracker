@@ -235,6 +235,15 @@ describe('BatchClient: nothing commits without a confirmation', () => {
     expect(screen.getByText('1 to import')).toBeTruthy();
   });
 
+  /** v1.61.0 fix round: rows the batch will hold or leave out are named, so the row's sum adds up. */
+  it('names the rows that may already be here beside the exact duplicates', async () => {
+    answerDetect([row({ filename: 'jan.csv', counts: { totalRows: 7, duplicateCount: 3, errorCount: 0, setAsideCount: 2, willImport: 2 } })]);
+    render(<BatchClient {...props} />);
+    dropFiles(['jan.csv']);
+    await waitFor(() => expect(screen.getByText(/7 rows · 3 already here · 2 may already be here/)).toBeTruthy());
+    expect(screen.getByText('2 to import')).toBeTruthy();
+  });
+
   it('says so plainly when a file would add nothing', async () => {
     answerDetect([
       row({

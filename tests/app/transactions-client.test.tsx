@@ -4495,6 +4495,38 @@ describe('TransactionsClient — deleting a row', () => {
     await waitFor(() => expect(deleteTransactionAction).toHaveBeenCalled());
   });
 
+  /**
+   * Fix round. "Imported" is deleteTransaction's rule (origin and import links), handed over by the
+   * page as importedRowIds, not only the row's own import_id: a row whose import was undone under a
+   * second import has none, and the server still treats it as imported.
+   */
+  it('treats a row the page names as imported like one, even with no import id of its own', async () => {
+    const asked = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const props = {
+      accounts: [{ id: 1, name: 'Joint Chequing' }],
+      categories: [{ id: 42, name: 'Old Category', parentId: null, isArchived: false, sortOrder: 0 }],
+      people: [],
+      today: '2026-03-02',
+      importedRowIds: [1],
+    };
+    render(<TransactionsClient {...props} page={pageWithRow({ importId: null, attributedUserId: ALEX })} viewerId={ALEX} />);
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete transaction' }));
+    expect(asked).toHaveBeenCalledWith(expect.stringMatching(/^Delete this imported row\?/));
+    await waitFor(() => expect(deleteTransactionAction).toHaveBeenCalled());
+    cleanup();
+
+    // Not offered to a self-scoped viewer, even on their own row, nor to another member.
+    render(<TransactionsClient {...props} page={pageWithRow({ importId: null, attributedUserId: SAM })} viewerId={SAM} selfScoped />);
+    openRowMenu('Actions for TIM HORTONS');
+    expect(screen.queryByRole('menuitem', { name: /delete/i })).toBeNull();
+    cleanup();
+
+    render(<TransactionsClient {...props} page={pageWithRow({ importId: null, attributedUserId: ALEX })} viewerId={SAM} />);
+    openRowMenu('Actions for TIM HORTONS');
+    expect(screen.queryByRole('menuitem', { name: /delete/i })).toBeNull();
+  });
+
   it('does not offer it on an imported row when nobody says who is looking', () => {
     render(
       <TransactionsClient
@@ -4580,8 +4612,8 @@ describe('TransactionsClient — possible duplicates in Needs review', () => {
     const chip = screen.getByRole('link', { name: 'Possible duplicates (1)' });
     expect(chip.getAttribute('href')).toBe('/transactions?review=1&queue=duplicates');
     expect(screen.getByText('MAPLE GROCER #12')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Keep both' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Delete this one' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Keep both/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Delete this one/ })).toBeTruthy();
     // The queue row is still there below it.
     expect(document.querySelector('[data-transaction-cards]')?.textContent).toContain('TIM HORTONS');
   });

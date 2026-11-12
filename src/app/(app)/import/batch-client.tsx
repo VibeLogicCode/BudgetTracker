@@ -41,7 +41,8 @@ export interface BatchRow {
   profile: { id: number; name: string } | null;
   profileConfidence: 'certain' | 'likely' | 'none' | null;
   source: 'csv' | 'ofx' | null;
-  counts: { totalRows: number; duplicateCount: number; errorCount: number; willImport: number } | null;
+  /** `setAsideCount` (v1.61.0) is absent from an answer built before it; read as none. */
+  counts: { totalRows: number; duplicateCount: number; errorCount: number; setAsideCount?: number; willImport: number } | null;
 }
 
 /**
@@ -467,6 +468,7 @@ export function BatchClient(props: {
                         <span className="text-xs text-muted">
                           {`${row.counts.totalRows} rows`}
                           {row.counts.duplicateCount > 0 ? ` · ${row.counts.duplicateCount} already here` : ''}
+                          {(row.counts.setAsideCount ?? 0) > 0 ? ` · ${row.counts.setAsideCount} may already be here` : ''}
                           {row.counts.errorCount > 0 ? ` · ${row.counts.errorCount} unreadable` : ''}
                           {' · '}
                           <span className={row.counts.willImport > 0 ? 'font-medium text-ink' : ''}>

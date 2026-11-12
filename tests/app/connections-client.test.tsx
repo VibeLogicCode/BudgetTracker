@@ -475,4 +475,28 @@ describe('ConnectionsClient — held possible duplicates in the sync notice', ()
     await findByText(/Sam's Visa: 3 added/);
     expect(queryByText(/possible duplicate/)).toBeNull();
   });
+
+  /** Fix round: rows a person already decided against, and rows before the start day, are said too. */
+  it('names the rows left out as already here and the rows dated before the start day', async () => {
+    stubSync({ accounts: [{ ...account, held: 0, setAside: 2, beforeStart: 5 }], errlist: [], remainingRequests: 19, engineFailed: false, totalHeld: 0 });
+    const { getByText, findByText } = render(
+      <ConnectionsClient connection={CONNECTION} links={[]} accounts={[]} remainingRequests={20} dailyLimit={20} />,
+    );
+    fireEvent.click(getByText('Sync now'));
+    expect(
+      await findByText(
+        /Sam's Visa: 3 added, 1 already had, 2 left out as already here, 5 dated before this account's start day, 0 still pending, 0 errors/,
+      ),
+    ).toBeTruthy();
+  });
+
+  it('says neither when both are none', async () => {
+    stubSync({ accounts: [{ ...account, held: 0 }], errlist: [], remainingRequests: 19, engineFailed: false, totalHeld: 0 });
+    const { getByText, findByText, queryByText } = render(
+      <ConnectionsClient connection={CONNECTION} links={[]} accounts={[]} remainingRequests={20} dailyLimit={20} />,
+    );
+    fireEvent.click(getByText('Sync now'));
+    await findByText(/Sam's Visa: 3 added, 1 already had, 0 still pending/);
+    expect(queryByText(/left out as already here|start day/)).toBeNull();
+  });
 });

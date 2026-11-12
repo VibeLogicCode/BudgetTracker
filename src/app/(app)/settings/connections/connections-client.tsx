@@ -174,7 +174,17 @@ export function ConnectionsClient({
     if (!result) return;
     const errors: string[] = result.errlist ?? [];
     setErrlist(errors);
-    const synced = result.accounts as { accountName: string; added: number; duplicates: number; skippedPending: number; errors: number; currencyWarning: string | null }[];
+    const synced = result.accounts as {
+      accountName: string;
+      added: number;
+      duplicates: number;
+      /** v1.61.0. Absent from a result built before it; read as none. */
+      setAside?: number;
+      beforeStart?: number;
+      skippedPending: number;
+      errors: number;
+      currencyWarning: string | null;
+    }[];
     // v1.61.0 item 3d: possible duplicates the sync held instead of counting twice.
     const held = typeof result.totalHeld === 'number' ? result.totalHeld : 0;
     const heldNote =
@@ -186,8 +196,14 @@ export function ConnectionsClient({
       setNotice(null);
       return;
     }
+    // v1.61.0 fix round: the rows a person already decided against, and the rows dated before the
+    // link's start day, are said too (only when there are some), so the counts add up to what came.
     const perAccount = synced
-      .map((a) => `${a.accountName}: ${a.added} added, ${a.duplicates} already had, ${a.skippedPending} still pending, ${a.errors} errors`)
+      .map((a) => {
+        const decided = (a.setAside ?? 0) > 0 ? `, ${a.setAside} left out as already here` : '';
+        const early = (a.beforeStart ?? 0) > 0 ? `, ${a.beforeStart} dated before this account's start day` : '';
+        return `${a.accountName}: ${a.added} added, ${a.duplicates} already had${decided}${early}, ${a.skippedPending} still pending, ${a.errors} errors`;
+      })
       .join(' · ');
     const engineNote = result.engineFailed ? ' Categorization failed, so the new rows are waiting in the review queue.' : '';
     // NEW-5 fix-round: same honest-note treatment as engineFailed — applyPaymentMatchers is

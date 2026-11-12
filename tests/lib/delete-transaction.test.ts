@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
-import { createManualTransaction, deleteTransaction, listTransactions } from '@/lib/transactions';
+import { createManualTransaction, deleteTransaction, importedTransactionIds, listTransactions } from '@/lib/transactions';
 import { NOT_YOURS_ERROR } from '@/lib/auth/viewer';
 import { commitImport } from '@/lib/import/commit';
 import { computeRowHashes } from '@/lib/import/dedup';
@@ -502,5 +502,37 @@ describe('deleteTransaction: one imported row (v1.61.0)', () => {
       decided_by: null,
       decided_at: null,
     });
+  });
+});
+
+/**
+ * v1.61.0 fix round. The row menu learns which rows are imported from here, by deleteTransaction's
+ * own rule: an import_id, an import link, or an origin other than `manual`.
+ */
+describe('importedTransactionIds', () => {
+  it('names the rows deleteTransaction treats as imported, and leaves out a row typed by hand', () => {
+    current = createSeededTestDb();
+    const user = admin();
+    const account = insertTestAccount(current.db, {});
+    const typed = manualRow(account, user, { description: 'CORNER COFFEE', amountCents: -450 });
+    const now = '2026-03-10T00:00:00.000Z';
+    const insert = (origin: string, importId: number | null) =>
+      current!.db.get<{ id: number }>(
+        sql`insert into transactions (account_id, import_id, date, raw_description, normalized_merchant, amount_cents, origin, created_by, created_at, updated_at)
+            values (${account}, ${importId}, '2026-03-10', 'CORNER COFFEE', 'CORNER COFFEE', -450, ${origin}, ${user}, ${now}, ${now}) returning id`,
+      ).id;
+    const importId = current.db.get<{ id: number }>(
+      sql`insert into imports (account_id, filename, imported_by, rows_added, rows_duplicate, rows_error, created_at)
+          values (${account}, 'march.csv', ${user}, 0, 0, 0, ${now}) returning id`,
+    ).id;
+    const withImportId = insert('csv', importId);
+    const csvNoImport = insert('csv', null);
+    const linkedOnly = insert('manual', null);
+    current.db.run(sql`insert into transaction_imports (transaction_id, import_id, created_at) values (${linkedOnly}, ${importId}, ${now})`);
+
+    expect(importedTransactionIds([typed, withImportId, csvNoImport, linkedOnly]).sort((a, b) => a - b)).toEqual(
+      [withImportId, csvNoImport, linkedOnly].sort((a, b) => a - b),
+    );
+    expect(importedTransactionIds([])).toEqual([]);
   });
 });

@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { simplefinAccountLinks, simplefinConnections, transactions } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
@@ -325,7 +325,10 @@ export interface LinkOverlap {
   /** Rows dated on or after `windowStart`, and the same count by how they arrived. */
   rowsInWindow: number;
   byOrigin: Record<RowOrigin, number>;
-  /** The newest date among rows that came from a statement or the bank. Hand-typed rows do not count. */
+  /**
+   * The newest date among rows that came from a statement (CSV, QFX/OFX). Hand-typed rows do not
+   * count, and neither do earlier SimpleFIN rows: those meet the next sync by bank id.
+   */
   newestImported: string | null;
   /** The day after `newestImported`, kept inside [windowStart, today]; `windowStart` when there is none. */
   suggestedStart: string;
@@ -335,9 +338,12 @@ export interface LinkOverlap {
  * The overlap between the bank's 90 days and what the account already holds, and the suggested
  * first day to take from the bank.
  *
- * Only imported rows move the suggestion. A hand-typed purchase from yesterday would otherwise push
+ * Only statement rows move the suggestion. A hand-typed purchase from yesterday would otherwise push
  * the start to today and lose weeks of bank rows; those rows go through the sync's duplicate check
- * instead, which holds the bank's copy for Needs review.
+ * instead, which holds the bank's copy for Needs review. Rows an earlier link already synced do not
+ * move it either: they dedupe exactly by bank id, while a start the day after the newest of them
+ * would turn every row the bank posts late (dated before that day) into a `beforeStart` row,
+ * dropped for good, after an unlink and relink.
  */
 export function linkOverlap(accountId: number, today: string): LinkOverlap {
   const windowStart = addDaysIso(today, -(MAX_WINDOW_DAYS - 1));
@@ -355,7 +361,7 @@ export function linkOverlap(accountId: number, today: string): LinkOverlap {
   const newest = db
     .select({ date: sql<string | null>`max(${transactions.date})` })
     .from(transactions)
-    .where(and(eq(transactions.accountId, accountId), ne(transactions.origin, 'manual')))
+    .where(and(eq(transactions.accountId, accountId), inArray(transactions.origin, ['csv', 'ofx'])))
     .get();
   const newestImported = newest?.date ?? null;
 

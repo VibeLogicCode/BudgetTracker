@@ -1425,6 +1425,38 @@ export function countExcludingCategory(categoryId: number): number {
 export const IMPORTED_ROW_SELF_ERROR = 'Ask an admin to delete a row from a bank statement.';
 
 /**
+ * v1.61.0 fix round. Which of these transactions deleteTransaction treats as imported, by its own
+ * rule (an import_id, a transaction_imports association, or an origin other than `manual`), so
+ * the row menu offers the imported confirm, and hides Delete from a self-scoped viewer, for exactly
+ * the rows the server will treat that way. TransactionRow carries only import_id, which a row whose
+ * import was undone under a second import no longer has.
+ */
+export function importedTransactionIds(ids: number[]): number[] {
+  const unique = [...new Set(ids)];
+  const result: number[] = [];
+  const db = getDb();
+  for (let offset = 0; offset < unique.length; offset += 400) {
+    const chunk = unique.slice(offset, offset + 400);
+    const rows = db
+      .select({ id: transactions.id })
+      .from(transactions)
+      .where(
+        and(
+          inArray(transactions.id, chunk),
+          or(
+            isNotNull(transactions.importId),
+            ne(transactions.origin, 'manual'),
+            sql`exists (select 1 from ${transactionImports} where ${transactionImports.transactionId} = ${transactions.id})`,
+          ),
+        ),
+      )
+      .all();
+    for (const row of rows) result.push(row.id);
+  }
+  return result;
+}
+
+/**
  * Delete one transaction: a row typed in by hand, or (v1.61.0) one row an import or the bank sync
  * brought in.
  *
