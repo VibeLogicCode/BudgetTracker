@@ -12,6 +12,7 @@ import { listGoals } from '@/lib/goals';
 import { householdInsights } from '@/lib/insights';
 import { insightsHref } from '@/lib/insights-links';
 import { unreviewedRuleImports } from '@/lib/import/commit';
+import { waitingSetAsideCount } from '@/lib/import/set-aside';
 import { listLoanSummaries, ruleLinkedPayments } from '@/lib/loans';
 import { netWorthHint, netWorthOverTime } from '@/lib/networth';
 import { onboardingSteps } from '@/lib/onboarding';
@@ -193,7 +194,8 @@ export default async function DashboardPage({
   );
   const goals = listGoals({}, viewer);
   // v1.58.1: the queue is household-wide; a self-scoped viewer gets 0, as the app shell does.
-  const reviewCount = selfScoped ? 0 : reviewQueueCount();
+  // v1.61.0 item 4b: plus the rows held as possible duplicates, the same sum the nav badge shows.
+  const reviewCount = selfScoped ? 0 : reviewQueueCount() + waitingSetAsideCount();
   // v1.13.1 review A: a self viewer must never receive the household roster -- not shown, not
   // sent. Every other use of `people` below is already behind `selfScoped ? undefined : (...)`
   // except the QuickAddTransaction prop, which this gate now covers too.

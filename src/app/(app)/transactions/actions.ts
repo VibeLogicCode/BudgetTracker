@@ -29,7 +29,7 @@ import {
   bulkSetNotes,
   bulkSetTransfer,
   createManualTransaction,
-  deleteManualTransaction,
+  deleteTransaction,
   getTransaction,
   listTransactions,
   merchantsOfTransactions,
@@ -73,6 +73,7 @@ import {
 } from '@/lib/categorize/rules';
 import { boundsProblem } from '@/lib/categorize/amount-bounds';
 import { isCategoryArchived } from '@/lib/categories';
+import { dismissSetAsideRow, releaseSetAsideRow } from '@/lib/import/set-aside';
 
 /**
  * A pick that would normally also teach a rule writes none when the category is archived (the
@@ -1312,13 +1313,14 @@ export async function saveSplitsAction(_prev: ActionState, formData: FormData): 
 }
 
 /**
- * Delete a transaction nobody imported (reported 2026-09-13: Record payment writes a real
- * transaction and there was no way to remove one).
+ * Delete one transaction (reported 2026-09-13: Record payment writes a real transaction and there
+ * was no way to remove one). v1.61.0: one imported row too, by an admin or the row's person.
  *
- * Thin on purpose: every decision -- imported rows are refused, the three reversals, the audit
- * entry -- lives in deleteManualTransaction (src/lib/transactions.ts), because those are the same
- * decisions undoImport makes and they should not be made twice in two places. This layer does the
- * four things an action does here: origin, auth, parse, revalidate.
+ * Thin on purpose: every decision -- who may delete an imported row, the record that keeps the
+ * next import from bringing it back, the three reversals, the audit entry -- lives in
+ * deleteTransaction (src/lib/transactions.ts), because those are the same decisions undoImport
+ * makes and they should not be made twice in two places. This layer does the four things an
+ * action does here: origin, auth, parse, revalidate.
  */
 export async function deleteTransactionAction(formData: FormData): Promise<ActionState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
@@ -1326,14 +1328,63 @@ export async function deleteTransactionAction(formData: FormData): Promise<Actio
   const parsed = z.coerce.number().int().positive().safeParse(formData.get('transactionId'));
   if (!parsed.success) return { error: 'Invalid request.' };
 
-  const result = deleteManualTransaction({ txnId: parsed.data, userId: user.id, viewer: user });
+  const result = deleteTransaction({ txnId: parsed.data, userId: user.id, viewer: user });
   if ('error' in result) return { error: result.error };
 
   revalidatePath('/transactions');
   revalidatePath('/dashboard');
+  revalidatePath('/budgets');
   revalidatePath('/reports');
   revalidatePath('/warranties');
   return { message: 'Transaction deleted.' };
+}
+
+/** v1.61.0 item 4a. A held row's id, as the Possible duplicates card posts it. */
+const setAsideIdSchema = z.coerce.number().int().positive();
+
+/** Every page whose figures or counts a Keep both / Delete this one changes. */
+function revalidatePossibleDuplicatePages(): void {
+  revalidatePath('/transactions');
+  revalidatePath('/dashboard');
+  revalidatePath('/budgets');
+  revalidatePath('/reports');
+}
+
+/**
+ * v1.61.0 item 4a, Keep both. The held row becomes a transaction, exactly as its import would
+ * have written it, and counts from now on. Any household viewer may; releaseSetAsideRow
+ * (src/lib/import/set-aside.ts) refuses a self-scoped one and audits the decision.
+ */
+export async function keepPossibleDuplicateAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+  const user = await requireUser();
+  const parsed = setAsideIdSchema.safeParse(formData.get('setAsideId'));
+  if (!parsed.success) return { error: 'Invalid request.' };
+
+  const result = releaseSetAsideRow({ id: parsed.data, userId: user.id, viewer: user });
+  if ('error' in result) return { error: result.error };
+
+  revalidatePossibleDuplicatePages();
+  return { message: 'Kept both rows.' };
+}
+
+/**
+ * v1.61.0 item 4a, Delete this one. The held row is left out for good, and the next import of the
+ * same statement or the sync's overlap leaves it out again. dismissSetAsideRow
+ * (src/lib/import/set-aside.ts) refuses a self-scoped viewer and anyone canActOnOwner refuses, and
+ * audits the decision.
+ */
+export async function dismissPossibleDuplicateAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+  const user = await requireUser();
+  const parsed = setAsideIdSchema.safeParse(formData.get('setAsideId'));
+  if (!parsed.success) return { error: 'Invalid request.' };
+
+  const result = dismissSetAsideRow({ id: parsed.data, userId: user.id, viewer: user });
+  if ('error' in result) return { error: result.error };
+
+  revalidatePossibleDuplicatePages();
+  return { message: 'Deleted the possible duplicate.' };
 }
 
 /**

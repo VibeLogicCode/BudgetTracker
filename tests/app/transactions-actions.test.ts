@@ -11,6 +11,9 @@ import { ARCHIVED_GUESS_ERROR, confirmCategory, runEngine, upsertRenameRule } fr
 import { listRules, ruleOwnedError, setAlwaysAskRule, setRuleDisabledFlag, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { archiveCategory } from '@/lib/categories';
 import { NOT_YOURS_ERROR } from '@/lib/auth/viewer';
+import { commitImport } from '@/lib/import/commit';
+import { computeRowHashes } from '@/lib/import/dedup';
+import { createManualTransaction } from '@/lib/transactions';
 
 let currentUser: {
   id: number;
@@ -65,6 +68,9 @@ import {
   bulkTransferAction,
   createLoanFromTransactionAction,
   createRulesFromRowAction,
+  deleteTransactionAction,
+  dismissPossibleDuplicateAction,
+  keepPossibleDuplicateAction,
   manualEntryAction,
   previewAlwaysAskAction,
   renameTransactionAction,
@@ -3020,5 +3026,138 @@ describe('v1.58.1: renameTransactionAction scope all is household-wide', () => {
 
     const one = await renameTransactionAction({}, formData({ transactionId: String(own), displayName: 'Mine', scope: 'one' }));
     expect(one.error).toBeUndefined();
+  });
+});
+
+/**
+ * v1.61.0 item 4a. Keep both and Delete this one: origin first, the viewer from the session, the
+ * id parsed, then src/lib/import/set-aside.ts decides and audits. Item 2a: the row menu's delete
+ * now reaches an imported row, and leaves the record that keeps the next import from bringing it
+ * back.
+ */
+describe('v1.61.0: possible duplicates and deleting an imported row', () => {
+  const AT = new Date('2026-03-12T15:00:00.000Z');
+
+  function heldSetup() {
+    const s = setup();
+    const samId = insertTestUser(s.db, { name: 'Sam', username: 'sam', role: 'member' });
+    const typed = createManualTransaction({
+      accountId: s.accountId,
+      date: '2026-03-09',
+      description: 'MAPLE GROCER',
+      amountCents: -4217,
+      categoryId: null,
+      attributedUserId: s.userId,
+      userId: s.userId,
+      actorRole: 'admin',
+    });
+    const statement = (person: number | null) => {
+      s.db.run(sql`update accounts set owner_user_id = ${person} where id = ${s.accountId}`);
+      return commitImport({
+        accountId: s.accountId,
+        profileId: null,
+        filename: 'march.csv',
+        importedBy: s.userId,
+        rows: computeRowHashes(s.accountId, [
+          { rowIndex: 0, rawDate: '2026-03-10', date: '2026-03-10', rawDescription: 'MAPLE GROCER', amountCents: -4217, balanceCents: null, cells: [] },
+        ]),
+        errors: [],
+        origin: 'csv',
+        at: AT,
+      });
+    };
+    const count = (query: string, ...params: unknown[]) => (s.sqlite.prepare(query).get(...params) as { c: number }).c;
+    return { ...s, samId, typed, statement, count };
+  }
+
+  it('Keep both inserts the held row and audits it', async () => {
+    const s = heldSetup();
+    const held = s.statement(s.samId);
+    expect(held.rowsHeld).toBe(1);
+    expect(s.count('select count(*) as c from transactions')).toBe(1);
+
+    const result = await keepPossibleDuplicateAction({}, formData({ setAsideId: String(held.heldIds[0]) }));
+
+    expect(result.error).toBeUndefined();
+    expect(s.count('select count(*) as c from transactions')).toBe(2);
+    expect(s.count('select count(*) as c from set_aside_rows')).toBe(0);
+    expect(s.count("select count(*) as c from audit_log where action = 'keep_duplicate'")).toBe(1);
+    expect(vi.mocked(revalidatePath).mock.calls.map((call) => call[0])).toEqual(
+      expect.arrayContaining(['/transactions', '/dashboard', '/budgets', '/reports']),
+    );
+  });
+
+  it('Delete this one dismisses the held row and audits it', async () => {
+    const s = heldSetup();
+    const held = s.statement(s.samId);
+
+    const result = await dismissPossibleDuplicateAction({}, formData({ setAsideId: String(held.heldIds[0]) }));
+
+    expect(result.error).toBeUndefined();
+    expect(s.count('select count(*) as c from transactions')).toBe(1);
+    expect(s.sqlite.prepare('select state from set_aside_rows').get()).toEqual({ state: 'dismissed' });
+    expect(s.count("select count(*) as c from audit_log where action = 'dismiss_duplicate'")).toBe(1);
+  });
+
+  it("a member is refused Delete this one on another person's row, and may still keep it", async () => {
+    const s = heldSetup();
+    const held = s.statement(s.userId);
+    currentUser = { id: s.samId, name: 'Sam', username: 'sam', role: 'member', visibility: 'household' };
+
+    const refused = await dismissPossibleDuplicateAction({}, formData({ setAsideId: String(held.heldIds[0]) }));
+    expect(refused.error).toBe(NOT_YOURS_ERROR);
+    expect(s.sqlite.prepare('select state from set_aside_rows').get()).toEqual({ state: 'waiting' });
+    expect(s.count('select count(*) as c from audit_log')).toBe(0);
+
+    const kept = await keepPossibleDuplicateAction({}, formData({ setAsideId: String(held.heldIds[0]) }));
+    expect(kept.error).toBeUndefined();
+    expect(s.count('select count(*) as c from transactions')).toBe(2);
+  });
+
+  it('a self-scoped viewer is refused both', async () => {
+    const s = heldSetup();
+    const held = s.statement(s.samId);
+    currentUser = { id: s.samId, name: 'Sam', username: 'sam', role: 'member', visibility: 'self' };
+
+    expect((await keepPossibleDuplicateAction({}, formData({ setAsideId: String(held.heldIds[0]) }))).error).toBeTruthy();
+    expect((await dismissPossibleDuplicateAction({}, formData({ setAsideId: String(held.heldIds[0]) }))).error).toBeTruthy();
+    expect(s.sqlite.prepare('select state from set_aside_rows').get()).toEqual({ state: 'waiting' });
+    expect(s.count('select count(*) as c from transactions')).toBe(1);
+  });
+
+  it('both refuse a cross-origin post and a junk id before touching anything', async () => {
+    const s = heldSetup();
+    const held = s.statement(s.samId);
+    sameOrigin.value = false;
+    expect(await keepPossibleDuplicateAction({}, formData({ setAsideId: String(held.heldIds[0]) }))).toEqual({ error: CROSS_ORIGIN_ERROR });
+    expect(await dismissPossibleDuplicateAction({}, formData({ setAsideId: String(held.heldIds[0]) }))).toEqual({ error: CROSS_ORIGIN_ERROR });
+    sameOrigin.value = true;
+    expect(await keepPossibleDuplicateAction({}, formData({ setAsideId: 'abc' }))).toEqual({ error: 'Invalid request.' });
+    expect(await dismissPossibleDuplicateAction({}, formData({ setAsideId: '-1' }))).toEqual({ error: 'Invalid request.' });
+    expect(s.sqlite.prepare('select state from set_aside_rows').get()).toEqual({ state: 'waiting' });
+  });
+
+  it('deleteTransactionAction deletes an imported row and leaves the record that keeps it out', async () => {
+    const s = setup();
+    const imported = commitImport({
+      accountId: s.accountId,
+      profileId: null,
+      filename: 'march.csv',
+      importedBy: s.userId,
+      rows: computeRowHashes(s.accountId, [
+        { rowIndex: 0, rawDate: '2026-03-10', date: '2026-03-10', rawDescription: 'FUEL STOP 12', amountCents: -6130, balanceCents: null, cells: [] },
+      ]),
+      errors: [],
+      origin: 'csv',
+      at: AT,
+    });
+
+    const result = await deleteTransactionAction(formData({ transactionId: String(imported.insertedTransactionIds[0]) }));
+
+    expect(result).toEqual({ message: 'Transaction deleted.' });
+    expect(s.sqlite.prepare('select state, reason from set_aside_rows').get()).toEqual({ state: 'dismissed', reason: 'deleted' });
+    expect(s.sqlite.prepare("select detail from audit_log where action = 'delete_transaction'").get()).toEqual({
+      detail: 'FUEL STOP 12 (from march.csv)',
+    });
   });
 });

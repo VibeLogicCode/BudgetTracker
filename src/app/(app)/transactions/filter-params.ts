@@ -87,6 +87,17 @@ export function readGroupPage(params: TransactionParams): number {
   return num(params, 'gpage') ?? 1;
 }
 
+/**
+ * v1.61.0 item 4a. `?queue=duplicates` is the Possible duplicates view of Needs review: the rows an
+ * import or the bank sync held (set_aside_rows), shown on their own. Review mode only -- a self
+ * viewer's review mode is already forced off by the caller, so a hand-typed URL reads as their
+ * ordinary list -- and it adds no transaction filter: readFilter below leaves `reviewQueue`
+ * undefined for it, because a held row is not a transaction and no clause could select one.
+ */
+export function readDuplicatesView(params: TransactionParams, reviewMode: boolean): boolean {
+  return reviewMode && one(params, 'queue') === 'duplicates';
+}
+
 export function readFilter(
   params: TransactionParams,
   range: ResolvedRange | null,
@@ -139,7 +150,8 @@ export function readFilter(
     // v1.25.0 Lane R item R1: `?queue=` chips onto the review filter (TransactionFilter.reviewQueue's
     // own doc comment, src/lib/transactions.ts). Anything but the two real values -- absent, or a
     // hand-edited junk value -- is `undefined`, meaning "both", the same "fall back rather than
-    // refuse" rule `?transfers=` just above already follows.
+    // refuse" rule `?transfers=` just above already follows. v1.61.0: `duplicates` is a real
+    // value with no transaction clause (readDuplicatesView above), so it lands on undefined too.
     reviewQueue:
       one(params, 'queue') === 'suggested'
         ? 'suggested'

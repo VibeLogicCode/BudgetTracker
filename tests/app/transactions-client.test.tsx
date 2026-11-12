@@ -8,6 +8,7 @@ import { TransactionsClient } from '@/app/(app)/transactions/transactions-client
 import { assignToBillAction, createRulesFromRowAction, deleteTransactionAction, previewAlwaysAskAction, previewRowRuleAction, sendBackToReviewAction, setAlwaysAskAction, setCategoryAction } from '@/app/(app)/transactions/actions';
 import type { CategoryGroupPage, CategoryGroupRow, TransactionPage, TransactionRow } from '@/lib/transactions';
 import type { SplitRow } from '@/lib/splits';
+import type { WaitingSetAsideRow } from '@/lib/import/set-aside';
 
 vi.mock('@/app/(app)/transactions/actions', () => ({
   manualEntryAction: vi.fn(async () => ({})),
@@ -45,6 +46,9 @@ vi.mock('@/app/(app)/transactions/actions', () => ({
   sendBackToReviewAction: vi.fn(async () => ({})),
   // v1.19.0 Lane 2 item 5: "Accept all suggestions".
   acceptAllGuessesAction: vi.fn(async () => ({})),
+  // v1.61.0 item 4a: the Possible duplicates card's two choices.
+  keepPossibleDuplicateAction: vi.fn(async () => ({})),
+  dismissPossibleDuplicateAction: vi.fn(async () => ({})),
 }));
 
 afterEach(() => {
@@ -4422,19 +4426,27 @@ describe('TransactionsClient — the flat list can be paged', () => {
 
 /**
  * Reported 2026-09-13: a recorded payment could not be removed. Record
- * payment on a bill writes a real transaction; nothing in the app could delete one. The line drawn
- * (deleteManualTransaction, src/lib/transactions.ts) is `importId`: a row an import brought in is
- * that import's to remove, through Undo import, which knows which rows it alone covers.
+ * payment on a bill writes a real transaction; nothing in the app could delete one. v1.61.0 item
+ * 2b: an imported row can be deleted too, by whoever deleteTransaction (src/lib/transactions.ts)
+ * lets -- an admin, the row's person, anyone for a shared row, never a self-scoped viewer.
  */
-describe('TransactionsClient — deleting a row nobody imported', () => {
-  function renderRow(importId: number | null) {
+describe('TransactionsClient — deleting a row', () => {
+  const ALEX = 11;
+  const SAM = 12;
+  function renderRow(
+    importId: number | null,
+    over: { attributedUserId?: number | null; viewerId?: number; isAdmin?: boolean; selfScoped?: boolean } = {},
+  ) {
     return render(
       <TransactionsClient
-        page={pageWithRow({ importId })}
+        page={pageWithRow({ importId, attributedUserId: over.attributedUserId === undefined ? ALEX : over.attributedUserId })}
         accounts={[{ id: 1, name: 'Joint Chequing' }]}
         categories={[{ id: 42, name: 'Old Category', parentId: null, isArchived: false, sortOrder: 0 }]}
         people={[]}
         today="2026-03-02"
+        viewerId={over.viewerId ?? SAM}
+        isAdmin={over.isAdmin ?? false}
+        selfScoped={over.selfScoped ?? false}
       />,
     );
   }
@@ -4445,8 +4457,54 @@ describe('TransactionsClient — deleting a row nobody imported', () => {
     expect(screen.getByRole('menuitem', { name: /delete/i })).toBeTruthy();
   });
 
-  it('does not offer it on a row that came from an import', () => {
-    renderRow(7);
+  it('offers it on an imported row to an admin, to the row’s person and on a shared row', () => {
+    renderRow(7, { viewerId: SAM, isAdmin: true });
+    openRowMenu('Actions for TIM HORTONS');
+    expect(screen.getByRole('menuitem', { name: 'Delete transaction' })).toBeTruthy();
+    cleanup();
+
+    renderRow(7, { viewerId: ALEX });
+    openRowMenu('Actions for TIM HORTONS');
+    expect(screen.getByRole('menuitem', { name: 'Delete transaction' })).toBeTruthy();
+    cleanup();
+
+    renderRow(7, { attributedUserId: null, viewerId: SAM });
+    openRowMenu('Actions for TIM HORTONS');
+    expect(screen.getByRole('menuitem', { name: 'Delete transaction' })).toBeTruthy();
+  });
+
+  it('does not offer it on an imported row to another member or to a self-scoped viewer', () => {
+    renderRow(7, { viewerId: SAM });
+    openRowMenu('Actions for TIM HORTONS');
+    expect(screen.queryByRole('menuitem', { name: /delete/i })).toBeNull();
+    cleanup();
+
+    renderRow(7, { attributedUserId: SAM, viewerId: SAM, selfScoped: true });
+    openRowMenu('Actions for TIM HORTONS');
+    expect(screen.queryByRole('menuitem', { name: /delete/i })).toBeNull();
+  });
+
+  it('says what deleting an imported row does to the next import before it posts', async () => {
+    const asked = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderRow(7, { viewerId: ALEX });
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete transaction' }));
+    expect(asked).toHaveBeenCalledWith(
+      'Delete this imported row? Importing the same statement again, or the next bank sync, will leave it out. A loan balance or bill installment it was linked to goes back to what it was.',
+    );
+    await waitFor(() => expect(deleteTransactionAction).toHaveBeenCalled());
+  });
+
+  it('does not offer it on an imported row when nobody says who is looking', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({ importId: 7, attributedUserId: ALEX })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={[{ id: 42, name: 'Old Category', parentId: null, isArchived: false, sortOrder: 0 }]}
+        people={[]}
+        today="2026-03-02"
+      />,
+    );
     openRowMenu('Actions for TIM HORTONS');
     expect(screen.queryByRole('menuitem', { name: /delete/i })).toBeNull();
   });
@@ -4471,6 +4529,90 @@ describe('TransactionsClient — deleting a row nobody imported', () => {
     await waitFor(() => expect(deleteTransactionAction).toHaveBeenCalled());
     const formData = vi.mocked(deleteTransactionAction).mock.calls[0]?.[0] as FormData;
     expect(formData.get('transactionId')).toBe('1');
+  });
+});
+
+/**
+ * v1.61.0 item 4a. Possible duplicates in Needs review: a chip with its count while something
+ * waits, the card above the queue in its All view, and the card alone under `?queue=duplicates`.
+ */
+describe('TransactionsClient — possible duplicates in Needs review', () => {
+  const HELD: WaitingSetAsideRow = {
+    id: 5,
+    accountId: 1,
+    accountName: 'Joint Chequing',
+    origin: 'simplefin',
+    importId: 3,
+    importFilename: 'simplefin 2026-03-10 09:15',
+    date: '2026-03-10',
+    amountCents: -4217,
+    rawDescription: 'MAPLE GROCER #12',
+    attributedUserId: 11,
+    personName: 'Alex',
+    reason: 'possible_duplicate',
+    createdAt: '2026-03-10T13:15:00.000Z',
+    candidate: { id: 40, date: '2026-03-09', description: 'MAPLE GROCER', amountCents: -4217, origin: 'manual', personName: 'Alex' },
+  };
+  const empty: TransactionPage = { total: 0, page: 1, pageSize: 50, pageCount: 1, rows: [], outCents: 0, inCents: 0 };
+
+  function renderReview(over: { page?: TransactionPage; currentQuery?: string; held?: WaitingSetAsideRow[]; count?: number } = {}) {
+    const held = over.held ?? [HELD];
+    return render(
+      <TransactionsClient
+        page={over.page ?? pageWithRow({ categoryId: null, categoryName: null, source: 'none' })}
+        accounts={[]}
+        categories={[]}
+        people={[]}
+        today="2026-03-12"
+        reviewMode
+        reviewCount={1 + held.length}
+        currentQuery={over.currentQuery ?? 'review=1'}
+        possibleDuplicates={held}
+        possibleDuplicateCount={over.count ?? held.length}
+        viewerId={11}
+        isAdmin
+      />,
+    );
+  }
+
+  it('shows the chip with its count and the card above the queue, with both choices', () => {
+    renderReview();
+    const chip = screen.getByRole('link', { name: 'Possible duplicates (1)' });
+    expect(chip.getAttribute('href')).toBe('/transactions?review=1&queue=duplicates');
+    expect(screen.getByText('MAPLE GROCER #12')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Keep both' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Delete this one' })).toBeTruthy();
+    // The queue row is still there below it.
+    expect(document.querySelector('[data-transaction-cards]')?.textContent).toContain('TIM HORTONS');
+  });
+
+  it('hides the chip while nothing waits', () => {
+    renderReview({ held: [], count: 0 });
+    expect(screen.queryByRole('link', { name: /Possible duplicates/ })).toBeNull();
+  });
+
+  it('under ?queue=duplicates shows the card alone, marked active', () => {
+    renderReview({ currentQuery: 'review=1&queue=duplicates' });
+    expect(screen.getByRole('link', { name: 'Possible duplicates (1)' }).getAttribute('aria-current')).toBe('page');
+    expect(screen.getByText('MAPLE GROCER #12')).toBeTruthy();
+    expect(document.querySelector('[data-transaction-cards]')).toBeNull();
+  });
+
+  it('under ?queue=duplicates with nothing waiting says so, and the chip stays to leave by', () => {
+    renderReview({ currentQuery: 'review=1&queue=duplicates', held: [], count: 0 });
+    expect(screen.getByText('No possible duplicates are waiting.')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Possible duplicates (0)' })).toBeTruthy();
+  });
+
+  it('an empty queue under held rows shows the card, not "Nothing to review"', () => {
+    renderReview({ page: empty });
+    expect(screen.getByText('MAPLE GROCER #12')).toBeTruthy();
+    expect(screen.queryByText('Nothing to review. Everything is categorized.')).toBeNull();
+  });
+
+  it('is not shown in the Suggested view, which narrows the queue by category state', () => {
+    renderReview({ currentQuery: 'review=1&queue=suggested' });
+    expect(screen.queryByText('MAPLE GROCER #12')).toBeNull();
   });
 });
 

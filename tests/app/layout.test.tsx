@@ -36,6 +36,13 @@ vi.mock('@/lib/categorize/engine', () => ({
   reviewQueueCount: reviewQueueCountMock,
 }));
 
+// v1.61.0 item 4b: the badge also counts the rows held as possible duplicates. 0 by default, so
+// the two pre-existing tests below read exactly what they always did.
+const waitingSetAsideCountMock = vi.hoisted(() => vi.fn(() => 0));
+vi.mock('@/lib/import/set-aside', () => ({
+  waitingSetAsideCount: waitingSetAsideCountMock,
+}));
+
 vi.mock('@/components/app-shell/AppShell', () => ({
   AppShell: ({ reviewCount, children }: { reviewCount: number; children: React.ReactNode }) => (
     <div data-testid="review-count">
@@ -48,6 +55,7 @@ vi.mock('@/components/app-shell/AppShell', () => ({
 afterEach(() => {
   cleanup();
   reviewQueueCountMock.mockClear();
+  waitingSetAsideCountMock.mockClear();
 });
 
 describe('AppLayout (item I1)', () => {
@@ -67,5 +75,34 @@ describe('AppLayout (item I1)', () => {
 
     expect(getByTestId('review-count').textContent).toMatch(/^7/);
     expect(reviewQueueCountMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * v1.61.0 item 4b. Needs review holds the queue and the rows an import or the bank sync held as
+ * possible duplicates, so the nav badge is their sum -- the same figure the transactions chip and
+ * the dashboard callout show. Still 0, and neither count computed, for a self viewer.
+ */
+describe('AppLayout: possible duplicates in the badge (v1.61.0)', () => {
+  it('3 queue rows and 2 held rows show 5', async () => {
+    reviewQueueCountMock.mockImplementation(() => 3);
+    waitingSetAsideCountMock.mockImplementation(() => 2);
+    currentUser.value = { id: 1, name: 'Adult', role: 'admin', visibility: 'household' };
+    const { default: AppLayout } = await import('@/app/(app)/layout');
+    const { getByTestId } = render(await AppLayout({ children: <span>hi</span> }));
+
+    expect(getByTestId('review-count').textContent).toMatch(/^5/);
+  });
+
+  it('a self viewer gets 0 and neither count is asked for', async () => {
+    reviewQueueCountMock.mockImplementation(() => 3);
+    waitingSetAsideCountMock.mockImplementation(() => 2);
+    currentUser.value = { id: 2, name: 'Kid', role: 'member', visibility: 'self' };
+    const { default: AppLayout } = await import('@/app/(app)/layout');
+    const { getByTestId } = render(await AppLayout({ children: <span>hi</span> }));
+
+    expect(getByTestId('review-count').textContent).toMatch(/^0/);
+    expect(reviewQueueCountMock).not.toHaveBeenCalled();
+    expect(waitingSetAsideCountMock).not.toHaveBeenCalled();
   });
 });

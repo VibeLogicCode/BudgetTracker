@@ -22,7 +22,8 @@ import { readEnv } from '@/lib/env';
 // see filter-params.ts's own top-of-file docblock for why a group bulk action has to rebuild the
 // very filter this render used, and why two parsers would be two ways to misread one URL.
 import { unpaidInstallments } from '@/lib/warranty/installments';
-import { readFilter, readGroupMode, readGroupPage } from './filter-params';
+import { listWaitingSetAside, waitingSetAsideCount } from '@/lib/import/set-aside';
+import { readDuplicatesView, readFilter, readGroupMode, readGroupPage } from './filter-params';
 import { TransactionsClient } from './transactions-client';
 
 export const dynamic = 'force-dynamic';
@@ -96,12 +97,21 @@ export default async function TransactionsPage({
   // same query the nav badge already runs. Always computed, never gated on reviewMode, so the
   // "Needs review (N)" chip stays accurate when a filtered view happens to be review-empty.
   // v1.58.1: the queue is household-wide; a self-scoped viewer gets 0, as the app shell does.
-  const reviewCount = selfScopedViewer ? 0 : reviewQueueCount();
+  // v1.61.0 item 4b: Needs review also holds the rows an import or the sync held as possible
+  // duplicates, so the chip counts both -- the same sum the nav badge and the dashboard show.
+  // reviewQueueCount itself (and REVIEW_WHERE's index) is untouched.
+  const possibleDuplicateCount = selfScopedViewer ? 0 : waitingSetAsideCount();
+  const reviewCount = selfScopedViewer ? 0 : reviewQueueCount() + possibleDuplicateCount;
+  // v1.61.0 item 4a: the held rows themselves, in review mode only (listWaitingSetAside also hands
+  // a self viewer nothing, and reviewMode is already false for one).
+  const possibleDuplicates = reviewMode ? listWaitingSetAside(viewer) : [];
+  const duplicatesView = readDuplicatesView(params, reviewMode);
   // Review-mode-only (ruling: matchingCount is computed for review-mode rows only, Lane 1's own
   // docblock on the filter). A plain object keyed by id, the same shape loanLinks/splits below
   // already use for "extra data about this page's rows, not carried on TransactionRow itself".
   const matchingCounts: Record<number, number> = {};
-  if (reviewMode) {
+  // v1.61.0: not in the Possible duplicates view, which shows no queue row to count for.
+  if (reviewMode && !duplicatesView) {
     for (const row of page.rows) matchingCounts[row.id] = countMatchingMerchant(row.normalizedMerchant);
   }
   /**
@@ -172,6 +182,12 @@ export default async function TransactionsPage({
       alwaysAskMerchants={alwaysAskMerchants}
       groups={groups}
       currentQuery={currentQueryString(params)}
+      possibleDuplicates={possibleDuplicates}
+      possibleDuplicateCount={possibleDuplicateCount}
+      // v1.61.0 item 2b: who is looking, so the row menu offers Delete on an imported row only to
+      // a viewer deleteTransaction will let delete it.
+      viewerId={viewer.id}
+      isAdmin={viewer.role === 'admin'}
       // Ruling R10: an asset account holds a typed balance and takes no transactions/imports, so
       // it is filtered out of every account picker on this page -- the filter select, quick-add
       // and (formerly) the bottom manual-entry form all shared this one `accounts` prop, so

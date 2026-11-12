@@ -1,9 +1,10 @@
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, or, sql, type SQL } from 'drizzle-orm';
 import { z } from '@/lib/zod';
 import { getDb } from '@/db/client';
-import { accounts, categories, transactions, transactionSplits, users } from '@/db/schema';
+import { accounts, categories, imports, transactions, transactionSplits, users } from '@/db/schema';
 import { getAccount } from '@/lib/accounts';
-import { NOT_YOURS_ERROR, ownerScope, type Viewer } from '@/lib/auth/viewer';
+import { canActOnOwner, NOT_YOURS_ERROR, ownerScope, type Viewer } from '@/lib/auth/viewer';
+import { recordSetAside, reopenSetAsideFor } from '@/lib/import/set-aside';
 import {
   REVIEW_SUGGESTED_WHERE,
   REVIEW_UNCATEGORIZED_WHERE,
@@ -1420,21 +1421,37 @@ export function countExcludingCategory(categoryId: number): number {
   return row?.c ?? 0;
 }
 
+/** v1.61.0 item 2a: the refusal a self-scoped member gets for a row an import or the sync brought in. */
+export const IMPORTED_ROW_SELF_ERROR = 'Ask an admin to delete a row from a bank statement.';
+
 /**
- * Delete a transaction nobody imported.
+ * Delete one transaction: a row typed in by hand, or (v1.61.0) one row an import or the bank sync
+ * brought in.
  *
  * WHY THIS EXISTS (reported 2026-09-13): a recorded payment could not be removed. Record payment on a bill writes a real transaction, and until this function there was
  * no delete path in the app at all -- undoImport was the only code that removed transaction rows,
  * and it only removes rows an import created. So a row typed in by hand, or written by Record
  * payment for a bill that was actually paid by a statement line, was permanent.
  *
- * WHERE THE LINE IS DRAWN, and why it is this one: an imported row belongs to its import. Deleting
- * one from underneath would leave that import's own counts describing rows that are no longer
- * there, and undo is the operation built for it -- it knows which rows this import ALONE brought
- * in (partitionByAssociation) and never deletes a row a second import also covers. So an imported
- * row is refused here and pointed at Undo import instead. `import_id` alone is not the test: a row
- * can be associated with several imports through transaction_imports while carrying whichever
- * import_id it was first given, so both are checked.
+ * IMPORTED ROWS (v1.61.0, owner decision 2). This used to refuse every imported row and point at
+ * Undo import, which removes the whole statement. One wrong row can now go on its own:
+ *   - who: an admin, the row's person, or anyone for a shared row (canActOnOwner). A self-scoped
+ *     member deletes only rows they typed in themselves; an imported row is refused them, as
+ *     import and undo already are.
+ *   - the tombstone: a dismissed `deleted` record in set_aside_rows, keyed exactly as the row was
+ *     (provider id, else CSV hash). Every import path and the sync read that table after the
+ *     exact-duplicate check, so importing the same statement again, or the sync's overlap, leaves
+ *     the row out instead of bringing it back. A later import's preview lists it ticked, and one
+ *     untick brings it back.
+ *   - imports.rows_added stays as history; undo previews count live rows.
+ * "Imported" is any of: an import_id, a transaction_imports association (a row can be associated
+ * with several imports while carrying whichever import_id it was first given), or an origin other
+ * than `manual`. The last catches a row whose import was since undone under a second import.
+ *
+ * D5. Every delete, typed or imported, first puts back to waiting the set-aside rows that were left
+ * out as copies of this one (reopenSetAsideFor), so leaving out a copy can never end with neither
+ * copy counted. Balance snapshots are left alone: the statement's balance for that day is still
+ * the bank's figure.
  *
  * THE THREE REVERSALS ARE undoImport's, in its order and for its reasons (see commit.ts's own
  * comments): a cascade removes a loan_payments row but cannot put the loan's balance back; a SET
@@ -1442,7 +1459,7 @@ export function countExcludingCategory(categoryId: number): number {
  * exists; and neither of them untrains the classifier for a category somebody confirmed. Splits
  * need no line here -- transaction_splits cascades, and a split describes only its own parent.
  */
-export function deleteManualTransaction(input: {
+export function deleteTransaction(input: {
   txnId: number;
   userId: number;
   viewer: Viewer;
@@ -1452,40 +1469,79 @@ export function deleteManualTransaction(input: {
   const row = db
     .select({
       id: transactions.id,
+      accountId: transactions.accountId,
       importId: transactions.importId,
+      date: transactions.date,
+      amountCents: transactions.amountCents,
       rawDescription: transactions.rawDescription,
       displayDescription: transactions.displayDescription,
       normalizedMerchant: transactions.normalizedMerchant,
       categoryId: transactions.categoryId,
       categorizationSource: transactions.categorizationSource,
       attributedUserId: transactions.attributedUserId,
+      dedupHash: transactions.dedupHash,
+      externalId: transactions.externalId,
+      hashVersion: transactions.hashVersion,
+      origin: transactions.origin,
     })
     .from(transactions)
     .where(eq(transactions.id, input.txnId))
     .get();
   if (row === undefined) return { error: 'That transaction no longer exists.' };
 
+  // R2, the same rule every other write in this file follows: a self-scoped viewer acts on their
+  // own records only. ownerScope returns null for a household viewer, which is what makes this a
+  // no-op for an admin rather than a second branch. Asked first, so a self viewer learns nothing
+  // about a row that is not theirs, not even that an import brought it in.
+  const scope = ownerScope(input.viewer);
+  if (scope !== null && row.attributedUserId !== scope) return { error: NOT_YOURS_ERROR };
+
   const associations = db
     .select({ importId: transactionImports.importId })
     .from(transactionImports)
     .where(eq(transactionImports.transactionId, input.txnId))
     .all();
-  if (row.importId !== null || associations.length > 0) {
-    return {
-      error: 'That row came from an imported statement. Undo the import on the Import page to remove it.',
-    };
+  const imported = row.importId !== null || associations.length > 0 || row.origin !== 'manual';
+  if (imported) {
+    if (scope !== null) return { error: IMPORTED_ROW_SELF_ERROR };
+    if (!canActOnOwner(row.attributedUserId, input.viewer)) return { error: NOT_YOURS_ERROR };
   }
 
-  // R2, the same rule every other write in this file follows: a self-scoped viewer acts on their
-  // own records only. ownerScope returns null for a household viewer, which is what makes this a
-  // no-op for an admin rather than a second branch.
-  const scope = ownerScope(input.viewer);
-  if (scope !== null && row.attributedUserId !== scope) return { error: NOT_YOURS_ERROR };
-
   const label = row.displayDescription ?? row.rawDescription;
+  // The statement the row came from, for the tombstone and the audit line: its own import first,
+  // else the first import it is associated with.
+  const sourceImportId = row.importId ?? associations[0]?.importId ?? null;
+  const sourceFilename =
+    imported && sourceImportId !== null
+      ? (db.select({ filename: imports.filename }).from(imports).where(eq(imports.id, sourceImportId)).get()?.filename ?? null)
+      : null;
+  const timestamp = nowIso(input.at);
 
   const touchedLoans: number[] = [];
   const result = db.transaction(() => {
+    // D5, while candidate_txn_id still points here: the delete's ON DELETE SET NULL clears it next.
+    reopenSetAsideFor([input.txnId]);
+    // The tombstone. Keyed as commitImport keys the row; a row with neither key (none is written
+    // that way today) has nothing an import could match it by, so it needs none.
+    if (imported && ((row.externalId ?? '') !== '' || (row.dedupHash ?? '') !== '')) {
+      recordSetAside({
+        accountId: row.accountId,
+        importId: sourceImportId,
+        state: 'dismissed',
+        reason: 'deleted',
+        origin: row.origin !== 'manual' ? row.origin : row.externalId ? 'ofx' : 'csv',
+        date: row.date,
+        amountCents: row.amountCents,
+        rawDescription: row.rawDescription,
+        attributedUserId: row.attributedUserId,
+        dedupHash: row.dedupHash,
+        externalId: row.externalId,
+        hashVersion: row.hashVersion,
+        candidateTxnId: null,
+        decidedBy: input.userId,
+        at: input.at,
+      });
+    }
     /*
       E3 (review). The same guard clearCategory carries, and for the reason its docblock gives: a
       split row's own category_id is a placeholder -- its PARTS are where the money went -- so
@@ -1504,9 +1560,10 @@ export function deleteManualTransaction(input: {
       action: 'delete_transaction',
       entity: 'transaction',
       entityId: input.txnId,
-      // One short sentence, per audit.ts's own rule: what went, not a payload.
-      detail: label.slice(0, 120),
-      at: nowIso(input.at),
+      // One short sentence, per audit.ts's own rule: what went, not a payload. An imported row
+      // also names its statement: `MAPLE GROCER (from march.csv)`.
+      detail: sourceFilename === null ? label.slice(0, 120) : `${label.slice(0, 120)} (from ${sourceFilename.slice(0, 80)})`,
+      at: timestamp,
     });
     return { ok: true } as const;
   });

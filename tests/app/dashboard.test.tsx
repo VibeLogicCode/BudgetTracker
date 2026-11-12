@@ -365,6 +365,44 @@ describe('DashboardPage (ruling R2)', () => {
     expect(screen.getByText(/2 transactions need review/)).toBeTruthy();
   });
 
+  /**
+   * v1.61.0 item 4b. Needs review also holds the rows an import or the bank sync held as possible
+   * duplicates, so the callout counts both -- the same sum as the nav badge and the transactions
+   * chip. A self viewer still sees no callout.
+   */
+  it('v1.61.0: 3 queue rows and 2 held rows read 5 in the callout, and a self viewer sees none', async () => {
+    const { adultId, childId } = await setup();
+    const accountId = t!.db.get<{ id: number }>(sql`select id from accounts limit 1`).id;
+    createManualTransaction({
+      accountId,
+      date: today,
+      description: 'CORNER BAKERY',
+      amountCents: -850,
+      categoryId: null,
+      attributedUserId: adultId,
+      userId: adultId,
+      actorRole: 'admin',
+    });
+    for (const externalId of ['sf-held-1', 'sf-held-2']) {
+      t!.db.run(
+        sql`insert into set_aside_rows
+              (account_id, state, reason, origin, date, amount_cents, raw_description, external_id, created_at)
+            values (${accountId}, 'waiting', 'possible_duplicate', 'simplefin', ${today}, -4217, 'MAPLE GROCER', ${externalId},
+                    '2026-03-18T13:15:00.000Z')`,
+      );
+    }
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+    expect(screen.getByText(/5 transactions need review/)).toBeTruthy();
+    cleanup();
+
+    currentUser.value = { id: childId, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+    expect(screen.queryByText(/transactions need review/)).toBeNull();
+  });
+
   it('v1.60.0: the backup line is shown to an admin and to no member', async () => {
     const { adultId, childId } = await setup();
     const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');

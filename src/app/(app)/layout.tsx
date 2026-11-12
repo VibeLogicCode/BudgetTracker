@@ -3,6 +3,7 @@ import { requireUser } from '@/lib/auth/session';
 import { isSelfScoped } from '@/lib/auth/viewer';
 import { mustChangePassword } from '@/lib/auth/users';
 import { reviewQueueCount } from '@/lib/categorize/engine';
+import { waitingSetAsideCount } from '@/lib/import/set-aside';
 import { APP_VERSION } from '@/lib/version';
 import { AppShell } from '@/components/app-shell/AppShell';
 
@@ -27,7 +28,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // review badge at all. Same "no household figure leaves this file, even unrendered" reasoning
   // already applied to budgets/page.tsx and reports/page.tsx. v1.60.0: one count per request --
   // reviewQueueCount is React-cached, so a page under this layout that asks again reuses it.
-  const reviewCount = isSelfScoped(user) ? 0 : reviewQueueCount();
+  // v1.61.0 item 4b: plus the rows held as possible duplicates, which wait in Needs review too
+  // (waitingSetAsideCount, cached the same way). Neither count is computed for a self viewer.
+  const reviewCount = isSelfScoped(user) ? 0 : reviewQueueCount() + waitingSetAsideCount();
   return (
     <AppShell
       user={{ id: user.id, name: user.name, role: user.role, visibility: user.visibility }}

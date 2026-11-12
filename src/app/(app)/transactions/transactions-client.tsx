@@ -5,6 +5,7 @@ import { Fragment, useActionState, useEffect, useState } from 'react';
 import { CategoryCombobox } from '@/components/CategoryCombobox';
 import { defaultBoundsAround } from '@/lib/categorize/amount-bounds';
 import { FormError } from '@/components/FormError';
+import { PossibleDuplicatesCard } from '@/components/PossibleDuplicatesCard';
 import { QuickAddTransaction } from '@/components/QuickAddTransaction';
 import { SubmitButton } from '@/components/SubmitButton';
 import { AlwaysAskDialog } from '@/components/transactions/AlwaysAskDialog';
@@ -48,6 +49,7 @@ import { transactionsHref } from '@/lib/transaction-links';
 import { budgetCardId, budgetsHref } from '@/lib/budgets-links';
 import { monthLabel } from '@/lib/dates';
 import type { SplitRow } from '@/lib/splits';
+import type { WaitingSetAsideRow } from '@/lib/import/set-aside';
 import type {
   CategorizationSource,
   CategoryGroupPage,
@@ -340,10 +342,14 @@ const TRANSFER_VIEW_OPTIONS: { value: 'all' | 'only' | 'none'; label: string; pa
  * never stands in for it, the same way REVIEW_SUGGESTED_WHERE/REVIEW_UNCATEGORIZED_WHERE only
  * ever narrow REVIEW_WHERE inside buildWhere (src/lib/transactions.ts), never stand alone.
  */
-const QUEUE_CHIP_OPTIONS: { value: '' | 'suggested' | 'uncategorized'; label: string; param: string | null }[] = [
+const QUEUE_CHIP_OPTIONS: { value: '' | 'suggested' | 'uncategorized' | 'duplicates'; label: string; param: string | null }[] = [
   { value: '', label: 'All', param: null },
   { value: 'suggested', label: 'Suggested', param: 'suggested' },
   { value: 'uncategorized', label: 'Not categorized', param: 'uncategorized' },
+  // v1.61.0 item 4a. Not a transaction filter: `?queue=duplicates` shows the Possible duplicates
+  // card on its own (filter-params.ts readDuplicatesView). The one chip with a count, because it
+  // is rendered only while something waits (or while it is the active view).
+  { value: 'duplicates', label: 'Possible duplicates', param: 'duplicates' },
 ];
 
 /**
@@ -483,6 +489,10 @@ export function TransactionsClient({
   alwaysAskMerchants = [],
   groups = null,
   currentQuery = '',
+  possibleDuplicates = [],
+  possibleDuplicateCount = 0,
+  viewerId = null,
+  isAdmin = false,
 }: {
   page: TransactionPage;
   accounts: Option[];
@@ -556,6 +566,22 @@ export function TransactionsClient({
    * same fallback the deleted `currentSearch` state used to have before its effect ever ran.
    */
   currentQuery?: string;
+  /**
+   * v1.61.0 item 4a. The rows an import or the bank sync held as possible duplicates
+   * (listWaitingSetAside), loaded by page.tsx in review mode only and always empty for a self
+   * viewer. Rendered by PossibleDuplicatesCard above the queue, or alone under `?queue=duplicates`.
+   */
+  possibleDuplicates?: WaitingSetAsideRow[];
+  /** v1.61.0: waitingSetAsideCount(), for the `Possible duplicates (N)` chip. 0 for a self viewer. */
+  possibleDuplicateCount?: number;
+  /**
+   * v1.61.0 item 2b. Who is looking, so the row menu offers Delete on an imported row only to a
+   * viewer the server will let delete it (an admin, the row's person, anyone for a shared row).
+   * deleteTransaction (src/lib/transactions.ts) is the guarantee; this only keeps a person from
+   * finding a control that would then say no.
+   */
+  viewerId?: number | null;
+  isAdmin?: boolean;
 }) {
   const [selected, setSelected] = useState<number[]>([]);
   // Backlog BZ: the bulk toolbar's category, now that its control is a combobox rather than a
@@ -859,11 +885,18 @@ export function TransactionsClient({
     transfersParam === 'only' ? 'only' : transfersParam === '0' ? 'none' : 'all';
 
   // v1.25.0 Lane R item R1: same "read it off currentQuery" idiom as activeTransferView just
-  // above. Anything but the two real values (absent, or a hand-edited junk value) is '', the
+  // above. Anything but the real values (absent, or a hand-edited junk value) is '', the
   // QUEUE_CHIP_OPTIONS "All" entry -- server-side readFilter (page.tsx) falls back the same way.
+  // v1.61.0: `duplicates` is the Possible duplicates view (readDuplicatesView, filter-params.ts).
   const queueParam = new URLSearchParams(currentQuery).get('queue');
-  const activeQueueChip: '' | 'suggested' | 'uncategorized' =
-    queueParam === 'suggested' ? 'suggested' : queueParam === 'uncategorized' ? 'uncategorized' : '';
+  const activeQueueChip: '' | 'suggested' | 'uncategorized' | 'duplicates' =
+    queueParam === 'suggested'
+      ? 'suggested'
+      : queueParam === 'uncategorized'
+        ? 'uncategorized'
+        : queueParam === 'duplicates'
+          ? 'duplicates'
+          : '';
 
   /**
    * v1.26.0 Lane 1 item 4 (the reported actual workflow -- auditing fifty rows after an import,
@@ -1477,16 +1510,25 @@ export function TransactionsClient({
           </RowMenuButton>
         )}
         {/* 2026-09-13, reported: Record payment on a bill writes a real transaction, and until
-            now nothing could remove one. Offered ONLY on a row no import brought in -- an imported
-            row belongs to its import, and Undo import is the operation that knows which rows that
-            import alone covers (deleteManualTransaction says the same thing server-side, and says
-            it there so this condition is a courtesy rather than the guarantee). Last in the menu,
-            where every destructive item in this app sits. */}
+            now nothing could remove one. v1.61.0 item 2b (owner decision 2): an imported row too,
+            offered to whoever deleteTransaction (src/lib/transactions.ts) will let delete it -- an
+            admin, the row's person, or anyone for a shared row, never a self-scoped viewer. The
+            server rule is the guarantee; this condition is a courtesy. Its confirm says what the
+            delete does to the next import, which is the part a person cannot guess. Last in the
+            menu, where every destructive item in this app sits. */}
         {row.importId === null ? (
           <RowMenuForm
             action={deleteTransaction}
             fields={{ transactionId: String(row.id) }}
             confirm={`Delete this transaction permanently? Nothing puts it back — a loan balance or a bill installment it was linked to goes back to what it was.`}
+          >
+            Delete transaction
+          </RowMenuForm>
+        ) : !selfScoped && (isAdmin || row.attributedUserId === null || row.attributedUserId === viewerId) ? (
+          <RowMenuForm
+            action={deleteTransaction}
+            fields={{ transactionId: String(row.id) }}
+            confirm="Delete this imported row? Importing the same statement again, or the next bank sync, will leave it out. A loan balance or bill installment it was linked to goes back to what it was."
           >
             Delete transaction
           </RowMenuForm>
@@ -3380,11 +3422,14 @@ export function TransactionsClient({
               {reviewMode ? (
                 <PillNav
                   groupLabel="Filter the review queue"
-                  options={QUEUE_CHIP_OPTIONS.map(
+                  options={QUEUE_CHIP_OPTIONS.filter(
+                    // v1.61.0: the duplicates chip only while something waits, or while it is the view.
+                    (option) => option.value !== 'duplicates' || possibleDuplicateCount > 0 || activeQueueChip === 'duplicates',
+                  ).map(
                     (option): PillNavOption => ({
                       key: option.value === '' ? 'all' : option.value,
                       href: filterHref(currentQuery, 'queue', option.param),
-                      label: option.label,
+                      label: option.value === 'duplicates' ? `${option.label} (${possibleDuplicateCount})` : option.label,
                       active: activeQueueChip === option.value,
                     }),
                   )}
@@ -3698,8 +3743,23 @@ export function TransactionsClient({
           conditional), not width-gated, so it never grows a second tree the way the plain
           Transactions branch below deliberately does (transactionCard's own docblock explains
           why that one DOES carry two trees, one hidden by width at a time). */
-      reviewMode ? (
-        page.rows.length === 0 ? (
+      reviewMode && activeQueueChip === 'duplicates' ? (
+        /* v1.61.0 item 4a. `?queue=duplicates` is the held rows alone: no transaction filter
+           (filter-params.ts readDuplicatesView), so the queue rows the page also loaded are not
+           shown here. The card says so itself when nothing waits. */
+        <PossibleDuplicatesCard rows={possibleDuplicates} today={today} viewerId={viewerId} isAdmin={isAdmin} standalone />
+      ) : reviewMode ? (
+        <>
+        {/* v1.61.0 item 4a. Above the queue in its All view: a held row has no category, so the
+            Suggested and Not categorized views (which narrow the queue by category state) do not
+            carry it. Renders nothing when nothing waits. */}
+        {activeQueueChip === '' ? (
+          <PossibleDuplicatesCard rows={possibleDuplicates} today={today} viewerId={viewerId} isAdmin={isAdmin} />
+        ) : null}
+        {page.rows.length === 0 ? (
+          // v1.61.0: with held rows above, "Nothing to review" would contradict the card, so an
+          // empty queue under them shows only the card.
+          activeQueueChip === '' && possibleDuplicates.length > 0 ? null : (
           // Ruling S5(a): the reading-measure cap now lives once on ReviewWidth above (v1.16.0
           // Lane C item 3), not repeated on every element inside it -- this Card needs no width
           // class of its own to line up with everything else on this branch.
@@ -3721,6 +3781,7 @@ export function TransactionsClient({
               New imports land here whenever the categorizer is unsure.
             </EmptyState>
           </Card>
+          )
         ) : (
           <>
             {/* Ruling S5(a): the reading-measure cap lives once on ReviewWidth now (v1.16.0 Lane
@@ -3780,7 +3841,8 @@ export function TransactionsClient({
               {rowPager(page, currentQuery)}
             </p>
           </>
-        )
+        )}
+        </>
       ) : page.rows.length === 0 ? (
         <Card as="div">
           <EmptyState

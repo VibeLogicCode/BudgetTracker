@@ -810,3 +810,65 @@ describe('TransactionsPage: the recurring mark rides with the row', () => {
     expect(screen.getByRole('menuitem', { name: 'Unmark recurring' })).toBeTruthy();
   });
 });
+
+/**
+ * v1.61.0 item 4a. A row the bank sync held as a possible duplicate shows in Needs review: the
+ * chip with its count, and the card with the held copy beside the row it may duplicate.
+ */
+describe('TransactionsPage: possible duplicates (v1.61.0)', () => {
+  let t: TestDb | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('shows the chip and the card, with both choices, to an admin', async () => {
+    t = createSeededTestDb();
+    const alex = insertTestUser(t.db, { name: 'Alex', username: 'alex', role: 'admin' });
+    const accountId = insertTestAccount(t.db, { name: 'Joint chequing', type: 'chequing', ownerUserId: alex });
+    const { createManualTransaction } = await import('@/lib/transactions');
+    const { commitImport } = await import('@/lib/import/commit');
+    const { computeRowHashes } = await import('@/lib/import/dedup');
+    createManualTransaction({
+      accountId,
+      date: '2026-03-09',
+      description: 'FUEL STOP 12',
+      amountCents: -6130,
+      categoryId: categoryIdByName(t.db, 'Groceries'),
+      attributedUserId: alex,
+      userId: alex,
+      actorRole: 'admin',
+    });
+    const synced = commitImport({
+      accountId,
+      profileId: null,
+      filename: 'simplefin 2026-03-10 09:15',
+      importedBy: alex,
+      rows: [
+        {
+          ...computeRowHashes(accountId, [
+            { rowIndex: 0, rawDate: '2026-03-10', date: '2026-03-10', rawDescription: 'FUEL STOP 12 TORONTO', amountCents: -6130, balanceCents: null, cells: [] },
+          ])[0]!,
+          dedupHash: '',
+          externalId: 'sf-fuel-1',
+        },
+      ],
+      errors: [],
+      origin: 'simplefin',
+      at: new Date('2026-03-10T13:15:00.000Z'),
+    });
+    expect(synced.rowsHeld).toBe(1);
+    currentUser.value = { id: alex, name: 'Alex', username: 'alex', role: 'admin', visibility: 'household' };
+
+    const { default: TransactionsPage } = await import('@/app/(app)/transactions/page');
+    render(await TransactionsPage({ searchParams: Promise.resolve({ review: '1', queue: 'duplicates' }) }));
+
+    expect(screen.getByRole('link', { name: 'Possible duplicates (1)' })).toBeTruthy();
+    expect(screen.getByText('Needs review (1)')).toBeTruthy();
+    const item = screen.getByText('FUEL STOP 12 TORONTO').closest('li') as HTMLElement;
+    expect(item.textContent).toContain('from SimpleFIN');
+    expect(item.textContent).toMatch(/Looks like: FUEL STOP 12 -61\.30 on Mar 9(, \d{4})?, added by hand, Alex/);
+    expect(within(item).getByRole('button', { name: 'Keep both' })).toBeTruthy();
+    expect(within(item).getByRole('button', { name: 'Delete this one' })).toBeTruthy();
+  });
+});

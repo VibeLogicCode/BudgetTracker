@@ -12,7 +12,7 @@ import {
   setLoanAnchor,
   unassignTransactionFromLoan,
 } from '@/lib/loans';
-import { deleteManualTransaction } from '@/lib/transactions';
+import { deleteTransaction } from '@/lib/transactions';
 import { setupLoanTest, type LoanTestContext } from './fixtures';
 import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
@@ -387,7 +387,7 @@ describe('a reversal leaves the ledger settled', () => {
     expect(loanLedger(itemId, TODAY)!.rows.some((row) => row.kind === 'interest')).toBe(true);
 
     expect(
-      deleteManualTransaction({
+      deleteTransaction({
         txnId,
         userId: ctx.userId,
         viewer: HOUSEHOLD_VIEWER,
