@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { createSeededTestDb, insertTestAccount, type TestDb } from '../../helpers/db';
+import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
 import {
   SETTING_AUTO_SYNC_FAILURES,
   SETTING_AUTO_SYNC_LAST_ATTEMPT_AT,
@@ -9,13 +9,16 @@ import {
   getConnection,
   isSimplefinManaged,
   linkAccount,
+  linkOverlap,
   listLinks,
+  markLinksFirstSynced,
   markSynced,
   recordAutoSyncAttempt,
   recordAutoSyncFailure,
   saveClaimedConnection,
 } from '@/lib/simplefin/connection';
 import { getSetting } from '@/lib/settings';
+import { addDaysIso } from '@/lib/dates';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -126,5 +129,104 @@ describe('automatic sync backoff', () => {
     recordAutoSyncFailure();
     saveClaimedConnection(ACCESS_URL, new Date(at.getTime() + MIN));
     expect(autoSyncBackoff(new Date(at.getTime() + 2 * MIN))).toBeNull();
+  });
+});
+
+/**
+ * v1.61.0 item 3a. Before an account is linked, the admin sees what the account already holds from
+ * the bridge's 90 days and a first day to take from the bank: the day after the newest IMPORTED
+ * row. Hand-typed rows never move it; they go through the duplicate check at sync instead.
+ */
+describe('linkOverlap', () => {
+  function seed() {
+    current = createSeededTestDb();
+    const alex = insertTestUser(current.db, { name: 'Alex', username: 'alex' });
+    const accountId = insertTestAccount(current.db, { name: 'Sam Visa', type: 'credit' });
+    const otherId = insertTestAccount(current.db, { name: 'Joint Chequing' });
+    const insert = current.sqlite.prepare(
+      `insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, origin, created_by, created_at, updated_at)
+       values (?, ?, 'MAPLE GROCER', 'MAPLE GROCER', -4217, ?, ?, '2026-03-01T00:00:00.000Z', '2026-03-01T00:00:00.000Z')`,
+    );
+    const add = (date: string, origin: string, account = accountId) => insert.run(account, date, origin, alex);
+    return { accountId, otherId, add };
+  }
+
+  it('suggests the day after the newest imported row, counts the window by source, and ignores hand-typed rows', () => {
+    const { accountId, otherId, add } = seed();
+    // 198 CSV rows ending 2026-05-28, all inside the window that opens 2026-03-08.
+    for (let i = 0; i < 198; i += 1) add(addDaysIso('2026-05-28', -Math.floor(i / 3)), 'csv');
+    // 14 hand-typed rows up to 2026-06-02.
+    for (let i = 0; i < 14; i += 1) add(addDaysIso('2026-06-02', -i), 'manual');
+    // Outside the window, and another account: neither is counted.
+    add('2026-01-15', 'csv');
+    add('2026-06-01', 'csv', otherId);
+
+    expect(linkOverlap(accountId, '2026-06-05')).toEqual({
+      today: '2026-06-05',
+      windowStart: '2026-03-08',
+      rowsInWindow: 212,
+      byOrigin: { manual: 14, csv: 198, ofx: 0, simplefin: 0 },
+      newestImported: '2026-05-28',
+      suggestedStart: '2026-05-29',
+    });
+  });
+
+  it('suggests the window start when the account holds nothing imported', () => {
+    const { accountId, add } = seed();
+    add('2026-06-03', 'manual');
+    const overlap = linkOverlap(accountId, '2026-06-05');
+    expect(overlap.newestImported).toBeNull();
+    expect(overlap.suggestedStart).toBe('2026-03-08');
+    expect(overlap.rowsInWindow).toBe(1);
+  });
+
+  it('suggests the window start when the newest imported row is older than the window', () => {
+    const { accountId, add } = seed();
+    add('2026-01-15', 'ofx');
+    expect(linkOverlap(accountId, '2026-06-05')).toMatchObject({ rowsInWindow: 0, newestImported: '2026-01-15', suggestedStart: '2026-03-08' });
+  });
+
+  it('suggests today when the newest imported row is today', () => {
+    const { accountId, add } = seed();
+    add('2026-06-05', 'ofx');
+    expect(linkOverlap(accountId, '2026-06-05')).toMatchObject({ newestImported: '2026-06-05', suggestedStart: '2026-06-05' });
+  });
+});
+
+describe('the link start date (v1.61.0 item 3b)', () => {
+  it('stores sync_from on a new link and leaves an old-style link NULL', () => {
+    current = createSeededTestDb();
+    const a = insertTestAccount(current.db, { name: 'Bridge Chequing' });
+    const b = insertTestAccount(current.db, { name: 'Bridge Savings' });
+    linkAccount({ simplefinAccountId: 'remote-1', accountId: a, currency: 'CAD', syncFrom: '2026-05-29' });
+    linkAccount({ simplefinAccountId: 'remote-2', accountId: b, currency: 'CAD' });
+    const byRemote = new Map(listLinks().map((link) => [link.simplefinAccountId, link]));
+    expect(byRemote.get('remote-1')).toMatchObject({ syncFrom: '2026-05-29', firstSyncedAt: null });
+    expect(byRemote.get('remote-2')).toMatchObject({ syncFrom: null, firstSyncedAt: null });
+  });
+
+  it('linking again moves the start and makes the next sync a first sync again', () => {
+    current = createSeededTestDb();
+    const a = insertTestAccount(current.db, { name: 'Bridge Chequing' });
+    linkAccount({ simplefinAccountId: 'remote-1', accountId: a, currency: 'CAD', syncFrom: '2026-05-29' });
+    markLinksFirstSynced(['remote-1'], new Date('2026-06-05T16:00:00.000Z'));
+    expect(listLinks()[0]).toMatchObject({ firstSyncedAt: '2026-06-05T16:00:00.000Z' });
+
+    linkAccount({ simplefinAccountId: 'remote-1', accountId: a, currency: 'CAD', syncFrom: '2026-05-20' });
+    expect(listLinks()[0]).toMatchObject({ syncFrom: '2026-05-20', firstSyncedAt: null });
+  });
+
+  it('stamps only links still waiting for their first sync, and keeps the first stamp', () => {
+    current = createSeededTestDb();
+    const a = insertTestAccount(current.db, { name: 'Bridge Chequing' });
+    const b = insertTestAccount(current.db, { name: 'Bridge Savings' });
+    linkAccount({ simplefinAccountId: 'remote-1', accountId: a, currency: 'CAD', syncFrom: '2026-05-29' });
+    linkAccount({ simplefinAccountId: 'remote-2', accountId: b, currency: 'CAD' });
+    markLinksFirstSynced(['remote-1', 'remote-2'], new Date('2026-06-05T16:00:00.000Z'));
+    markLinksFirstSynced(['remote-1'], new Date('2026-06-06T16:00:00.000Z'));
+    const byRemote = new Map(listLinks().map((link) => [link.simplefinAccountId, link]));
+    expect(byRemote.get('remote-1')!.firstSyncedAt).toBe('2026-06-05T16:00:00.000Z');
+    // An old-style link has no start date, so there is nothing pending to stamp.
+    expect(byRemote.get('remote-2')!.firstSyncedAt).toBeNull();
   });
 });

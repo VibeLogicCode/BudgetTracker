@@ -7,12 +7,14 @@ import { POST as syncRoute } from '@/app/api/simplefin/sync/route';
 import { createSession, SESSION_COOKIE_NAME } from '@/lib/auth/session';
 import { MAX_SIMPLEFIN_BODY_BYTES } from '@/lib/simplefin/client';
 import { getConnection, listLinks, saveClaimedConnection } from '@/lib/simplefin/connection';
+import { setAccountActive } from '@/lib/accounts';
 
 let current: TestDb | null = null;
 afterEach(() => {
   current?.cleanup();
   current = null;
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 const ACCESS_URL = 'https://abc123:s3cr3t@bridge.example/simplefin';
@@ -121,7 +123,8 @@ describe('POST /api/simplefin/claim', () => {
 });
 
 describe('POST /api/simplefin/link', () => {
-  it('links an account and warns that CSV import is now disabled', async () => {
+  // v1.61.0: the after-the-fact `warning` is gone; the confirm panel says it before linking.
+  it('links an account and says CSV import is now disabled', async () => {
     const { adminToken, accountId } = setup();
     saveClaimedConnection(ACCESS_URL);
     const response = await linkRoute(
@@ -130,7 +133,6 @@ describe('POST /api/simplefin/link', () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.csvDisabled).toBe(true);
-    expect(body.warning).toMatch(/CSV import is disabled/i);
     expect(body.currencyWarning).toBeNull();
     expect(listLinks()).toHaveLength(1);
   });
@@ -189,6 +191,99 @@ describe('POST /api/simplefin/link', () => {
   });
 });
 
+/**
+ * v1.61.0 items 3a and 3b. Before linking, the page asks for the overlap and a start date; the
+ * link stores the chosen date, or the suggested one when an older client sends none, and refuses a
+ * date outside the bridge's 90 days and an account the sync would skip.
+ */
+describe('POST /api/simplefin/link: overlap preview and start date', () => {
+  const LINK_URL = 'http://nas.local:3000/api/simplefin/link';
+  // 12:00 in the household's zone on 2026-06-05; the bridge's window opens 2026-03-08.
+  const TODAY = new Date('2026-06-05T16:00:00.000Z');
+  afterEach(() => vi.useRealTimers());
+
+  function seeded() {
+    vi.useFakeTimers({ now: TODAY, toFake: ['Date'] });
+    const s = setup();
+    saveClaimedConnection(ACCESS_URL);
+    const insert = current!.sqlite.prepare(
+      `insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, origin, created_by, created_at, updated_at)
+       values (?, ?, 'MAPLE GROCER', 'MAPLE GROCER', -4217, ?, (select min(id) from users), '2026-03-01T00:00:00.000Z', '2026-03-01T00:00:00.000Z')`,
+    );
+    for (const date of ['2026-05-20', '2026-05-24', '2026-05-28']) insert.run(s.accountId, date, 'csv');
+    for (const date of ['2026-06-01', '2026-06-02']) insert.run(s.accountId, date, 'manual');
+    return s;
+  }
+  const link = (accountId: number, token: string, extra: Record<string, unknown> = {}) =>
+    linkRoute(jsonRequest(LINK_URL, { action: 'link', simplefinAccountId: 'remote-1', accountId, currency: 'CAD', ...extra }, token));
+
+  it('previews the rows already in the window and suggests the day after the newest imported row', async () => {
+    const { adminToken, accountId } = seeded();
+    const response = await linkRoute(jsonRequest(LINK_URL, { action: 'preview', accountId }, adminToken));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      today: '2026-06-05',
+      windowStart: '2026-03-08',
+      rowsInWindow: 5,
+      byOrigin: { manual: 2, csv: 3, ofx: 0, simplefin: 0 },
+      newestImported: '2026-05-28',
+      suggestedStart: '2026-05-29',
+    });
+    // A preview links nothing.
+    expect(listLinks()).toHaveLength(0);
+  });
+
+  it('refuses a preview to a member, for an unknown account, an asset account and a deactivated one', async () => {
+    const { adminToken, memberToken, accountId } = seeded();
+    const preview = (id: number, token: string) => linkRoute(jsonRequest(LINK_URL, { action: 'preview', accountId: id }, token));
+    expect((await preview(accountId, memberToken)).status).toBe(403);
+    expect((await preview(9999, adminToken)).status).toBe(404);
+    const asset = insertTestAccount(current!.db, { name: 'Family Home', type: 'asset' });
+    expect((await preview(asset, adminToken)).status).toBe(400);
+    setAccountActive(accountId, false, '2026-06-01');
+    expect((await preview(accountId, adminToken)).status).toBe(400);
+  });
+
+  it('stores the chosen start date, and drops the after-the-fact CSV warning', async () => {
+    const { adminToken, accountId } = seeded();
+    const response = await link(accountId, adminToken, { syncFrom: '2026-05-10' });
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.csvDisabled).toBe(true);
+    expect(body).not.toHaveProperty('warning');
+    expect(listLinks()[0]).toMatchObject({ simplefinAccountId: 'remote-1', syncFrom: '2026-05-10', firstSyncedAt: null });
+  });
+
+  it('uses the suggested start when the client sends none, so an old client cannot double count', async () => {
+    const { adminToken, accountId } = seeded();
+    expect((await link(accountId, adminToken)).status).toBe(200);
+    expect(listLinks()[0]!.syncFrom).toBe('2026-05-29');
+  });
+
+  it('accepts the first and last day of the range, and 400s a date outside it or not a date', async () => {
+    const { adminToken, accountId } = seeded();
+    for (const syncFrom of ['2026-03-07', '2026-06-06', '2026-02-30', '2026-6-01', 'yesterday']) {
+      const response = await link(accountId, adminToken, { syncFrom });
+      expect(response.status, syncFrom).toBe(400);
+    }
+    expect(listLinks()).toHaveLength(0);
+
+    expect((await link(accountId, adminToken, { syncFrom: '2026-03-08' })).status).toBe(200);
+    expect(listLinks()[0]!.syncFrom).toBe('2026-03-08');
+    expect((await link(accountId, adminToken, { syncFrom: '2026-06-05' })).status).toBe(200);
+    expect(listLinks()[0]!.syncFrom).toBe('2026-06-05');
+  });
+
+  it('refuses to link a deactivated account, which the sync would skip', async () => {
+    const { adminToken, accountId } = seeded();
+    setAccountActive(accountId, false, '2026-06-01');
+    const response = await link(accountId, adminToken, { syncFrom: '2026-05-29' });
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toMatch(/deactivated/i);
+    expect(listLinks()).toHaveLength(0);
+  });
+});
+
 describe('POST /api/simplefin/sync', () => {
   it('409s when nothing is configured', async () => {
     const { adminToken } = setup();
@@ -198,6 +293,9 @@ describe('POST /api/simplefin/sync', () => {
   });
 
   it('syncs and returns the counts, errlist and remaining budget', async () => {
+    // v1.61.0: the link's start date comes from today, so today is pinned to keep the 2026-08-10
+    // row inside it.
+    vi.useFakeTimers({ now: new Date('2026-08-15T16:00:00.000Z'), toFake: ['Date'] });
     const { adminToken, accountId } = setup();
     saveClaimedConnection(ACCESS_URL);
     await linkRoute(

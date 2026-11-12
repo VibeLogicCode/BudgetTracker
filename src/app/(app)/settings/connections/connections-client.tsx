@@ -7,8 +7,10 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Money } from '@/components/ui/Money';
 import { Notice } from '@/components/ui/Notice';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { Field, selectClass, textareaClass } from '@/components/ui/form';
-import type { AccountLink, ConnectionRecord } from '@/lib/simplefin/connection';
+import { Field, inputClass, selectClass, textareaClass } from '@/components/ui/form';
+import { dayLabel, isIsoDate } from '@/lib/dates';
+import { originLabel, type RowOrigin } from '@/lib/import/origin';
+import type { AccountLink, ConnectionRecord, LinkOverlap } from '@/lib/simplefin/connection';
 import { forgetConnectionAction, setSimplefinAutoSyncAction } from './actions';
 import { buttonClass } from '@/components/ui/Button';
 
@@ -17,6 +19,32 @@ interface RemoteAccount {
   name: string;
   currency: string;
   balance: string;
+}
+
+/** v1.61.0 item 3b: a link waiting for the admin to confirm its first day. */
+interface PendingLink {
+  remote: RemoteAccount;
+  accountId: number;
+  accountName: string;
+  overlap: LinkOverlap;
+  syncFrom: string;
+}
+
+/** Imported roads first, hand-typed last: `198 from a CSV statement, 14 added by hand`. */
+const ORIGIN_ORDER: RowOrigin[] = ['csv', 'ofx', 'simplefin', 'manual'];
+
+function overlapSentence(accountName: string, overlap: LinkOverlap): string {
+  if (overlap.rowsInWindow === 0) return `${accountName} holds no rows from the last 90 days.`;
+  const parts = ORIGIN_ORDER.filter((origin) => overlap.byOrigin[origin] > 0).map(
+    (origin) => `${overlap.byOrigin[origin]} ${originLabel(origin)}`,
+  );
+  const rows = `${overlap.rowsInWindow} ${overlap.rowsInWindow === 1 ? 'row' : 'rows'}`;
+  return `${accountName} already holds ${rows} from the last 90 days (${parts.join(', ')}).`;
+}
+
+function currencyWarning(currency: string): string | null {
+  const code = currency.toUpperCase();
+  return code === 'CAD' ? null : `This account reports ${code}; this app stores CAD cents with no conversion.`;
 }
 
 export function ConnectionsClient({
@@ -28,6 +56,7 @@ export function ConnectionsClient({
   autoSync = null,
   autoSyncOptions = [],
   autoSyncWaiting = null,
+  today = null,
 }: {
   connection: ConnectionRecord | null;
   links: AccountLink[];
@@ -58,6 +87,8 @@ export function ConnectionsClient({
    * formatted server-side (HH:mm, household clock).
    */
   autoSyncWaiting?: { failures: number; nextTry: string } | null;
+  /** The household's today (YYYY-MM-DD), so a start date in this year reads without its year. */
+  today?: string | null;
 }) {
   const [setupToken, setSetupToken] = useState('');
   const [remote, setRemote] = useState<RemoteAccount[] | null>(null);
@@ -65,6 +96,7 @@ export function ConnectionsClient({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [pendingLink, setPendingLink] = useState<PendingLink | null>(null);
 
   async function post(url: string, body: unknown) {
     setBusy(true);
@@ -101,10 +133,32 @@ export function ConnectionsClient({
     setErrlist(payload.errlist ?? []);
   }
 
-  async function link(account: RemoteAccount, accountId: number) {
-    const result = await post('/api/simplefin/link', { action: 'link', simplefinAccountId: account.id, accountId, currency: account.currency });
+  /**
+   * v1.61.0 item 3b. Nothing is linked yet: this asks what the account already holds and opens the
+   * confirm panel, seeded with the suggested first day.
+   */
+  async function previewLink(account: RemoteAccount, accountId: number) {
+    const overlap = (await post('/api/simplefin/link', { action: 'preview', accountId })) as LinkOverlap | null;
+    if (!overlap) return;
+    const accountName = accounts.find((local) => local.id === accountId)?.name ?? `account ${accountId}`;
+    setPendingLink({ remote: account, accountId, accountName, overlap, syncFrom: overlap.suggestedStart });
+  }
+
+  async function confirmLink(pending: PendingLink) {
+    const result = await post('/api/simplefin/link', {
+      action: 'link',
+      simplefinAccountId: pending.remote.id,
+      accountId: pending.accountId,
+      currency: pending.remote.currency,
+      syncFrom: pending.syncFrom,
+    });
     if (!result) return;
-    setNotice([result.warning, result.currencyWarning].filter(Boolean).join(' '));
+    setPendingLink(null);
+    setNotice(
+      [`Linked. The first sync takes rows from ${dayLabel(pending.syncFrom, pending.overlap.today)}.`, result.currencyWarning]
+        .filter(Boolean)
+        .join(' '),
+    );
     window.location.reload();
   }
 
@@ -121,6 +175,10 @@ export function ConnectionsClient({
     const errors: string[] = result.errlist ?? [];
     setErrlist(errors);
     const synced = result.accounts as { accountName: string; added: number; duplicates: number; skippedPending: number; errors: number; currencyWarning: string | null }[];
+    // v1.61.0 item 3d: possible duplicates the sync held instead of counting twice.
+    const held = typeof result.totalHeld === 'number' ? result.totalHeld : 0;
+    const heldNote =
+      held > 0 ? ` ${held} possible ${held === 1 ? 'duplicate waits' : 'duplicates wait'} in Needs review.` : '';
     if (errors.length > 0 && synced.length === 0) {
       // Spec section 12: a non-empty errlist with zero accounts IS a failed
       // sync. Reporting "Nothing to import." in green next to the bridge's
@@ -135,7 +193,7 @@ export function ConnectionsClient({
     // NEW-5 fix-round: same honest-note treatment as engineFailed — applyPaymentMatchers is
     // internally guarded (MUST-13.5) so a matcher failure never fails the sync either.
     const loanNote = result.loanMatchFailed ? ' Loan payment matching failed for these rows.' : '';
-    setNotice(`${perAccount || 'Nothing to import.'} — ${result.remainingRequests} of ${dailyLimit} requests left today.${engineNote}${loanNote}`);
+    setNotice(`${perAccount || 'Nothing to import.'} — ${result.remainingRequests} of ${dailyLimit} requests left today.${heldNote}${engineNote}${loanNote}`);
   }
 
   async function setAutoSync(value: string) {
@@ -312,6 +370,7 @@ export function ConnectionsClient({
                         <span className="text-xs text-subtle">
                           {link.currency}
                           {link.lastBalanceCents !== null ? <> · balance <Money cents={link.lastBalanceCents} plain /></> : null}
+                          {link.syncFrom ? ` · from ${dayLabel(link.syncFrom, today ?? link.syncFrom)}` : null}
                         </span>
                       </span>
                       <button type="button" onClick={() => void unlink(link.simplefinAccountId)} className={buttonClass('ghost', 'sm')}>
@@ -349,6 +408,7 @@ export function ConnectionsClient({
                           <select
                             id={`map-${account.id}`}
                             aria-label={`Local account for ${account.name}`}
+                            disabled={pendingLink?.remote.id === account.id}
                             className={`${selectClass} w-auto px-2 py-1 text-xs`}
                           >
                             {accounts.map((local) => (
@@ -357,18 +417,30 @@ export function ConnectionsClient({
                               </option>
                             ))}
                           </select>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const select = document.getElementById(`map-${account.id}`) as HTMLSelectElement | null;
-                              if (select) void link(account, Number(select.value));
-                            }}
-                            className={buttonClass('secondary', 'sm')}
-                          >
-                            Link
-                          </button>
+                          {pendingLink?.remote.id === account.id ? null : (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => {
+                                const select = document.getElementById(`map-${account.id}`) as HTMLSelectElement | null;
+                                if (select) void previewLink(account, Number(select.value));
+                              }}
+                              className={buttonClass('secondary', 'sm')}
+                            >
+                              Link
+                            </button>
+                          )}
                         </>
                       )}
+                      {pendingLink?.remote.id === account.id ? (
+                        <LinkConfirmPanel
+                          pending={pendingLink}
+                          busy={busy}
+                          onDateChange={(syncFrom) => setPendingLink({ ...pendingLink, syncFrom })}
+                          onConfirm={() => void confirmLink(pendingLink)}
+                          onCancel={() => setPendingLink(null)}
+                        />
+                      ) : null}
                     </li>
                   ))}
                 </ul>
@@ -383,6 +455,59 @@ export function ConnectionsClient({
         copies, turn on your backup tool&apos;s client-side encryption. Rotating <code className="font-mono">SECRET_KEY</code> makes the stored URL
         undecryptable and you will need a fresh setup token.
       </p>
+    </div>
+  );
+}
+
+/**
+ * v1.61.0 item 3b. What linking will do, said before it happens: what the account already holds
+ * from the bank's 90 days, the first day to take from the bank (seeded with the day after the
+ * newest imported row), and what happens either side of it.
+ */
+function LinkConfirmPanel({
+  pending,
+  busy,
+  onDateChange,
+  onConfirm,
+  onCancel,
+}: {
+  pending: PendingLink;
+  busy: boolean;
+  onDateChange: (syncFrom: string) => void;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const { overlap, syncFrom } = pending;
+  const inputId = `sync-from-${pending.remote.id}`;
+  const valid = isIsoDate(syncFrom) && syncFrom >= overlap.windowStart && syncFrom <= overlap.today;
+  const warning = currencyWarning(pending.remote.currency);
+  return (
+    <div className="flex basis-full flex-col gap-3 rounded-md border border-line bg-surface-2 p-3">
+      <p>{overlapSentence(pending.accountName, overlap)}</p>
+      <Field label="First day to take from the bank" htmlFor={inputId}>
+        <input
+          id={inputId}
+          type="date"
+          min={overlap.windowStart}
+          max={overlap.today}
+          value={syncFrom}
+          onChange={(e) => onDateChange(e.target.value)}
+          className={`${inputClass} w-auto`}
+        />
+      </Field>
+      <p className="text-xs text-subtle">
+        Rows before this date stay with your statements. Rows added by hand after it are checked for duplicates. CSV import turns off
+        for this account.
+      </p>
+      {warning ? <p className="text-xs text-warning">{warning}</p> : null}
+      <div className="flex flex-wrap gap-2">
+        <button type="button" onClick={onConfirm} disabled={busy || !valid} className={buttonClass('primary', 'sm')}>
+          {valid ? `Link from ${dayLabel(syncFrom, overlap.today)}` : 'Link from this date'}
+        </button>
+        <button type="button" onClick={onCancel} disabled={busy} className={buttonClass('ghost', 'sm')}>
+          Cancel
+        </button>
+      </div>
     </div>
   );
 }

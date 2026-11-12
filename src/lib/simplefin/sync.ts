@@ -18,20 +18,42 @@ import {
   getAccessUrl,
   getConnection,
   listLinks,
+  markLinksFirstSynced,
   markSynced,
   updateLinkBalance,
+  type AccountLink,
 } from './connection';
 
 const DAY = 86400;
 
-/** end = now; start = last sync minus a 5-day overlap, clamped to the 90-day maximum. */
-export function syncWindow(input: { lastSyncAt: string | null; now?: Date }): { startDate: number; endDate: number } {
+/**
+ * end = now; start = last sync minus a 5-day overlap, clamped to the 90-day maximum.
+ *
+ * v1.61.0 item 3c. `pendingFrom` holds the start dates (YYYY-MM-DD) of links still waiting for
+ * their first clean sync. The window starts at the earliest of the usual start and each of them,
+ * taken as midnight UTC the day before (a margin for the household's zone), and never before the
+ * 90-day floor. Without it, an account linked to a connection that had already synced got only
+ * last-sync-minus-5-days, leaving a gap between its statements' end and that day.
+ */
+export function syncWindow(input: { lastSyncAt: string | null; now?: Date; pendingFrom?: string[] }): {
+  startDate: number;
+  endDate: number;
+} {
   const now = input.now ?? new Date();
   const endDate = Math.floor(now.getTime() / 1000);
   const floor = endDate - MAX_WINDOW_DAYS * DAY;
-  if (input.lastSyncAt === null) return { startDate: floor, endDate };
-  const last = Math.floor(new Date(input.lastSyncAt).getTime() / 1000);
-  return { startDate: Math.max(floor, last - OVERLAP_DAYS * DAY), endDate };
+  let start =
+    input.lastSyncAt === null ? floor : Math.floor(new Date(input.lastSyncAt).getTime() / 1000) - OVERLAP_DAYS * DAY;
+  for (const date of input.pendingFrom ?? []) {
+    const midnight = Date.parse(`${date}T00:00:00.000Z`);
+    if (Number.isFinite(midnight)) start = Math.min(start, Math.floor(midnight / 1000) - DAY);
+  }
+  return { startDate: Math.max(floor, start), endDate };
+}
+
+/** A link made with a start date whose first clean sync has not run yet (v1.61.0 item 3c). */
+function isPendingFirstSync(link: AccountLink): boolean {
+  return link.syncFrom !== null && link.firstSyncedAt === null;
 }
 
 export function postedToIsoDate(posted: number, tz?: string): string {
@@ -61,6 +83,15 @@ export interface AccountSyncResult {
   importId: number | null;
   added: number;
   duplicates: number;
+  /**
+   * v1.61.0. Possible duplicates of a row from another road (a hand-typed purchase, a statement):
+   * not counted, waiting in Needs review until someone keeps or deletes them.
+   */
+  held: number;
+  /** v1.61.0. Rows left out because a person already decided on them (deleted, or left out). */
+  setAside: number;
+  /** v1.61.0. Rows dated before the link's start date, which stay with the statements. */
+  beforeStart: number;
   skippedPending: number;
   errors: number;
   currencyWarning: string | null;
@@ -72,6 +103,12 @@ export interface SyncResult {
   errlist: string[];
   totalAdded: number;
   totalDuplicates: number;
+  /**
+   * v1.61.0. Possible duplicates this run held for Needs review, over every account. runSync always
+   * sets it; optional only so a SyncResult built before v1.61.0 (the scheduler tests' stubs) still
+   * types, and a reader treats a missing count as none.
+   */
+  totalHeld?: number;
   engine: EngineResult;
   /** true when runEngine threw after the rows were already committed — same contract as import/flow.ts. */
   engineFailed: boolean;
@@ -110,13 +147,20 @@ export async function runSync(input: { userId: number; fetcher?: Fetcher; now?: 
   const accessUrl = getAccessUrl();
   if (accessUrl === null) throw new SimplefinError('bad_token', 'There is no SimpleFIN connection configured yet.', 409);
 
-  const window = syncWindow({ lastSyncAt: connection.lastSyncAt, now });
+  // Read before the request, because a link waiting for its first sync widens the window. A
+  // closed account is skipped below, so its start date must not widen the window for the others.
+  const links = listLinks();
+  const pendingFrom = links
+    .filter((link) => isPendingFirstSync(link) && getAccount(link.accountId)?.isActive === true)
+    .map((link) => link.syncFrom as string);
+  const window = syncWindow({ lastSyncAt: connection.lastSyncAt, now, pendingFrom });
   consumeRequest(now);
   const set = await fetchAccounts({ accessUrl, startDate: window.startDate, endDate: window.endDate, fetcher: input.fetcher });
 
-  const links = listLinks();
   const results: AccountSyncResult[] = [];
   const insertedIds: number[] = [];
+  /** Links this run fetched that were waiting for their first sync; stamped only on a clean run. */
+  const firstSynced: string[] = [];
 
   for (const remote of set.accounts as SimplefinAccount[]) {
     const link = links.find((candidate) => candidate.simplefinAccountId === remote.id);
@@ -131,6 +175,7 @@ export async function runSync(input: { userId: number; fetcher?: Fetcher; now?: 
     const rows: CommitRow[] = [];
     const errors: RowError[] = [];
     let skippedPending = 0;
+    let beforeStart = 0;
     let rowIndex = 0;
 
     for (const txn of remote.transactions ?? []) {
@@ -167,6 +212,12 @@ export async function runSync(input: { userId: number; fetcher?: Fetcher; now?: 
         continue;
       }
       const date = postedToIsoDate(postedNum);
+      // v1.61.0 item 3c. A permanent floor, not only the first window's edge: a wider window later
+      // (another link's first sync, a long outage) must never bring statement-era rows back.
+      if (link.syncFrom !== null && date < link.syncFrom) {
+        beforeStart += 1;
+        continue;
+      }
       rows.push({
         rowIndex: index,
         rawDate: String(txn.posted),
@@ -186,6 +237,10 @@ export async function runSync(input: { userId: number; fetcher?: Fetcher; now?: 
       });
     }
 
+    // v1.61.0. origin 'simplefin' so these rows are compared only with rows from another road (a
+    // hand-typed purchase, a statement), never with this account's own earlier sync rows. No
+    // rowDecisions: nobody is looking, so a possible duplicate is HELD for Needs review, not
+    // inserted (owner decision 1).
     const committed = commitImport({
       accountId: link.accountId,
       profileId: null,
@@ -194,8 +249,10 @@ export async function runSync(input: { userId: number; fetcher?: Fetcher; now?: 
       rows,
       errors,
       at: now,
+      origin: 'simplefin',
     });
     insertedIds.push(...committed.insertedTransactionIds);
+    if (isPendingFirstSync(link)) firstSynced.push(link.simplefinAccountId);
 
     const balanceCents = amountToCents(String(remote.balance ?? ''));
     // Same guard as the per-transaction posted date: a malformed balance-date
@@ -232,6 +289,9 @@ export async function runSync(input: { userId: number; fetcher?: Fetcher; now?: 
       importId: committed.importId,
       added: committed.rowsAdded,
       duplicates: committed.rowsDuplicate,
+      held: committed.rowsHeld,
+      setAside: committed.rowsSetAside,
+      beforeStart,
       skippedPending,
       errors: errors.length,
       currencyWarning:
@@ -271,7 +331,12 @@ export async function runSync(input: { userId: number; fetcher?: Fetcher; now?: 
     What DID arrive is already committed above, and duplicates are impossible (every row carries a
     dedup hash), so re-fetching the overlap next time costs a little bandwidth and nothing else.
   */
-  if (set.errlist.length === 0) markSynced(now);
+  if (set.errlist.length === 0) {
+    markSynced(now);
+    // v1.61.0 item 3c: the same rule for a new link's first pull. A partial run leaves it pending,
+    // so the next run reaches back to its start date again.
+    markLinksFirstSynced(firstSynced, now);
+  }
 
   return {
     ranAt: nowIso(now),
@@ -279,6 +344,7 @@ export async function runSync(input: { userId: number; fetcher?: Fetcher; now?: 
     errlist: set.errlist,
     totalAdded: results.reduce((sum, row) => sum + row.added, 0),
     totalDuplicates: results.reduce((sum, row) => sum + row.duplicates, 0),
+    totalHeld: results.reduce((sum, row) => sum + row.held, 0),
     engine,
     engineFailed,
     loanLinksCreated,

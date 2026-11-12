@@ -4,13 +4,22 @@ import os from 'node:os';
 import path from 'node:path';
 import { createSeededTestDb, insertTestUser, type TestDb } from '../helpers/db';
 import { claimSetupToken, type Fetcher } from '@/lib/simplefin/client';
-import { getAccessUrl, isSimplefinManaged, linkAccount, saveClaimedConnection, unlinkAccount } from '@/lib/simplefin/connection';
+import {
+  getAccessUrl,
+  isSimplefinManaged,
+  linkAccount,
+  linkOverlap,
+  markSynced,
+  saveClaimedConnection,
+  unlinkAccount,
+} from '@/lib/simplefin/connection';
 import { runSync } from '@/lib/simplefin/sync';
 import { createAccount } from '@/lib/accounts';
 import { commitStagedImport } from '@/lib/import/flow';
 import { writeStagedFile } from '@/lib/import/staging';
 import { getBuiltinPreset, getProfileByName } from '@/lib/import/presets';
-import { previewUndoImport, undoImport } from '@/lib/import/commit';
+import { commitImport, previewUndoImport, undoImport } from '@/lib/import/commit';
+import { computeRowHashes } from '@/lib/import/dedup';
 
 const fixture = (name: string) => fs.readFileSync(path.join(process.cwd(), 'fixtures', name));
 const CLAIM_URL = 'https://bridge.example/simplefin/claim/DEMO';
@@ -185,5 +194,76 @@ describe('CSV vs SimpleFIN exclusivity', () => {
       userId,
     });
     expect(result.rowsAdded).toBe(6);
+  });
+});
+
+/**
+ * v1.61.0 items 3a-3d end to end. An account fed by statements is linked to a connection that has
+ * already synced: the overlap suggests the day after the statement, the first sync reaches back to
+ * it (no gap), the statement's rows are not taken twice, and the bank's copy of a hand-typed
+ * purchase waits in Needs review instead of counting twice.
+ */
+describe('statements, then a bank link from the chosen day', () => {
+  it('takes the bank from the day after the statement, and holds the copy of a hand-typed row', async () => {
+    current = createSeededTestDb();
+    const alex = insertTestUser(current.db, { name: 'Alex', username: 'alex' });
+    const accountId = createAccount({ name: 'Sam Visa', institution: 'Bridge Bank', type: 'credit', ownerUserId: null });
+    const statement = computeRowHashes(
+      accountId,
+      [
+        ['2026-03-05', -4217, 'MAPLE GROCER'],
+        ['2026-03-12', -6130, 'FUEL STOP 12'],
+        ['2026-03-19', -1800, 'CORNER CAFE'],
+      ].map(([date, amountCents, rawDescription], rowIndex) => ({
+        rowIndex,
+        rawDate: String(date),
+        date: String(date),
+        rawDescription: String(rawDescription),
+        amountCents: Number(amountCents),
+        balanceCents: null,
+        cells: [],
+      })),
+    );
+    commitImport({ accountId, profileId: null, filename: 'march.csv', importedBy: alex, rows: statement, errors: [], origin: 'csv' });
+    // Alex typed a fuel purchase in by hand after the statement closed.
+    current.sqlite
+      .prepare(
+        `insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, origin, created_by, created_at, updated_at)
+         values (?, '2026-03-22', 'FUEL STOP 12', 'FUEL STOP 12', -6130, 'manual', ?, '2026-03-22T20:00:00.000Z', '2026-03-22T20:00:00.000Z')`,
+      )
+      .run(accountId, alex);
+
+    // The connection already synced other accounts the day before.
+    saveClaimedConnection(ACCESS_URL, new Date('2026-03-01T12:00:00.000Z'));
+    markSynced(new Date('2026-03-26T16:00:00.000Z'));
+
+    const overlap = linkOverlap(accountId, '2026-03-27');
+    expect(overlap).toMatchObject({ rowsInWindow: 4, byOrigin: { csv: 3, manual: 1 }, suggestedStart: '2026-03-20' });
+    linkAccount({ simplefinAccountId: 'remote-1', accountId, currency: 'CAD', syncFrom: overlap.suggestedStart });
+
+    const bank = payload([
+      txn('b-05', '2026-03-05T15:00:00Z', '-42.17', 'MAPLE GROCER #12'),
+      txn('b-12', '2026-03-12T15:00:00Z', '-61.30', 'FUEL STOP 12'),
+      txn('b-19', '2026-03-19T15:00:00Z', '-18.00', 'CORNER CAFE'),
+      txn('b-21', '2026-03-21T15:00:00Z', '-25.40', 'MAPLE GROCER #12'),
+      txn('b-23', '2026-03-23T15:00:00Z', '-61.30', 'FUEL STOP 12'),
+    ]);
+    const fetcher = bridge(bank);
+    const first = await runSync({ userId: alex, now: new Date('2026-03-27T16:00:00.000Z'), fetcher });
+
+    // The first pull reaches the start date, not just last sync minus five days (2026-03-21).
+    expect(String(vi.mocked(fetcher).mock.calls[0]![0])).toContain(`start-date=${Date.parse('2026-03-19T00:00:00.000Z') / 1000}`);
+    expect(first.accounts[0]).toMatchObject({ added: 1, beforeStart: 3, held: 1, setAside: 0 });
+    expect(first.totalHeld).toBe(1);
+    const fuel = () =>
+      (current!.sqlite.prepare("select count(*) as c from transactions where amount_cents = -6130").get() as { c: number }).c;
+    expect(fuel()).toBe(2);
+    expect((current.sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(5);
+
+    // The next sync overlaps the last one: nothing new, nothing held again.
+    const second = await runSync({ userId: alex, now: new Date('2026-03-28T16:00:00.000Z'), fetcher: bridge(bank) });
+    expect(second.accounts[0]).toMatchObject({ added: 0, duplicates: 1, held: 0, setAside: 1, beforeStart: 3 });
+    expect((current.sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(5);
+    expect((current.sqlite.prepare("select count(*) as c from set_aside_rows where state = 'waiting'").get() as { c: number }).c).toBe(1);
   });
 });

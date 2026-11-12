@@ -1,8 +1,9 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, gte, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
-import { simplefinAccountLinks, simplefinConnections } from '@/db/schema';
+import { simplefinAccountLinks, simplefinConnections, transactions } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
-import { todayIso } from '@/lib/dates';
+import { addDaysIso, todayIso } from '@/lib/dates';
+import type { RowOrigin } from '@/lib/import/origin';
 import { deleteSetting, getSetting, setSetting } from '@/lib/settings';
 import { SimplefinError } from './client';
 import { decryptAccessUrl, encryptAccessUrl } from './crypto';
@@ -233,6 +234,14 @@ export interface AccountLink {
   currency: string;
   lastBalanceCents: number | null;
   lastBalanceDate: string | null;
+  /**
+   * v1.61.0. The first day (YYYY-MM-DD) this account takes from the bank; rows dated before it
+   * stay with the statements, for good. NULL on a link made before v1.61.0, which syncs as it
+   * always did.
+   */
+  syncFrom: string | null;
+  /** When a clean sync first ran after `syncFrom` was set. NULL while that first sync is pending. */
+  firstSyncedAt: string | null;
 }
 
 export function listLinks(): AccountLink[] {
@@ -243,16 +252,31 @@ export function listLinks(): AccountLink[] {
       currency: simplefinAccountLinks.currency,
       lastBalanceCents: simplefinAccountLinks.lastBalanceCents,
       lastBalanceDate: simplefinAccountLinks.lastBalanceDate,
+      syncFrom: simplefinAccountLinks.syncFrom,
+      firstSyncedAt: simplefinAccountLinks.firstSyncedAt,
     })
     .from(simplefinAccountLinks)
     .all();
 }
 
-export function linkAccount(input: { simplefinAccountId: string; accountId: number; currency: string }): void {
+/**
+ * Linking stores the chosen first day and clears the first-sync stamp, on a new link and on a
+ * re-link alike, so the next sync reaches back to that day once (sync.ts syncWindow). A caller that
+ * passes no `syncFrom` writes NULL: the pre-v1.61.0 behaviour, kept for direct callers. The link
+ * route always passes one.
+ */
+export function linkAccount(input: {
+  simplefinAccountId: string;
+  accountId: number;
+  currency: string;
+  syncFrom?: string | null;
+  at?: Date;
+}): void {
   const existing = listLinks().find((link) => link.accountId === input.accountId);
   if (existing && existing.simplefinAccountId !== input.simplefinAccountId) {
     throw new SimplefinError('bad_token', 'That local account is already linked to a different SimpleFIN account.');
   }
+  const syncFrom = input.syncFrom ?? null;
   getDb()
     .insert(simplefinAccountLinks)
     .values({
@@ -261,13 +285,86 @@ export function linkAccount(input: { simplefinAccountId: string; accountId: numb
       currency: input.currency,
       lastBalanceCents: null,
       lastBalanceDate: null,
-      createdAt: nowIso(),
+      createdAt: nowIso(input.at),
+      syncFrom,
+      firstSyncedAt: null,
     })
     .onConflictDoUpdate({
       target: simplefinAccountLinks.simplefinAccountId,
-      set: { accountId: input.accountId, currency: input.currency },
+      set: { accountId: input.accountId, currency: input.currency, syncFrom, firstSyncedAt: null },
     })
     .run();
+}
+
+/**
+ * v1.61.0. Stamp the first clean sync of links that were waiting for it (a start date and no
+ * stamp yet). runSync calls it only when every bank answered, with the links that run fetched, so
+ * a partial run leaves them pending and the next run reaches back to the start date again. A link
+ * already stamped keeps its first stamp; a link with no start date has nothing pending.
+ */
+export function markLinksFirstSynced(simplefinAccountIds: string[], at: Date = new Date()): void {
+  if (simplefinAccountIds.length === 0) return;
+  getDb()
+    .update(simplefinAccountLinks)
+    .set({ firstSyncedAt: nowIso(at) })
+    .where(
+      and(
+        inArray(simplefinAccountLinks.simplefinAccountId, simplefinAccountIds),
+        isNotNull(simplefinAccountLinks.syncFrom),
+        isNull(simplefinAccountLinks.firstSyncedAt),
+      ),
+    )
+    .run();
+}
+
+/** What an account already holds, shown before it is linked (v1.61.0 item 3a). */
+export interface LinkOverlap {
+  today: string;
+  /** The first whole day inside the bridge's 90 days: the earliest start a link can take. */
+  windowStart: string;
+  /** Rows dated on or after `windowStart`, and the same count by how they arrived. */
+  rowsInWindow: number;
+  byOrigin: Record<RowOrigin, number>;
+  /** The newest date among rows that came from a statement or the bank. Hand-typed rows do not count. */
+  newestImported: string | null;
+  /** The day after `newestImported`, kept inside [windowStart, today]; `windowStart` when there is none. */
+  suggestedStart: string;
+}
+
+/**
+ * The overlap between the bank's 90 days and what the account already holds, and the suggested
+ * first day to take from the bank.
+ *
+ * Only imported rows move the suggestion. A hand-typed purchase from yesterday would otherwise push
+ * the start to today and lose weeks of bank rows; those rows go through the sync's duplicate check
+ * instead, which holds the bank's copy for Needs review.
+ */
+export function linkOverlap(accountId: number, today: string): LinkOverlap {
+  const windowStart = addDaysIso(today, -(MAX_WINDOW_DAYS - 1));
+  const db = getDb();
+  const counts = db
+    .select({ origin: transactions.origin, rows: sql<number>`count(*)` })
+    .from(transactions)
+    .where(and(eq(transactions.accountId, accountId), gte(transactions.date, windowStart)))
+    .groupBy(transactions.origin)
+    .all();
+  const byOrigin: Record<RowOrigin, number> = { manual: 0, csv: 0, ofx: 0, simplefin: 0 };
+  for (const count of counts) byOrigin[count.origin] = Number(count.rows);
+  const rowsInWindow = counts.reduce((sum, count) => sum + Number(count.rows), 0);
+
+  const newest = db
+    .select({ date: sql<string | null>`max(${transactions.date})` })
+    .from(transactions)
+    .where(and(eq(transactions.accountId, accountId), ne(transactions.origin, 'manual')))
+    .get();
+  const newestImported = newest?.date ?? null;
+
+  let suggestedStart = windowStart;
+  if (newestImported !== null) {
+    const dayAfter = addDaysIso(newestImported, 1);
+    suggestedStart = dayAfter < windowStart ? windowStart : dayAfter > today ? today : dayAfter;
+  }
+  return { today, windowStart, rowsInWindow, byOrigin, newestImported, suggestedStart };
 }
 
 export function unlinkAccount(simplefinAccountId: string): void {

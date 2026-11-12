@@ -1,6 +1,6 @@
 import { requireAdmin } from '@/lib/auth/session';
 import { listAccounts } from '@/lib/accounts';
-import { localTimeLabel } from '@/lib/dates';
+import { localTimeLabel, todayIso } from '@/lib/dates';
 import {
   AUTO_SYNC_INTERVALS,
   DAILY_REQUEST_LIMIT,
@@ -28,7 +28,10 @@ export default async function ConnectionsPage() {
   return (
     <ConnectionsClient
       connection={connection}
+      // v1.61.0: each link carries its start date (syncFrom), shown as `from May 29`; today lets a
+      // date in this year read without its year.
       links={listLinks()}
+      today={todayIso(now)}
       // This page is requireAdmin()-only, so the viewer is always household-scoped --
       // passed through anyway because listAccounts now requires one (ruling R2).
       accounts={listAccounts({}, user).map((a) => ({ id: a.id, name: a.name }))}

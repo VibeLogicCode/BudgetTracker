@@ -16,10 +16,20 @@ vi.mock('@/lib/categorize/engine', async (importOriginal) => {
 });
 
 import { amountToCents, postedToIsoDate, runSync, syncWindow } from '@/lib/simplefin/sync';
-import { DAILY_REQUEST_LIMIT, getConnection, linkAccount, listLinks, remainingRequestsToday, saveClaimedConnection } from '@/lib/simplefin/connection';
+import {
+  DAILY_REQUEST_LIMIT,
+  getConnection,
+  linkAccount,
+  listLinks,
+  markSynced,
+  remainingRequestsToday,
+  saveClaimedConnection,
+} from '@/lib/simplefin/connection';
 import type { Fetcher } from '@/lib/simplefin/client';
 import { listImportHistory } from '@/lib/import/commit';
 import { setAccountActive } from '@/lib/accounts';
+import { dismissSetAsideRow } from '@/lib/import/set-aside';
+import type { Viewer } from '@/lib/auth/viewer';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -445,5 +455,249 @@ describe('E2: a partial bridge failure never advances the window', () => {
     const before = lastSyncOf();
     await runSync({ userId, fetcher: bridge(accountSet([])), now: new Date('2026-08-16T12:00:00.000Z') });
     expect(lastSyncOf()).not.toBe(before);
+  });
+});
+
+/**
+ * v1.61.0 items 3c and 3d. A link made with a start date reaches back to it on its first clean
+ * sync, never takes a row dated before it, and the sync holds a bank row that may be a second copy
+ * of a row from another road instead of counting it twice.
+ */
+const MARCH_NOW = new Date('2026-03-28T16:00:00.000Z');
+const atSec = (iso: string) => Math.floor(Date.parse(iso) / 1000);
+/** 15:00 UTC is 11:00 in the household's zone, the same calendar date. */
+const bankRow = (id: string, date: string, amount: string, description = 'FUEL STOP 12') => ({
+  id,
+  posted: atSec(`${date}T15:00:00Z`),
+  amount,
+  description,
+  pending: false,
+});
+
+function bridgeSpy(body: unknown) {
+  return vi.fn(async (_url: string) => ({ ok: true, status: 200, text: async () => JSON.stringify(body) }));
+}
+
+/** The start-date the sync asked the bridge for, as seconds. */
+function requestedStart(fetcher: ReturnType<typeof bridgeSpy>, call = 0): number {
+  const url = String(fetcher.mock.calls[call]![0]);
+  return Number(/start-date=(\d+)/.exec(url)![1]);
+}
+
+function remoteSet(accounts: { id: string; rows: Record<string, unknown>[] }[], errlist: string[] = []) {
+  return {
+    accounts: accounts.map((account) => ({
+      id: account.id,
+      name: 'Bridge Visa',
+      currency: 'CAD',
+      balance: '-120.00',
+      'balance-date': atSec('2026-03-27T12:00:00Z'),
+      transactions: account.rows,
+    })),
+    errlist,
+  };
+}
+
+/** Eleven bank rows, 2026-03-15 to 2026-03-25, each a different amount so none can match another. */
+const elevenDays = Array.from({ length: 11 }, (_, i) => {
+  const day = 15 + i;
+  return bankRow(`t-${day}`, `2026-03-${day}`, `-${day}.25`);
+});
+
+function setupMarch(opts: { syncFrom: string | null; lastSync: Date | null }) {
+  current = createSeededTestDb();
+  const alex = insertTestUser(current.db, { name: 'Alex', username: 'alex', role: 'admin' });
+  const accountId = insertTestAccount(current.db, { name: 'Sam Visa', type: 'credit' });
+  saveClaimedConnection(ACCESS_URL, new Date('2026-03-01T12:00:00.000Z'));
+  if (opts.lastSync) markSynced(opts.lastSync);
+  linkAccount({ simplefinAccountId: 'remote-1', accountId, currency: 'CAD', syncFrom: opts.syncFrom });
+  const t = current;
+  const count = (table: string) => (t.sqlite.prepare(`select count(*) as c from ${table}`).get() as { c: number }).c;
+  const dates = () => (t.sqlite.prepare('select date from transactions order by date').all() as { date: string }[]).map((r) => r.date);
+  /** A row already in the account that arrived by `origin`. */
+  const existing = (date: string, amountCents: number, origin: string, externalId: string | null = null) =>
+    (
+      t.sqlite
+        .prepare(
+          `insert into transactions (account_id, attributed_user_id, date, raw_description, normalized_merchant, amount_cents,
+             external_id, origin, created_by, created_at, updated_at)
+           values (?, ?, ?, 'MAPLE GROCER', 'MAPLE GROCER', ?, ?, ?, ?, '2026-03-09T12:00:00.000Z', '2026-03-09T12:00:00.000Z') returning id`,
+        )
+        .get(accountId, alex, date, amountCents, externalId, origin, alex) as { id: number }
+    ).id;
+  return { t, alex, accountId, count, dates, existing };
+}
+
+describe('the first sync reaches the start date, and never before it (v1.61.0 item 3c)', () => {
+  it('a pending start date widens the window to midnight UTC the day before it', () => {
+    const window = syncWindow({ lastSyncAt: '2026-03-27T16:00:00.000Z', now: MARCH_NOW, pendingFrom: ['2026-03-20'] });
+    expect(window.startDate).toBe(atSec('2026-03-19T00:00:00Z'));
+    expect(window.endDate).toBe(atSec('2026-03-28T16:00:00Z'));
+  });
+
+  it('the earliest pending start wins, and one later than the usual start does not narrow it', () => {
+    expect(syncWindow({ lastSyncAt: '2026-03-27T16:00:00.000Z', now: MARCH_NOW, pendingFrom: ['2026-03-24', '2026-03-20'] }).startDate).toBe(
+      atSec('2026-03-19T00:00:00Z'),
+    );
+    expect(syncWindow({ lastSyncAt: '2026-03-27T16:00:00.000Z', now: MARCH_NOW, pendingFrom: ['2026-03-27'] }).startDate).toBe(
+      atSec('2026-03-22T16:00:00Z'),
+    );
+  });
+
+  it('a pending start is clamped at the 90-day floor', () => {
+    const window = syncWindow({ lastSyncAt: '2026-03-27T16:00:00.000Z', now: MARCH_NOW, pendingFrom: ['2025-11-01'] });
+    expect(window.endDate - window.startDate).toBe(90 * 86400);
+  });
+
+  it('inserts rows from the start date on, and counts the rows before it as beforeStart', async () => {
+    const s = setupMarch({ syncFrom: '2026-03-20', lastSync: new Date('2026-03-27T16:00:00.000Z') });
+    const fetcher = bridgeSpy(remoteSet([{ id: 'remote-1', rows: elevenDays }]));
+
+    const result = await runSync({ userId: s.alex, fetcher, now: MARCH_NOW });
+
+    // A link added to a connection that already synced reaches back to its start date, not just
+    // last sync minus five days.
+    expect(requestedStart(fetcher)).toBe(atSec('2026-03-19T00:00:00Z'));
+    expect(result.accounts[0]).toMatchObject({ added: 6, beforeStart: 5, held: 0, setAside: 0 });
+    expect(s.dates()).toEqual(['2026-03-20', '2026-03-21', '2026-03-22', '2026-03-23', '2026-03-24', '2026-03-25']);
+    expect(listLinks()[0]!.firstSyncedAt).toBe(MARCH_NOW.toISOString());
+  });
+
+  it('after a clean run, the next window is last sync minus five days again', async () => {
+    const s = setupMarch({ syncFrom: '2026-03-20', lastSync: new Date('2026-03-27T16:00:00.000Z') });
+    await runSync({ userId: s.alex, fetcher: bridgeSpy(remoteSet([{ id: 'remote-1', rows: elevenDays }])), now: MARCH_NOW });
+
+    const next = bridgeSpy(remoteSet([{ id: 'remote-1', rows: [] }]));
+    await runSync({ userId: s.alex, fetcher: next, now: new Date('2026-03-29T16:00:00.000Z') });
+    expect(requestedStart(next)).toBe(atSec('2026-03-23T16:00:00Z'));
+  });
+
+  it('a partial run keeps the link pending, so the next run reaches back to the start date again', async () => {
+    const s = setupMarch({ syncFrom: '2026-03-20', lastSync: new Date('2026-03-27T16:00:00.000Z') });
+    await runSync({
+      userId: s.alex,
+      fetcher: bridgeSpy(remoteSet([{ id: 'remote-1', rows: elevenDays }], ['Bank X needs re-authentication'])),
+      now: MARCH_NOW,
+    });
+    expect(listLinks()[0]!.firstSyncedAt).toBeNull();
+
+    const next = bridgeSpy(remoteSet([{ id: 'remote-1', rows: elevenDays }]));
+    const result = await runSync({ userId: s.alex, fetcher: next, now: new Date('2026-03-29T16:00:00.000Z') });
+    expect(requestedStart(next)).toBe(atSec('2026-03-19T00:00:00Z'));
+    expect(result.accounts[0]).toMatchObject({ added: 0, duplicates: 6, beforeStart: 5 });
+    expect(listLinks()[0]!.firstSyncedAt).toBe('2026-03-29T16:00:00.000Z');
+  });
+
+  it('a link with no start date (made before v1.61.0) syncs exactly as v1.60.1 did', async () => {
+    const s = setupMarch({ syncFrom: null, lastSync: new Date('2026-03-27T16:00:00.000Z') });
+    const fetcher = bridgeSpy(remoteSet([{ id: 'remote-1', rows: elevenDays }]));
+
+    const result = await runSync({ userId: s.alex, fetcher, now: MARCH_NOW });
+
+    expect(requestedStart(fetcher)).toBe(atSec('2026-03-22T16:00:00Z'));
+    expect(result.accounts[0]).toMatchObject({ added: 11, beforeStart: 0 });
+    expect(listLinks()[0]!.firstSyncedAt).toBeNull();
+  });
+
+  it('a later, wider window still leaves out rows from before the start date', async () => {
+    const s = setupMarch({ syncFrom: '2026-03-20', lastSync: new Date('2026-03-27T16:00:00.000Z') });
+    await runSync({ userId: s.alex, fetcher: bridgeSpy(remoteSet([{ id: 'remote-1', rows: elevenDays }])), now: MARCH_NOW });
+
+    // A second account linked later, from 2026-03-10, widens the next window for every account.
+    const chequing = insertTestAccount(s.t.db, { name: 'Joint Chequing' });
+    linkAccount({ simplefinAccountId: 'remote-2', accountId: chequing, currency: 'CAD', syncFrom: '2026-03-10' });
+    const fetcher = bridgeSpy(
+      remoteSet([
+        // The bank sends the first account's statement-era rows again, under new ids.
+        { id: 'remote-1', rows: [bankRow('late-12', '2026-03-12', '-12.10'), bankRow('late-19', '2026-03-19', '-19.10')] },
+        { id: 'remote-2', rows: [bankRow('c-09', '2026-03-09', '-9.40'), bankRow('c-11', '2026-03-11', '-11.40')] },
+      ]),
+    );
+
+    const result = await runSync({ userId: s.alex, fetcher, now: new Date('2026-03-29T16:00:00.000Z') });
+
+    expect(requestedStart(fetcher)).toBe(atSec('2026-03-09T00:00:00Z'));
+    const byRemote = new Map(result.accounts.map((account) => [account.simplefinAccountId, account]));
+    expect(byRemote.get('remote-1')).toMatchObject({ added: 0, beforeStart: 2 });
+    expect(byRemote.get('remote-2')).toMatchObject({ added: 1, beforeStart: 1 });
+    expect(s.count('transactions')).toBe(7);
+  });
+});
+
+describe('possible duplicates found by the sync wait in Needs review (v1.61.0 item 3d)', () => {
+  const groceries = [bankRow('bank-1', '2026-03-10', '-42.17', 'MAPLE GROCER #12')];
+  const admin: Viewer = { id: 0, role: 'admin', visibility: 'household' };
+
+  it('holds the bank copy of a hand-typed purchase: no new transaction, one waiting row', async () => {
+    const s = setupMarch({ syncFrom: '2026-03-01', lastSync: null });
+    const handTyped = s.existing('2026-03-09', -4217, 'manual');
+
+    const result = await runSync({ userId: s.alex, fetcher: bridgeSpy(remoteSet([{ id: 'remote-1', rows: groceries }])), now: MARCH_NOW });
+
+    expect(result.accounts[0]).toMatchObject({ added: 0, duplicates: 0, held: 1, setAside: 0 });
+    expect(result.totalHeld).toBe(1);
+    expect(s.count('transactions')).toBe(1);
+    expect(s.t.sqlite.prepare('select state, reason, origin, external_id, candidate_txn_id from set_aside_rows').all()).toEqual([
+      { state: 'waiting', reason: 'possible_duplicate', origin: 'simplefin', external_id: 'bank-1', candidate_txn_id: handTyped },
+    ]);
+  });
+
+  it('an overlapping second sync neither holds it again nor inserts it', async () => {
+    const s = setupMarch({ syncFrom: '2026-03-01', lastSync: null });
+    s.existing('2026-03-09', -4217, 'manual');
+    await runSync({ userId: s.alex, fetcher: bridgeSpy(remoteSet([{ id: 'remote-1', rows: groceries }])), now: MARCH_NOW });
+
+    const second = await runSync({
+      userId: s.alex,
+      fetcher: bridgeSpy(remoteSet([{ id: 'remote-1', rows: groceries }])),
+      now: new Date('2026-03-29T16:00:00.000Z'),
+    });
+
+    expect(second.accounts[0]).toMatchObject({ added: 0, duplicates: 0, held: 0, setAside: 1 });
+    expect(second.totalHeld).toBe(0);
+    expect(s.count('transactions')).toBe(1);
+    expect(s.count('set_aside_rows')).toBe(1);
+  });
+
+  it('after Delete this one, a third sync leaves it out', async () => {
+    const s = setupMarch({ syncFrom: '2026-03-01', lastSync: null });
+    s.existing('2026-03-09', -4217, 'manual');
+    const first = await runSync({ userId: s.alex, fetcher: bridgeSpy(remoteSet([{ id: 'remote-1', rows: groceries }])), now: MARCH_NOW });
+    const heldId = (s.t.sqlite.prepare('select id from set_aside_rows').get() as { id: number }).id;
+    expect(first.totalHeld).toBe(1);
+    expect(
+      dismissSetAsideRow({ id: heldId, userId: s.alex, viewer: { ...admin, id: s.alex }, at: new Date('2026-03-28T18:00:00.000Z') }),
+    ).toEqual({ ok: true });
+
+    const third = await runSync({
+      userId: s.alex,
+      fetcher: bridgeSpy(remoteSet([{ id: 'remote-1', rows: groceries }])),
+      now: new Date('2026-03-29T16:00:00.000Z'),
+    });
+
+    expect(third.accounts[0]).toMatchObject({ added: 0, held: 0, setAside: 1 });
+    expect(s.count('transactions')).toBe(1);
+    expect(s.t.sqlite.prepare('select state from set_aside_rows').all()).toEqual([{ state: 'dismissed' }]);
+  });
+
+  it('two identical same-day bank rows with different ids both insert, as before', async () => {
+    const s = setupMarch({ syncFrom: '2026-03-01', lastSync: null });
+    const twins = [bankRow('bank-1', '2026-03-10', '-42.17', 'MAPLE GROCER #12'), bankRow('bank-2', '2026-03-10', '-42.17', 'MAPLE GROCER #12')];
+
+    const result = await runSync({ userId: s.alex, fetcher: bridgeSpy(remoteSet([{ id: 'remote-1', rows: twins }])), now: MARCH_NOW });
+
+    expect(result.accounts[0]).toMatchObject({ added: 2, held: 0 });
+    expect(s.count('transactions')).toBe(2);
+  });
+
+  it('stores origin simplefin, so the bank is never compared with its own earlier rows', async () => {
+    const s = setupMarch({ syncFrom: '2026-03-01', lastSync: null });
+    // A row an earlier sync brought in (an id the bank no longer sends), one day before a new one.
+    s.existing('2026-03-09', -4217, 'simplefin', 'bank-old');
+
+    const result = await runSync({ userId: s.alex, fetcher: bridgeSpy(remoteSet([{ id: 'remote-1', rows: groceries }])), now: MARCH_NOW });
+
+    expect(result.accounts[0]).toMatchObject({ added: 1, held: 0 });
+    expect(s.t.sqlite.prepare("select origin from transactions where external_id = 'bank-1'").get()).toEqual({ origin: 'simplefin' });
   });
 });
