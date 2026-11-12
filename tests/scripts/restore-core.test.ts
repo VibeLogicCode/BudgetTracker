@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,6 +12,7 @@ import {
   readLocalMigrations,
   restoreFromArtifact,
   validateArtifact,
+  verifyArchive,
 } from '../../scripts/restore-core.ts';
 
 let work: string;
@@ -532,5 +533,63 @@ describe('restoreFromArtifact (unchanged behaviour, re-expressed in terms of pre
     expect(result.kind).toBe('archive');
     expect(result.databaseRestored).toBe(true);
     expect(result.receiptsMovedAside).toMatch(/^receipts\.pre-restore-/);
+  });
+});
+
+/**
+ * v1.60.0 item 7a. The nightly job's check of an archive it has just written: the whole gzip
+ * stream is read, budget.db alone is extracted and preflighted, and the scratch directory is gone
+ * afterwards whatever the outcome.
+ */
+describe('verifyArchive: the check a new backup must pass before it replaces anything', () => {
+  it('passes a good archive and leaves no scratch directory behind', async () => {
+    const artifact = await makeArchive(work, { whens: [1000] });
+    const scratch = path.join(work, 'verify-good');
+    expect(() => verifyArchive(artifact, scratch)).not.toThrow();
+    expect(fs.existsSync(scratch)).toBe(false);
+  });
+
+  it('extracts budget.db only, never the receipts', async () => {
+    const artifact = await makeArchive(work, { whens: [1000] });
+    const scratch = path.join(work, 'verify-only-db');
+    const seen: string[] = [];
+    const realExists = fs.existsSync;
+    // Observe the scratch directory at the one moment it holds anything: when budget.db is checked.
+    const spy = vi.spyOn(fs, 'existsSync').mockImplementation((target) => {
+      if (String(target) === path.join(scratch, 'budget.db') && realExists(scratch)) seen.push(...fs.readdirSync(scratch));
+      return realExists(target);
+    });
+    try {
+      verifyArchive(artifact, scratch);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(seen).toEqual(['budget.db']);
+  });
+
+  it('fails a truncated archive', async () => {
+    const artifact = await makeArchive(work, { whens: [1000] });
+    const bytes = fs.readFileSync(artifact);
+    fs.writeFileSync(artifact, bytes.subarray(0, Math.floor(bytes.length / 2)));
+    const scratch = path.join(work, 'verify-truncated');
+    expect(() => verifyArchive(artifact, scratch)).toThrowError(/unexpected end of file/);
+    expect(fs.existsSync(scratch)).toBe(false);
+  });
+
+  it('fails a well-formed tar whose budget.db is garbage', async () => {
+    const tar = await import('tar');
+    const stage = track(fs.mkdtempSync(path.join(os.tmpdir(), 'restore-core-garbage-')));
+    fs.writeFileSync(path.join(stage, 'budget.db'), Buffer.alloc(4096, 0x41));
+    const artifact = path.join(work, 'garbage.tar.gz');
+    tar.create({ file: artifact, cwd: stage, gzip: true, sync: true }, ['budget.db']);
+    const scratch = path.join(work, 'verify-garbage');
+    expect(() => verifyArchive(artifact, scratch)).toThrowError(/not a valid SQLite database/);
+    expect(fs.existsSync(scratch)).toBe(false);
+  });
+
+  it('fails a file that is not an archive at all', () => {
+    const junk = path.join(work, 'junk.tar.gz');
+    fs.writeFileSync(junk, Buffer.alloc(64, 0x41));
+    expect(() => verifyArchive(junk, path.join(work, 'verify-junk'))).toThrowError(RestoreError);
   });
 });

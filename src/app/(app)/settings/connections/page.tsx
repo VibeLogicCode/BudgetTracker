@@ -1,9 +1,11 @@
 import { requireAdmin } from '@/lib/auth/session';
 import { listAccounts } from '@/lib/accounts';
+import { localDateTimeOf } from '@/lib/dates';
 import {
   AUTO_SYNC_INTERVALS,
   DAILY_REQUEST_LIMIT,
   SETTING_AUTO_SYNC,
+  autoSyncBackoff,
   getConnection,
   isAutoSyncInterval,
   listLinks,
@@ -19,6 +21,9 @@ export default async function ConnectionsPage() {
   const connection = getConnection();
   const storedAutoSync = getSetting(SETTING_AUTO_SYNC);
   const autoSync = storedAutoSync !== null && isAutoSyncInterval(storedAutoSync) ? storedAutoSync : null;
+  // v1.60.0: only while automatic sync is on and waiting out a failure backoff. The time is the
+  // household's clock, HH:mm.
+  const backoff = autoSync !== null && connection !== null ? autoSyncBackoff() : null;
   return (
     <ConnectionsClient
       connection={connection}
@@ -29,6 +34,9 @@ export default async function ConnectionsPage() {
       remainingRequests={connection ? remainingRequestsToday() : DAILY_REQUEST_LIMIT}
       dailyLimit={DAILY_REQUEST_LIMIT}
       autoSync={autoSync}
+      autoSyncWaiting={
+        backoff ? { failures: backoff.failures, nextTry: localDateTimeOf(backoff.nextTryAt.toISOString()).slice(11) } : null
+      }
       // Server Component computes this FROM the constant and passes plain strings down --
       // the client component never imports @/lib/simplefin/connection as a VALUE (only its
       // types, which are erased at build time), because that module pulls in @/db/client

@@ -385,6 +385,40 @@ export function validateArtifact(
   }
 }
 
+/**
+ * v1.60.0: the nightly job's check of an archive it has just written, run on the `.partial` before
+ * it replaces anything (src/lib/backup/archive.ts's buildArchive). assertArchiveEntriesAreSafe
+ * reads the whole gzip stream, so a truncated or corrupt archive fails there; then budget.db alone
+ * is extracted into scratchDir and preflighted (magic bytes and quick_check). Receipts are listed,
+ * never written out. scratchDir is removed whatever the outcome.
+ *
+ * No migration comparison, unlike validateArtifact: an archive this install has just made carries
+ * exactly this install's migrations.
+ */
+export function verifyArchive(artifactPath: string, scratchDir: string): void {
+  try {
+    if (detectArtifactKind(artifactPath) !== 'archive') {
+      throw new RestoreError('The file is not a gzip archive.');
+    }
+    assertArchiveEntriesAreSafe(artifactPath);
+    fs.rmSync(scratchDir, { recursive: true, force: true });
+    fs.mkdirSync(scratchDir, { recursive: true });
+    tar.extract({
+      file: artifactPath,
+      cwd: scratchDir,
+      sync: true,
+      preservePaths: false,
+      strip: 0,
+      filter: (entryPath) => entryPath.replace(/\/+$/, '') === 'budget.db',
+    });
+    const inner = path.join(scratchDir, 'budget.db');
+    if (!fs.existsSync(inner)) throw new RestoreError('The archive contains no budget.db.');
+    preflightSqliteFile(inner);
+  } finally {
+    fs.rmSync(scratchDir, { recursive: true, force: true });
+  }
+}
+
 export type RestoreStep =
   | {
       op: 'rename';

@@ -157,3 +157,36 @@ describe('MUST-20.35: the result banner', () => {
     expect(screen.getByText('The archive contains no budget.db.')).toBeTruthy();
   });
 });
+
+/** v1.60.0 item 7d: the page names why the last nightly backup failed. */
+describe('the last backup failure', () => {
+  it('shows the recorded reason when the last backup failed', () => {
+    render(
+      <BackupsClient
+        backups={backups}
+        retention={14}
+        restore={noRestore}
+        health={{
+          lastBackupAt: '2026-08-16T06:00:00.000Z',
+          ageHours: 31,
+          state: 'failed',
+          failureReason: 'The new backup failed its check: zlib: unexpected end of file',
+        }}
+      />,
+    );
+    expect(screen.getByText(/The last backup failed/)).toBeTruthy();
+    expect(screen.getByText(/The new backup failed its check: zlib: unexpected end of file/)).toBeTruthy();
+  });
+
+  it('says nothing about failure when the backups are healthy', () => {
+    render(
+      <BackupsClient
+        backups={backups}
+        retention={14}
+        restore={noRestore}
+        health={{ lastBackupAt: '2026-08-16T06:00:00.000Z', ageHours: 7, state: 'ok', failureReason: null }}
+      />,
+    );
+    expect(screen.queryByText(/The last backup failed/)).toBeNull();
+  });
+});

@@ -1,7 +1,9 @@
 import cron, { type ScheduledTask } from 'node-cron';
 import { todayIso } from '@/lib/dates';
 import { postAllDueInterest } from '@/lib/loans';
-import { runNightlyJob } from '@/lib/backup';
+import { countUsers } from '@/lib/auth/users';
+import { backupCatchUpDue, newestBackupAt, runNightlyJob } from '@/lib/backup';
+import { isRestorePending } from '@/lib/backup/restore';
 import { notifyCanadianPackUpdateAvailable } from '@/lib/canadian-pack';
 import { readEnv } from '@/lib/env';
 import { adminUserIds, hasAnyEnabledTarget } from '@/lib/notify/config';
@@ -13,9 +15,12 @@ import {
   AUTO_SYNC_INTERVALS,
   SETTING_AUTO_SYNC,
   SETTING_AUTO_SYNC_USER_ID,
+  autoSyncBackoff,
   getConnection,
   isAutoSyncDue,
   isAutoSyncInterval,
+  recordAutoSyncAttempt,
+  recordAutoSyncFailure,
   remainingRequestsToday,
 } from '@/lib/simplefin/connection';
 import { runSync } from '@/lib/simplefin/sync';
@@ -40,6 +45,11 @@ let bootExpiryDone = false;
 let updateTicking = false;
 /** Task 8: runSimplefinTick's own single-flight guard, reset by stopScheduler(). */
 let simplefinTicking = false;
+/** v1.60.0: the boot backup catch-up's pending timer, cleared by stopScheduler(). */
+let catchUpTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** How long boot waits before a catch-up backup, so the backup never competes with boot itself. */
+export const BACKUP_CATCH_UP_DELAY_MS = 2 * 60 * 1000;
 
 function runOcrSweep(): void {
   try {
@@ -205,6 +215,11 @@ export function runSimplefinTick(now: Date = new Date()): void {
     // raiseSyncFailed below.
     if (remainingRequestsToday(now) === 0) return;
 
+    // v1.60.0: consecutive automatic failures wait 30 minutes, doubling, up to 24 hours from the
+    // last attempt (autoSyncBackoff), so a bank that keeps failing cannot spend the day's requests.
+    // Silent for the same reason as the budget check above. A manual sync never reads it.
+    if (autoSyncBackoff(now) !== null) return;
+
     if (!isAutoSyncDue(connection.lastSyncAt, AUTO_SYNC_INTERVALS[stored].dueAfterHours, now)) return;
   } catch (error) {
     // Defect fix: this gate used to sit outside any try/catch, unlike every sibling job in
@@ -226,13 +241,28 @@ export function runSimplefinTick(now: Date = new Date()): void {
 }
 
 /**
+ * v1.60.0: the attempt is recorded first and every throw from the run counts as one failure (the
+ * errlist throw and an invalid sync user included), which is what the tick's backoff reads. A
+ * clean run's markSynced clears both.
+ */
+async function runAutoSimplefinSync(now: Date): Promise<void> {
+  recordAutoSyncAttempt(now);
+  try {
+    await syncAsAutoSyncUser(now);
+  } catch (error) {
+    recordAutoSyncFailure();
+    throw error;
+  }
+}
+
+/**
  * The stored user id is re-validated as an ACTIVE ADMIN at read time, never trusted from
  * whenever the setting was saved: a promotion can be undone and a user can be deactivated,
  * and neither currently clears simplefin_auto_sync_user_id. An invalid id never reaches
  * runSync -- it throws instead, which runSimplefinTick's catch turns into exactly the same
  * sync_failed alert a real sync failure would raise, naming the actual problem.
  */
-async function runAutoSimplefinSync(now: Date): Promise<void> {
+async function syncAsAutoSyncUser(now: Date): Promise<void> {
   const raw = getSetting(SETTING_AUTO_SYNC_USER_ID);
   const userId = raw === null ? Number.NaN : Number.parseInt(raw, 10);
   if (!Number.isFinite(userId) || !adminUserIds().includes(userId)) {
@@ -254,6 +284,48 @@ async function runAutoSimplefinSync(now: Date): Promise<void> {
   if (result.errlist.length > 0) {
     throw new Error(`Some accounts did not sync: ${result.errlist.join('; ')}`);
   }
+}
+
+/**
+ * v1.60.0 boot catch-up. A machine that was off at 02:00 (or for a week) used to wait for the next
+ * 02:00. Checked once at boot: when the newest archive is over 26 hours old, or there is none, and
+ * somebody has an account (a fresh install has nothing to protect yet), the nightly job runs
+ * BACKUP_CATCH_UP_DELAY_MS later on an unref'd timer, so boot never waits on it and the timer never
+ * holds the process open. It goes through runNightlyTick, so a failure raises the same alert.
+ *
+ * Called from startScheduler, which instrumentation-node runs only after the staged-restore boot
+ * hook has finished (tests/ops/restore-seams pins that order). Returns whether a run was scheduled.
+ */
+export function scheduleBackupCatchUp(now: Date = new Date()): boolean {
+  try {
+    if (catchUpTimer !== null) return false;
+    if (countUsers() === 0) return false;
+    if (!backupCatchUpDue(newestBackupAt(), now)) return false;
+  } catch (error) {
+    console.error('[backup] boot catch-up check failed', error);
+    return false;
+  }
+  catchUpTimer = setTimeout(runBackupCatchUp, BACKUP_CATCH_UP_DELAY_MS);
+  catchUpTimer.unref?.();
+  return true;
+}
+
+/**
+ * Re-checks before running: the 02:00 job may have landed during the wait (no second run on top of
+ * it), and a restore staged in that window owns the data directory until the restart applies it.
+ */
+function runBackupCatchUp(): void {
+  catchUpTimer = null;
+  const now = new Date();
+  try {
+    if (isRestorePending()) return;
+    if (!backupCatchUpDue(newestBackupAt(), now)) return;
+  } catch (error) {
+    console.error('[backup] boot catch-up check failed', error);
+    return;
+  }
+  console.log('[backup] no backup in the last 26 hours; running the nightly job now');
+  runNightlyTick(now);
 }
 
 /** Idempotent: safe to call more than once per process (e.g. hot-reload in dev). */
@@ -287,6 +359,8 @@ export function startScheduler(): void {
   // Task 8: same reasoning as the two ticks above -- a container that was off catches up on
   // a due auto-sync immediately at boot rather than waiting up to five minutes.
   runSimplefinTick();
+  // v1.60.0: a missed nightly backup runs two minutes after boot, never during it.
+  scheduleBackupCatchUp();
 }
 
 export function stopScheduler(): void {
@@ -299,6 +373,8 @@ export function stopScheduler(): void {
   bootExpiryDone = false;
   updateTicking = false;
   simplefinTicking = false;
+  if (catchUpTimer !== null) clearTimeout(catchUpTimer);
+  catchUpTimer = null;
 }
 
 /**

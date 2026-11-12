@@ -16,13 +16,14 @@ import { z } from 'zod';
 import { migrationsFolder } from '@/db/client';
 import { readEnv } from '@/lib/env';
 import { APP_VERSION } from '@/lib/version';
-import { ARCHIVE_NAME_RE, LEGACY_NAME_RE, PARTIAL_MAX_AGE_MS, backupsDir, resolveSafeTarget } from '@/lib/backup/archive';
+import { ARCHIVE_NAME_RE, LEGACY_NAME_RE, PARTIAL_MAX_AGE_MS, backupsDir, resolveSafeTarget, tempDir } from '@/lib/backup/archive';
 import {
   RestoreError,
   commitRestore,
   prepareRestore,
   sha256File,
   validateArtifact,
+  verifyArchive,
   type RestorePlan,
   type RestoreResult,
 } from '../../../scripts/restore-core.ts';
@@ -180,6 +181,21 @@ export function applyingDir(): string {
 
 export function resultPath(): string {
   return path.join(readEnv().dataDir, 'restore-result.json');
+}
+
+/** True while a restore is staged for the next boot or part-way through applying. */
+export function isRestorePending(): boolean {
+  return fs.existsSync(stagedDir()) || fs.existsSync(applyingDir());
+}
+
+/**
+ * v1.60.0: the check every new nightly archive passes before it replaces anything (backup.ts hands
+ * this to buildArchive). The scratch directory carries the `-archive` suffix, so if the process is
+ * killed mid-check, the maintenance sweep's rule for a dead archive build's staging directory
+ * (purgeStagedFiles) removes it the same way.
+ */
+export function verifyBackupArchive(artifactPath: string): void {
+  verifyArchive(artifactPath, path.join(tempDir(), `${randomUUID()}-archive`));
 }
 
 function markerPathOf(dir: string): string {

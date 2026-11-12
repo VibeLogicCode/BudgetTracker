@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createTestDb, type TestDb } from '../helpers/db';
 import { backupsDir } from '@/lib/backup/archive';
 import { PreUpgradeBackupError, createVerifiedPreUpgradeBackup } from '@/lib/backup/pre-upgrade';
+import * as restoreModule from '@/lib/backup/restore';
 
 /**
  * O-05 (2026-09-02 review, P1). No updater took a backup before upgrading, on any path. The source
@@ -17,6 +18,19 @@ afterEach(() => {
   t?.cleanup();
   t = null;
 });
+
+/**
+ * The final archive reads as zero bytes. Scoped to the listed `.tar.gz` name: since v1.60.0 the
+ * new-archive check reads the `.partial` through the same fs module, and a blanket statSync stub
+ * would blind that check instead of exercising the empty-file guard.
+ */
+function emptyFinalArchive(): void {
+  const realStatSync = fs.statSync;
+  vi.spyOn(fs, 'statSync').mockImplementation(((target: fs.PathLike, options?: fs.StatSyncOptions) =>
+    String(target).endsWith('.tar.gz')
+      ? ({ size: 0, mtimeMs: new Date('2026-09-08T21:00:00Z').getTime() } as unknown as fs.Stats)
+      : realStatSync(target, options)) as typeof fs.statSync);
+}
 
 describe('the pre-upgrade backup', () => {
   it('writes a real archive into the backups directory, where the restore UI can find it', () => {
@@ -50,14 +64,32 @@ describe('the pre-upgrade backup', () => {
     t = createTestDb();
     // The shape a disk that filled up MID-WRITE leaves behind: the file exists, so an existence
     // check alone would pass it, and restoring from it would fail at the worst possible moment.
-    vi.spyOn(fs, 'statSync').mockReturnValue({ size: 0, mtimeMs: Date.now() } as unknown as fs.Stats);
+    emptyFinalArchive();
 
     expect(() => createVerifiedPreUpgradeBackup()).toThrowError(/empty|disk is full/i);
   });
 
+  it('refuses when what landed on disk fails the new-archive check (v1.60.0 item 7a)', () => {
+    t = createTestDb();
+    // VACUUM proves the source; the check proves the file. A failure there must stop the upgrade
+    // exactly as a failed build does.
+    vi.spyOn(restoreModule, 'verifyBackupArchive').mockImplementation(() => {
+      throw new Error('quick_check returned a malformed page');
+    });
+    const listing = () => (fs.existsSync(backupsDir()) ? fs.readdirSync(backupsDir()).sort() : []);
+    const before = listing();
+
+    expect(() => createVerifiedPreUpgradeBackup(new Date('2026-09-03T21:00:00Z'))).toThrowError(PreUpgradeBackupError);
+    expect(() => createVerifiedPreUpgradeBackup(new Date('2026-09-03T21:00:00Z'))).toThrowError(
+      /failed its check: quick_check returned a malformed page/,
+    );
+    // Nothing new is listed, and no partial is left behind.
+    expect(listing()).toEqual(before);
+  });
+
   it('names the likely cause, because the only record on a headless box is the log', () => {
     t = createTestDb();
-    vi.spyOn(fs, 'statSync').mockReturnValue({ size: 0, mtimeMs: Date.now() } as unknown as fs.Stats);
+    emptyFinalArchive();
     let message = '';
     try {
       createVerifiedPreUpgradeBackup();

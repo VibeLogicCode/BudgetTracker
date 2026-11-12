@@ -95,8 +95,13 @@ function vacuumInto(target: string): void {
  * reuse the same final name). `ARCHIVE_NAME_RE`/`ON_DEMAND_NAME_RE` are anchored with `$`, so
  * a `name.tar.gz.partial` file never matches either pattern and `listBackups()` already
  * ignores it structurally — nothing else needed there.
+ *
+ * `verify` (v1.60.0) runs on the finished `.partial`, before the rename. A throw there leaves the
+ * previous artifact at this name untouched, removes the partial in the `finally`, and surfaces as
+ * `The new backup failed its check: ...`. The nightly path passes it (backup.ts); on-demand
+ * downloads do not.
  */
-export function buildArchive(targetPath: string): void {
+export function buildArchive(targetPath: string, options: { verify?: (partialPath: string) => void } = {}): void {
   const tmp = tempDir();
   fs.mkdirSync(tmp, { recursive: true });
   const stage = path.join(tmp, `${randomUUID()}-archive`);
@@ -132,7 +137,15 @@ export function buildArchive(targetPath: string): void {
       { file: partialTarget, cwd: stage, gzip: true, sync: true, portable: true, follow: false },
       ['budget.db', 'receipts'],
     );
-    // Only now, with a complete archive on disk, does the previous artifact at this name
+    if (options.verify) {
+      try {
+        options.verify(partialTarget);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new Error(`The new backup failed its check: ${detail}`, { cause: error });
+      }
+    }
+    // Only now, with a complete and checked archive on disk, does the previous artifact at this name
     // (if any) get replaced — and it's replaced atomically by the rename, never by a
     // delete-then-write gap.
     fs.renameSync(partialTarget, targetPath);

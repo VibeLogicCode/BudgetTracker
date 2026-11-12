@@ -2,7 +2,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createTestDb, insertTestUser, type TestDb } from '../helpers/db';
+import os from 'node:os';
 import {
+  BACKUP_CATCH_UP_DELAY_MS,
   NIGHTLY_CRON,
   NOTIFY_TICK_CRON,
   OCR_SWEEP_CRON,
@@ -10,6 +12,7 @@ import {
   runNightlyTick,
   runNotifyTick,
   runUpdateTick,
+  scheduleBackupCatchUp,
   startScheduler,
   stopScheduler,
 } from '@/lib/scheduler';
@@ -262,5 +265,153 @@ describe('MUST-5.1 … MUST-5.4: the update tick', () => {
     } finally {
       globalThis.fetch = realFetch;
     }
+  });
+});
+
+/**
+ * v1.60.0 item 7c. A machine that was off at 02:00 (or for a week) took its next backup at the
+ * next 02:00. Boot now checks once and, when the newest archive is over 26 hours old (or there is
+ * none) and somebody has an account, runs the nightly job two minutes later on an unref'd timer, so
+ * boot itself never waits on it.
+ */
+describe('boot backup catch-up (item 7c)', () => {
+  const BOOT = new Date('2026-11-12T15:00:00.000Z');
+  let dataDir: string;
+  let originalDataDir: string | undefined;
+
+  beforeEach(() => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-catchup-'));
+    originalDataDir = process.env.DATA_DIR;
+    process.env.DATA_DIR = dataDir;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'], now: BOOT });
+  });
+
+  afterEach(() => {
+    stopScheduler();
+    vi.useRealTimers();
+    if (originalDataDir === undefined) delete process.env.DATA_DIR;
+    else process.env.DATA_DIR = originalDataDir;
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  function archiveHoursAgo(hours: number): void {
+    const dir = path.join(dataDir, 'backups');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, 'budget-2026-11-11.tar.gz');
+    fs.writeFileSync(file, 'x');
+    const at = new Date(BOOT.getTime() - hours * 3600_000);
+    fs.utimesSync(file, at, at);
+  }
+
+  function stubNightly() {
+    return vi.spyOn(backupModule, 'runNightlyJob').mockImplementation(() => ({}) as never);
+  }
+
+  it('waits two minutes', () => {
+    expect(BACKUP_CATCH_UP_DELAY_MS).toBe(2 * 60 * 1000);
+  });
+
+  it('with no archive and a user, runs the nightly job two minutes after boot, not before', () => {
+    insertTestUser(current!.db, { username: 'catchup-admin', role: 'admin' });
+    const nightly = stubNightly();
+
+    expect(scheduleBackupCatchUp(BOOT)).toBe(true);
+    expect(vi.getTimerCount()).toBe(1);
+    expect(nightly).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(BACKUP_CATCH_UP_DELAY_MS - 1);
+    expect(nightly).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(nightly).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs when the newest archive is 27 hours old, not when it is 25', () => {
+    insertTestUser(current!.db, { username: 'catchup-admin', role: 'admin' });
+    archiveHoursAgo(25);
+    expect(scheduleBackupCatchUp(BOOT)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+
+    archiveHoursAgo(27);
+    expect(scheduleBackupCatchUp(BOOT)).toBe(true);
+  });
+
+  it('does nothing before anyone has an account', () => {
+    const nightly = stubNightly();
+    expect(scheduleBackupCatchUp(BOOT)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(10 * 60 * 1000);
+    expect(nightly).not.toHaveBeenCalled();
+  });
+
+  it('stopScheduler clears the pending timer', () => {
+    insertTestUser(current!.db, { username: 'catchup-admin', role: 'admin' });
+    const nightly = stubNightly();
+    scheduleBackupCatchUp(BOOT);
+    stopScheduler();
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(10 * 60 * 1000);
+    expect(nightly).not.toHaveBeenCalled();
+  });
+
+  it('schedules once, however often it is asked', () => {
+    insertTestUser(current!.db, { username: 'catchup-admin', role: 'admin' });
+    expect(scheduleBackupCatchUp(BOOT)).toBe(true);
+    expect(scheduleBackupCatchUp(BOOT)).toBe(false);
+    expect(vi.getTimerCount()).toBe(1);
+  });
+
+  it('skips the run when a backup landed during the wait (the 02:00 job, say)', () => {
+    insertTestUser(current!.db, { username: 'catchup-admin', role: 'admin' });
+    const nightly = stubNightly();
+    scheduleBackupCatchUp(BOOT);
+    archiveHoursAgo(0);
+    vi.advanceTimersByTime(BACKUP_CATCH_UP_DELAY_MS);
+    expect(nightly).not.toHaveBeenCalled();
+  });
+
+  it('skips the run while a restore is staged or being applied', () => {
+    insertTestUser(current!.db, { username: 'catchup-admin', role: 'admin' });
+    const nightly = stubNightly();
+    scheduleBackupCatchUp(BOOT);
+    fs.mkdirSync(path.join(dataDir, 'restore-staged'), { recursive: true });
+    vi.advanceTimersByTime(BACKUP_CATCH_UP_DELAY_MS);
+    expect(nightly).not.toHaveBeenCalled();
+
+    fs.rmSync(path.join(dataDir, 'restore-staged'), { recursive: true, force: true });
+    fs.mkdirSync(path.join(dataDir, 'restore-applying'), { recursive: true });
+    scheduleBackupCatchUp(new Date());
+    vi.advanceTimersByTime(BACKUP_CATCH_UP_DELAY_MS);
+    expect(nightly).not.toHaveBeenCalled();
+  });
+
+  it('a failing catch-up raises the same backup_failed alert as the nightly cron', () => {
+    insertTestUser(current!.db, { username: 'catchup-admin', role: 'admin' });
+    const boom = new Error('ENOSPC: no space left on device');
+    vi.spyOn(backupModule, 'runNightlyJob').mockImplementation(() => {
+      throw boom;
+    });
+    const raise = vi.spyOn(raiseModule, 'raiseBackupFailed').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    scheduleBackupCatchUp(BOOT);
+    vi.advanceTimersByTime(BACKUP_CATCH_UP_DELAY_MS);
+    expect(raise).toHaveBeenCalledWith({ error: boom, at: new Date(BOOT.getTime() + BACKUP_CATCH_UP_DELAY_MS) });
+  });
+
+  it('a throwing check never escapes into boot', () => {
+    vi.spyOn(backupModule, 'newestBackupAt').mockImplementation(() => {
+      throw new Error('EACCES');
+    });
+    insertTestUser(current!.db, { username: 'catchup-admin', role: 'admin' });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() => scheduleBackupCatchUp(BOOT)).not.toThrow();
+    expect(errorSpy).toHaveBeenCalled();
+  });
+
+  it('startScheduler asks for it once, after the boot ticks', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'src/lib/scheduler.ts'), 'utf8');
+    const startAt = source.indexOf('export function startScheduler');
+    const body = source.slice(startAt, source.indexOf('export function stopScheduler'));
+    expect(body.match(/scheduleBackupCatchUp\(\);/g)).toHaveLength(1);
+    expect(body.indexOf('scheduleBackupCatchUp();')).toBeGreaterThan(body.lastIndexOf('runSimplefinTick();'));
   });
 });

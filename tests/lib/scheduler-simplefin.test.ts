@@ -7,11 +7,17 @@ import {
   AUTO_SYNC_INTERVALS,
   DAILY_REQUEST_LIMIT,
   SETTING_AUTO_SYNC,
+  SETTING_AUTO_SYNC_FAILURES,
+  SETTING_AUTO_SYNC_LAST_ATTEMPT_AT,
   SETTING_AUTO_SYNC_USER_ID,
+  autoSyncBackoff,
   consumeRequest,
   markSynced,
+  remainingRequestsToday,
   saveClaimedConnection,
 } from '@/lib/simplefin/connection';
+import type { Fetcher } from '@/lib/simplefin/client';
+import { getSetting } from '@/lib/settings';
 import { saveEmailTarget, saveSmtp } from '@/lib/notify/config';
 import { drainOutboxForTests, resetOutboxPumpForTests } from '@/lib/notify/outbox';
 import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify/send';
@@ -571,5 +577,138 @@ describe('runSimplefinTick — a partial failure reaches the household', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+/**
+ * v1.60.0 item 3a. last_sync_at moves only on a clean run and the due check reads only that, so a
+ * bank that kept failing re-ran the sync on every five-minute tick until the twenty requests were
+ * gone, leaving nothing for a manual sync. Consecutive automatic failures now back off from the last
+ * attempt: 30 minutes, doubling, capped at 24 hours.
+ */
+describe('runSimplefinTick — a failing bank cannot spend the daily allowance (item 3a)', () => {
+  const MIN = 60_000;
+  // 00:00 in the household's zone (America/Toronto in tests), so 24 hours of ticks is one request day.
+  const DAY_START = new Date('2026-08-22T04:00:00.000Z');
+
+  function failingBridge(): Fetcher {
+    return vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ accounts: [], errlist: ['MAPLE CREDIT UNION needs re-authentication'] }),
+    }));
+  }
+
+  function cleanBridge(): Fetcher {
+    return vi.fn(async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ accounts: [], errlist: [] }) }));
+  }
+
+  /** Real runSync with the bridge swapped in; returns a way to await the run a tick started. */
+  function routeSyncTo(fetcher: Fetcher) {
+    const realRunSync = syncModule.runSync;
+    let inFlight: Promise<unknown> = Promise.resolve();
+    vi.spyOn(syncModule, 'runSync').mockImplementation((input) => {
+      const run = realRunSync({ ...input, fetcher });
+      inFlight = run;
+      return run;
+    });
+    return async () => {
+      await inFlight.catch(() => {});
+      // Let the tick's own catch/finally handlers settle before the next tick.
+      await new Promise((resolve) => setImmediate(resolve));
+    };
+  }
+
+  function dueDailySync(at: Date): number {
+    const adminId = insertTestUser(t.db, { role: 'admin', username: 'sync-admin' });
+    saveClaimedConnection(FAKE_ACCESS_URL, at);
+    setSetting(SETTING_AUTO_SYNC, 'daily');
+    setSetting(SETTING_AUTO_SYNC_USER_ID, String(adminId));
+    return adminId;
+  }
+
+  it('a persistent errlist over 24 hours of five-minute ticks makes at most 6 requests and leaves at least 14', async () => {
+    dueDailySync(DAY_START);
+    const bridge = failingBridge();
+    const settle = routeSyncTo(bridge);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    for (let i = 0; i < 288; i += 1) {
+      runSimplefinTick(new Date(DAY_START.getTime() + i * 5 * MIN));
+      await settle();
+    }
+
+    expect(vi.mocked(bridge).mock.calls.length).toBeLessThanOrEqual(6);
+    expect(remainingRequestsToday(new Date(DAY_START.getTime() + 23 * 60 * MIN))).toBeGreaterThanOrEqual(14);
+  });
+
+  it('caps the gap at 24 hours however many tries have failed', async () => {
+    dueDailySync(DAY_START);
+    const attemptAt = new Date('2026-08-22T12:00:00.000Z');
+    setSetting(SETTING_AUTO_SYNC_FAILURES, '12');
+    setSetting(SETTING_AUTO_SYNC_LAST_ATTEMPT_AT, attemptAt.toISOString());
+    const bridge = cleanBridge();
+    const settle = routeSyncTo(bridge);
+
+    runSimplefinTick(new Date(attemptAt.getTime() + 24 * 60 * MIN - 5 * MIN));
+    await settle();
+    expect(bridge).not.toHaveBeenCalled();
+
+    runSimplefinTick(new Date(attemptAt.getTime() + 24 * 60 * MIN));
+    await settle();
+    expect(bridge).toHaveBeenCalledTimes(1);
+  });
+
+  it('a clean automatic run resets the count', async () => {
+    dueDailySync(DAY_START);
+    const attemptAt = new Date('2026-08-22T12:00:00.000Z');
+    setSetting(SETTING_AUTO_SYNC_FAILURES, '3');
+    setSetting(SETTING_AUTO_SYNC_LAST_ATTEMPT_AT, attemptAt.toISOString());
+    const settle = routeSyncTo(cleanBridge());
+
+    runSimplefinTick(new Date(attemptAt.getTime() + 2 * 60 * MIN));
+    await settle();
+
+    expect(getSetting(SETTING_AUTO_SYNC_FAILURES)).toBeNull();
+    expect(getSetting(SETTING_AUTO_SYNC_LAST_ATTEMPT_AT)).toBeNull();
+  });
+
+  it('a manual sync during the backoff runs, and its clean result ends the backoff', async () => {
+    const adminId = dueDailySync(DAY_START);
+    const attemptAt = new Date('2026-08-22T12:00:00.000Z');
+    setSetting(SETTING_AUTO_SYNC_FAILURES, '3');
+    setSetting(SETTING_AUTO_SYNC_LAST_ATTEMPT_AT, attemptAt.toISOString());
+    const during = new Date(attemptAt.getTime() + 10 * MIN);
+    expect(autoSyncBackoff(during)).not.toBeNull();
+
+    const bridge = cleanBridge();
+    await syncModule.runSync({ userId: adminId, fetcher: bridge, now: during });
+
+    expect(bridge).toHaveBeenCalledTimes(1);
+    expect(autoSyncBackoff(during)).toBeNull();
+  });
+
+  it('a thrown fetch error backs off too', async () => {
+    dueDailySync(DAY_START);
+    const at = new Date('2026-08-22T12:00:00.000Z');
+    const bridge: Fetcher = vi.fn(async () => {
+      throw new Error('getaddrinfo ENOTFOUND');
+    });
+    const settle = routeSyncTo(bridge);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    runSimplefinTick(at);
+    await settle();
+    expect(bridge).toHaveBeenCalledTimes(1);
+    expect(getSetting(SETTING_AUTO_SYNC_FAILURES)).toBe('1');
+
+    runSimplefinTick(new Date(at.getTime() + 5 * MIN));
+    await settle();
+    expect(bridge).toHaveBeenCalledTimes(1);
+
+    runSimplefinTick(new Date(at.getTime() + 30 * MIN));
+    await settle();
+    expect(bridge).toHaveBeenCalledTimes(2);
+    expect(getSetting(SETTING_AUTO_SYNC_FAILURES)).toBe('2');
   });
 });

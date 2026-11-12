@@ -36,13 +36,13 @@ export class PreUpgradeBackupError extends Error {}
  * Throws rather than returning a result, because every caller's correct response to failure is the
  * same: do not upgrade. A boolean would invite one of them to carry on.
  *
- * Verification is deliberately thin, and the reason is worth stating: buildArchive runs
- * `VACUUM INTO` against the live database, which is itself a full read of every page — a corrupt
- * or unreadable database cannot produce an archive at all, so a returned file already carries that
- * guarantee. What VACUUM cannot rule out is a write that ran out of room afterwards, which shows up
- * as a present-but-empty file, so that is what is checked here. Re-opening and `quick_check`ing the
- * archive's contents would mean extracting a tarball to prove something the source database just
- * proved.
+ * Two proofs, one each side of the write. `VACUUM INTO` reads every page of the live database, so
+ * a corrupt or unreadable source cannot produce an archive at all: that proves the source. Since
+ * v1.60.0 runNightlyBackup also checks what landed on disk before it replaces anything (the whole
+ * gzip stream read, budget.db extracted and `quick_check`ed), so a truncated or garbled archive
+ * fails here too, as `The new backup failed its check: ...`, and the upgrade does not start. The
+ * empty-file check below stays as the cheap, plainly worded answer to the commonest cause, a disk
+ * that filled up.
  */
 export function createVerifiedPreUpgradeBackup(now: Date = new Date()): BackupFile {
   let file: BackupFile;

@@ -6,7 +6,16 @@ import { postAllDueInterest } from '@/lib/loans';
 import { purgeExpiredSessions } from '@/lib/auth/session';
 import { purgeStagedFiles } from '@/lib/import/staging';
 import { purgeOldOutboxRows } from '@/lib/notify/outbox';
-import { SETTING_BACKUP_RETENTION, getIntSetting, setIntSetting } from '@/lib/settings';
+import {
+  SETTING_BACKUP_LAST_FAILURE_AT,
+  SETTING_BACKUP_LAST_FAILURE_REASON,
+  SETTING_BACKUP_RETENTION,
+  deleteSetting,
+  getIntSetting,
+  getSetting,
+  setIntSetting,
+  setSetting,
+} from '@/lib/settings';
 import {
   ARCHIVE_NAME_RE,
   LEGACY_NAME_RE,
@@ -22,7 +31,7 @@ import {
 } from '@/lib/backup/archive';
 import { listStoredFilenames } from '@/lib/warranty/items';
 import { purgeOrphanReceipts } from '@/lib/warranty/receipts';
-import { purgePreRestoreCopies } from '@/lib/backup/restore';
+import { purgePreRestoreCopies, verifyBackupArchive } from '@/lib/backup/restore';
 
 export const DEFAULT_BACKUP_RETENTION = 14;
 
@@ -68,17 +77,20 @@ export function setBackupRetention(count: number): void {
 }
 
 /**
- * Spec section 8: delete the target if present, THEN build the archive.
- * A VACUUM INTO target errors on an existing file, so without the delete a container
- * restart after 02:00 would fail that day's backup permanently.
+ * Builds today's archive and checks it before it replaces anything (v1.60.0): a new archive that
+ * fails verifyBackupArchive never reaches its listed name, so the day's earlier archive (a
+ * pre-upgrade backup, or the 02:00 run before a catch-up) stays exactly as it was.
+ *
+ * Spec section 8's delete-before-build is gone because nothing needs it any more: VACUUM INTO now
+ * writes to a uuid-named snapshot in tmp (buildArchive), never to this target, and the final
+ * rename replaces an existing file at this name in one step.
  */
 export function runNightlyBackup(at: Date = new Date()): BackupFile {
   const dir = backupsDir();
   fs.mkdirSync(dir, { recursive: true });
   const name = nightlyArchiveName(at);
   const target = resolveSafeTarget(dir, name, ARCHIVE_NAME_RE);
-  fs.rmSync(target, { force: true });
-  buildArchive(target);
+  buildArchive(target, { verify: verifyBackupArchive });
   const stats = fs.statSync(target);
   return { name, path: target, bytes: stats.size, modifiedAt: new Date(stats.mtimeMs).toISOString() };
 }
@@ -156,6 +168,26 @@ export function runMaintenanceSweep(at: Date = new Date()): SweepResult {
   };
 }
 
+/**
+ * v1.60.0: what the health line reads. A failure is stamped with the job's own clock; a success
+ * clears it. Guarded, because a settings write that throws here must not replace the backup's own
+ * error, or stop the sweep that runs next.
+ */
+function recordNightlyOutcome(at: Date, error: unknown): void {
+  try {
+    if (error === undefined) {
+      deleteSetting(SETTING_BACKUP_LAST_FAILURE_AT);
+      deleteSetting(SETTING_BACKUP_LAST_FAILURE_REASON);
+      return;
+    }
+    const reason = error instanceof Error ? error.message : String(error);
+    setSetting(SETTING_BACKUP_LAST_FAILURE_AT, at.toISOString());
+    setSetting(SETTING_BACKUP_LAST_FAILURE_REASON, reason.slice(0, 500) || 'The backup failed without an error message.');
+  } catch (recordError) {
+    console.error('[backup] could not record the nightly outcome', recordError);
+  }
+}
+
 export interface NightlyJobResult {
   backup: BackupFile;
   pruned: string[];
@@ -200,6 +232,7 @@ export function runNightlyJob(at: Date = new Date()): NightlyJobResult {
     backupError = error;
     console.error('[backup] nightly backup/prune failed; maintenance sweep will still run', error);
   }
+  recordNightlyOutcome(at, backupError);
 
   const sweep = runMaintenanceSweep(at);
 
@@ -209,4 +242,59 @@ export function runNightlyJob(at: Date = new Date()): NightlyJobResult {
     `[backup] wrote ${backup!.name} (${backup!.bytes} bytes), pruned ${pruned.length}, purged ${sweep.sessionsPurged} sessions / ${sweep.loginAttemptsPurged} login attempts / ${sweep.stagedFilesPurged} staged uploads / ${sweep.receiptOrphansPurged} orphan receipts`,
   );
   return { backup: backup!, pruned, sweep };
+}
+
+/** Past this, a missing night has been missed: one 24-hour cycle plus two hours of slack. */
+export const BACKUP_STALE_AFTER_HOURS = 26;
+const HOUR_MS = 60 * 60 * 1000;
+
+/**
+ * The newest nightly archive's mtime, or null when there is none. A restore leaves backups/ alone,
+ * so this stays true across one.
+ */
+export function newestBackupAt(): Date | null {
+  const newest = listBackups()[0];
+  return newest ? new Date(newest.modifiedAt) : null;
+}
+
+/** v1.60.0 boot catch-up: due when there is no archive, or the newest is over 26 hours old. */
+export function backupCatchUpDue(newestAt: Date | null, now: Date): boolean {
+  if (newestAt === null) return true;
+  return now.getTime() - newestAt.getTime() > BACKUP_STALE_AFTER_HOURS * HOUR_MS;
+}
+
+export type BackupHealthState = 'ok' | 'stale' | 'failed' | 'none';
+
+export interface BackupHealth {
+  lastBackupAt: string | null;
+  /** Whole hours since the newest archive, or null when there is none. */
+  ageHours: number | null;
+  state: BackupHealthState;
+  /** The recorded reason, only while state is 'failed'. */
+  failureReason: string | null;
+}
+
+/**
+ * One summary for the dashboard line and Settings, Backups. 'failed' means a recorded failure newer
+ * than the newest archive (an older one has been overtaken by a good backup since); otherwise the
+ * archive's age decides between 'ok' and 'stale', and no archive at all is 'none'.
+ */
+export function backupHealth(now: Date = new Date()): BackupHealth {
+  const newest = newestBackupAt();
+  const failedAt = Date.parse(getSetting(SETTING_BACKUP_LAST_FAILURE_AT) ?? '');
+  const failed = Number.isFinite(failedAt) && (newest === null || failedAt > newest.getTime());
+  const ageMs = newest === null ? null : now.getTime() - newest.getTime();
+  const state: BackupHealthState = failed
+    ? 'failed'
+    : newest === null
+      ? 'none'
+      : backupCatchUpDue(newest, now)
+        ? 'stale'
+        : 'ok';
+  return {
+    lastBackupAt: newest === null ? null : newest.toISOString(),
+    ageHours: ageMs === null ? null : Math.max(0, Math.floor(ageMs / HOUR_MS)),
+    state,
+    failureReason: failed ? (getSetting(SETTING_BACKUP_LAST_FAILURE_REASON) ?? 'The backup failed without an error message.') : null,
+  };
 }

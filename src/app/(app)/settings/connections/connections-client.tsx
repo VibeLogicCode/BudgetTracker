@@ -27,6 +27,7 @@ export function ConnectionsClient({
   dailyLimit,
   autoSync = null,
   autoSyncOptions = [],
+  autoSyncWaiting = null,
 }: {
   connection: ConnectionRecord | null;
   links: AccountLink[];
@@ -52,6 +53,11 @@ export function ConnectionsClient({
    * way.
    */
   autoSyncOptions?: { value: string; label: string }[];
+  /**
+   * v1.60.0: set while automatic sync is waiting out its failure backoff. `nextTry` is already
+   * formatted server-side (HH:mm, household clock).
+   */
+  autoSyncWaiting?: { failures: number; nextTry: string } | null;
 }) {
   const [setupToken, setSetupToken] = useState('');
   const [remote, setRemote] = useState<RemoteAccount[] | null>(null);
@@ -269,6 +275,11 @@ export function ConnectionsClient({
                   ? `Automatic sync is on: ${autoSyncLabel.toLowerCase()}. Each sync asks for everything since the last one plus five days of overlap, so a late-posting transaction is never missed.`
                   : 'Syncing is manual unless you turn on automatic sync above. Each sync asks for everything since the last one plus five days of overlap, so a late-posting transaction is never missed.'}
               </p>
+              {autoSync && autoSyncWaiting ? (
+                <p className="text-xs text-subtle">
+                  {`Automatic sync is waiting after ${autoSyncWaiting.failures} failed ${autoSyncWaiting.failures === 1 ? 'try' : 'tries'}. Next try about ${autoSyncWaiting.nextTry}.`}
+                </p>
+              ) : null}
             </CardBody>
           </Card>
 

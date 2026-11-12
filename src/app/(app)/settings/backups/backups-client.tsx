@@ -9,6 +9,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Notice } from '@/components/ui/Notice';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Field } from '@/components/ui/form';
+import type { BackupHealth } from '@/lib/backup';
 import type { RestoreOutcome, RestoreRequest } from '@/lib/backup/restore';
 import { runBackupNowAction, setRetentionAction, stageRestoreAction, type BackupActionState } from './actions';
 import { buttonClass } from '@/components/ui/Button';
@@ -109,10 +110,13 @@ export function BackupsClient({
   backups,
   retention,
   restore,
+  health = null,
 }: {
   backups: { name: string; bytes: number; modifiedAt: string }[];
   retention: number;
   restore: { staged: RestoreRequest | null; result: RestoreOutcome | null };
+  /** v1.60.0: backupHealth(); its failure reason is shown while the last backup has failed. */
+  health?: BackupHealth | null;
 }) {
   const [retentionState, retentionAction] = useActionState(setRetentionAction, initial);
   const [restoreState, restoreAction] = useActionState(stageRestoreAction, initial);
@@ -164,6 +168,11 @@ export function BackupsClient({
       <FormError message={retentionState.error ?? notice?.error} />
       {retentionState.message ?? notice?.message ? (
         <Notice tone="success">{retentionState.message ?? notice?.message}</Notice>
+      ) : null}
+      {health?.state === 'failed' ? (
+        <Notice tone="warning" title="The last backup failed">
+          <p>{health.failureReason}</p>
+        </Notice>
       ) : null}
       {restore.result ? <ResultBanner result={restore.result} /> : null}
       {stagedElsewhere ? (

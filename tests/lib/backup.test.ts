@@ -6,6 +6,8 @@ import { sql } from 'drizzle-orm';
 import { createSeededTestDb, insertTestUser, type TestDb } from '../helpers/db';
 import {
   DEFAULT_BACKUP_RETENTION,
+  backupCatchUpDue,
+  backupHealth,
   backupsDir,
   createOnDemandBackup,
   getBackupRetention,
@@ -22,6 +24,7 @@ import { createSession } from '@/lib/auth/session';
 import { recordLoginAttempt } from '@/lib/auth/ratelimit';
 import { writeStagedFile, stagedFilePath } from '@/lib/import/staging';
 import { nowIso } from '@/lib/clock';
+import { SETTING_BACKUP_LAST_FAILURE_AT, SETTING_BACKUP_LAST_FAILURE_REASON, setSetting } from '@/lib/settings';
 
 let current: TestDb | null = null;
 let dataDir: string;
@@ -285,5 +288,85 @@ describe('MUST-3.14: the sweep prunes delivered notifications', () => {
       current!.sqlite.prepare('select dedup_key from notification_outbox order by dedup_key').all() as { dedup_key: string }[]
     ).map((r) => r.dedup_key);
     expect(keys).toEqual(['399-old']);
+  });
+});
+
+/** v1.60.0 item 7c: the boot catch-up's one rule, kept pure so the 26-hour edge is testable. */
+describe('backupCatchUpDue', () => {
+  const now = new Date('2026-11-12T15:00:00.000Z');
+  const hoursAgo = (h: number) => new Date(now.getTime() - h * 3600_000);
+
+  it('is not due when the newest archive is 25 hours old', () => {
+    expect(backupCatchUpDue(hoursAgo(25), now)).toBe(false);
+  });
+
+  it('is due when the newest archive is 27 hours old', () => {
+    expect(backupCatchUpDue(hoursAgo(27), now)).toBe(true);
+  });
+
+  it('is due when there is no archive at all', () => {
+    expect(backupCatchUpDue(null, now)).toBe(true);
+  });
+});
+
+/**
+ * v1.60.0 item 7d. Age comes from the newest archive's mtime (which a restore leaves alone); a
+ * recorded failure counts only when it is newer than that archive.
+ */
+describe('backupHealth', () => {
+  const now = new Date('2026-11-12T15:00:00.000Z');
+
+  function archiveAt(name: string, at: Date): void {
+    fs.mkdirSync(backupsDir(), { recursive: true });
+    const file = path.join(backupsDir(), name);
+    fs.writeFileSync(file, 'x');
+    fs.utimesSync(file, at, at);
+  }
+
+  it('is none with no archive and no recorded failure', () => {
+    expect(backupHealth(now)).toEqual({ lastBackupAt: null, ageHours: null, state: 'none', failureReason: null });
+  });
+
+  it('is ok with a 7-hour-old archive, reading the newest one', () => {
+    archiveAt('budget-2026-11-10.tar.gz', new Date('2026-11-10T07:00:00.000Z'));
+    archiveAt('budget-2026-11-12.tar.gz', new Date('2026-11-12T08:00:00.000Z'));
+    expect(backupHealth(now)).toEqual({
+      lastBackupAt: '2026-11-12T08:00:00.000Z',
+      ageHours: 7,
+      state: 'ok',
+      failureReason: null,
+    });
+  });
+
+  it('is stale past 26 hours', () => {
+    archiveAt('budget-2026-11-09.tar.gz', new Date('2026-11-09T07:00:00.000Z'));
+    const health = backupHealth(now);
+    expect(health.state).toBe('stale');
+    expect(health.ageHours).toBe(80);
+  });
+
+  it('is failed when a recorded failure is newer than the newest archive, with its reason', () => {
+    archiveAt('budget-2026-11-11.tar.gz', new Date('2026-11-11T07:00:00.000Z'));
+    setSetting(SETTING_BACKUP_LAST_FAILURE_AT, '2026-11-12T07:00:00.000Z');
+    setSetting(SETTING_BACKUP_LAST_FAILURE_REASON, 'ENOSPC: no space left on device');
+    expect(backupHealth(now)).toEqual({
+      lastBackupAt: '2026-11-11T07:00:00.000Z',
+      ageHours: 32,
+      state: 'failed',
+      failureReason: 'ENOSPC: no space left on device',
+    });
+  });
+
+  it('is failed with no archive at all once a failure is recorded', () => {
+    setSetting(SETTING_BACKUP_LAST_FAILURE_AT, '2026-11-12T07:00:00.000Z');
+    setSetting(SETTING_BACKUP_LAST_FAILURE_REASON, 'disk full');
+    expect(backupHealth(now).state).toBe('failed');
+  });
+
+  it('ignores a recorded failure older than the newest archive', () => {
+    setSetting(SETTING_BACKUP_LAST_FAILURE_AT, '2026-11-11T07:00:00.000Z');
+    setSetting(SETTING_BACKUP_LAST_FAILURE_REASON, 'disk full');
+    archiveAt('budget-2026-11-12.tar.gz', new Date('2026-11-12T08:00:00.000Z'));
+    expect(backupHealth(now)).toMatchObject({ state: 'ok', failureReason: null });
   });
 });

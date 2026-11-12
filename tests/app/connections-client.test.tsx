@@ -235,3 +235,53 @@ describe('ConnectionsClient — Task 8: Automatic sync select', () => {
     expect(await findByText('That is not a valid automatic sync interval.')).toBeTruthy();
   });
 });
+
+/** v1.60.0 item 3a: while automatic sync is backing off after failures, the page says so, once. */
+describe('ConnectionsClient — automatic sync backoff line', () => {
+  it('says how many tries failed and roughly when the next one is', () => {
+    const { getByText } = render(
+      <ConnectionsClient
+        connection={CONNECTION}
+        links={[]}
+        accounts={[]}
+        remainingRequests={17}
+        dailyLimit={20}
+        autoSync="daily"
+        autoSyncOptions={AUTO_SYNC_OPTIONS}
+        autoSyncWaiting={{ failures: 3, nextTry: '14:30' }}
+      />,
+    );
+    expect(getByText('Automatic sync is waiting after 3 failed tries. Next try about 14:30.')).toBeTruthy();
+  });
+
+  it('says try, not tries, after one failure', () => {
+    const { getByText } = render(
+      <ConnectionsClient
+        connection={CONNECTION}
+        links={[]}
+        accounts={[]}
+        remainingRequests={19}
+        dailyLimit={20}
+        autoSync="daily"
+        autoSyncOptions={AUTO_SYNC_OPTIONS}
+        autoSyncWaiting={{ failures: 1, nextTry: '09:05' }}
+      />,
+    );
+    expect(getByText('Automatic sync is waiting after 1 failed try. Next try about 09:05.')).toBeTruthy();
+  });
+
+  it('shows nothing when automatic sync is not waiting', () => {
+    const { queryByText } = render(
+      <ConnectionsClient
+        connection={CONNECTION}
+        links={[]}
+        accounts={[]}
+        remainingRequests={20}
+        dailyLimit={20}
+        autoSync="daily"
+        autoSyncOptions={AUTO_SYNC_OPTIONS}
+      />,
+    );
+    expect(queryByText(/Automatic sync is waiting/)).toBeNull();
+  });
+});
