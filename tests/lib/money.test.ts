@@ -40,6 +40,21 @@ describe('parseAmountToCents', () => {
     expect(parseAmountToCents('--5')).toBeNull();
   });
 
+  it('reads a lone comma before exactly two digits as the decimal mark', () => {
+    expect(parseAmountToCents('12,34')).toBe(1234);
+    expect(parseAmountToCents('-12,34')).toBe(-1234);
+    expect(parseAmountToCents('(12,34)')).toBe(-1234);
+    expect(parseAmountToCents('1 234,56')).toBe(123456);
+  });
+
+  it('keeps every other comma a thousands separator, and refuses a comma after a dot', () => {
+    expect(parseAmountToCents('1,234')).toBe(123400);
+    expect(parseAmountToCents('1,234.56')).toBe(123456);
+    expect(parseAmountToCents('$1,000')).toBe(100000);
+    expect(parseAmountToCents('1,234,56')).toBeNull();
+    expect(parseAmountToCents('1.234,56')).toBeNull();
+  });
+
   it('never returns negative zero', () => {
     expect(Object.is(parseAmountToCents('-0.00'), 0)).toBe(true);
   });

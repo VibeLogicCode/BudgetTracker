@@ -121,10 +121,15 @@ export function AppShell({
             onClick={() => setMenuOpen((open) => !open)}
             aria-expanded={menuOpen}
             aria-controls="mobile-nav"
-            aria-label={menuOpen ? 'Close menu' : 'Open menu'}
-            className={buttonClass('ghost', 'md', '-ml-1.5 p-2 lg:hidden')}
+            aria-label={menuOpen ? 'Close menu' : reviewCount > 0 ? `Open menu, ${reviewCount} to review` : 'Open menu'}
+            className={buttonClass('ghost', 'md', 'relative -ml-1.5 p-2 lg:hidden')}
           >
             {menuOpen ? <CloseIcon className="h-5 w-5" /> : <MenuIcon className="h-5 w-5" />}
+            {!menuOpen && reviewCount > 0 ? (
+              <span aria-hidden="true" className="badge badge--amber tabnum absolute -right-1.5 -top-1.5">
+                {reviewCount}
+              </span>
+            ) : null}
           </button>
 
           <Link href="/dashboard" className="flex items-center gap-2 lg:hidden" aria-label="Budget Tracker home">

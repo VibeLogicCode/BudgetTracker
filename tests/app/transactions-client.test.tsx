@@ -1119,6 +1119,68 @@ describe('Bulk toolbar and a split row (v1.7.0 bulk-guard fix, requirement c)', 
 });
 
 /**
+ * v1.60.0 item 1. The ticked rows are cleared once a bulk action succeeds (the hidden ids field
+ * would otherwise post them again on the next one), kept on a refusal, and pruned to the rows the
+ * page still shows.
+ */
+describe('Bulk selection survives its action no longer (v1.60.0 item 1)', () => {
+  function twoRowPage(ids: number[]): TransactionPage {
+    const rows = ids.map((id) => pageWithRow({ id, rawDescription: `MAPLE GROCER ${id}` }).rows[0]);
+    return { total: rows.length, page: 1, pageSize: 50, pageCount: 1, rows, ...sumSigned(rows) };
+  }
+  function renderTwo(ids = [1, 2]) {
+    const props = { accounts: [{ id: 1, name: 'Joint Chequing' }], categories: [], people: [], today: '2026-03-02' };
+    const view = render(<TransactionsClient page={twoRowPage(ids)} {...props} />);
+    return { ...view, props };
+  }
+  function tickBoth() {
+    fireEvent.click(rowScope().getByLabelText('Select transaction 1'));
+    fireEvent.click(rowScope().getByLabelText('Select transaction 2'));
+    expect(screen.getByText('2 selected')).toBeTruthy();
+  }
+
+  it('Mark transfer succeeds: the toolbar goes and the next submit posts no ids', async () => {
+    const { bulkTransferAction } = await import('@/app/(app)/transactions/actions');
+    const spy = vi.mocked(bulkTransferAction);
+    spy.mockClear();
+    spy.mockResolvedValueOnce({ message: 'Marked 2 as transfers.' });
+    const { container } = renderTwo();
+    tickBoth();
+    fireEvent.submit(screen.getByRole('button', { name: 'Mark transfer' }).closest('form') as HTMLFormElement);
+    await waitFor(() => expect(screen.queryByText('2 selected')).toBeNull());
+    expect((spy.mock.calls[0][1] as FormData).get('ids')).toBe('1,2');
+    expect(container.querySelector('input[name="ids"]')).toBeNull();
+  });
+
+  it('Categorize succeeds: the selection clears', async () => {
+    const { bulkCategorizeAction } = await import('@/app/(app)/transactions/actions');
+    vi.mocked(bulkCategorizeAction).mockResolvedValueOnce({ message: 'Categorized 2.' });
+    renderTwo();
+    tickBoth();
+    fireEvent.submit(screen.getByRole('button', { name: 'Categorize' }).closest('form') as HTMLFormElement);
+    await waitFor(() => expect(screen.queryByText('2 selected')).toBeNull());
+  });
+
+  it('a refused action keeps both rows ticked', async () => {
+    const { bulkTransferAction } = await import('@/app/(app)/transactions/actions');
+    vi.mocked(bulkTransferAction).mockResolvedValueOnce({ error: 'Not yours to change.' });
+    renderTwo();
+    tickBoth();
+    fireEvent.submit(screen.getByRole('button', { name: 'Mark transfer' }).closest('form') as HTMLFormElement);
+    await waitFor(() => expect(vi.mocked(bulkTransferAction)).toHaveBeenCalled());
+    await screen.findByText('Not yours to change.');
+    expect(screen.getByText('2 selected')).toBeTruthy();
+  });
+
+  it('a row that leaves the page is dropped from the selection', () => {
+    const { rerender, props } = renderTwo();
+    tickBoth();
+    rerender(<TransactionsClient page={twoRowPage([1])} {...props} />);
+    expect(screen.getByText('1 selected')).toBeTruthy();
+  });
+});
+
+/**
  * v1.25.0 Lane R item R3. Bulk assign-to-loan and bulk note -- the two new bulk actions, derived
  * from the same shared `bulkActions` list as Categorize/Attribute/Mark transfer (see that list's
  * own doc comment above transactionCard's return in transactions-client.tsx). Both open a

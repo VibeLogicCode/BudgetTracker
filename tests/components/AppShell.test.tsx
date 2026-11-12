@@ -57,6 +57,30 @@ describe('the Review nav entry after the queue became a filter (v1.14.1, rulings
 
 const user = { id: 1, name: 'Ada Lovelace', role: 'member' as const, visibility: 'household' as const };
 
+describe('the closed phone menu button carries the review count', () => {
+  it('shows the badge and names the count while closed, and neither with 0 or while open', () => {
+    const { unmount } = render(
+      <AppShell user={user} reviewCount={8} version="1.2.3">
+        <p>child</p>
+      </AppShell>,
+    );
+    const button = screen.getByRole('button', { name: 'Open menu, 8 to review' });
+    expect(button.textContent).toContain('8');
+    fireEvent.click(button);
+    const open = screen.getByRole('button', { name: 'Close menu' });
+    expect(open.textContent).not.toContain('8');
+    unmount();
+
+    render(
+      <AppShell user={user} reviewCount={0} version="1.2.3">
+        <p>child</p>
+      </AppShell>,
+    );
+    const plain = screen.getByRole('button', { name: 'Open menu' });
+    expect(plain.textContent).toBe('');
+  });
+});
+
 describe('AppShell mobile menu (regression: opened off-screen at the document top when scrolled)', () => {
   it('anchors the panel to the viewport, not the document, so it stays visible however far the page has scrolled', () => {
     render(

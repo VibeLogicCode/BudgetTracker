@@ -31,7 +31,17 @@ export function parseAmountToCents(raw: string): number | null {
   } else if (text.startsWith('+')) {
     text = text.slice(1);
   }
-  text = text.replace(/,/g, '');
+  // A comma is the decimal mark only when there is no dot, one comma, and exactly two digits after
+  // it ("12,34"); otherwise commas group thousands. A comma after a dot ("1.234,56") is ambiguous
+  // and reads as an error rather than a silent wrong amount.
+  if (/\.\d*,/.test(text)) return null;
+  // Two or more commas ending in two digits ("1,234,56") is neither grouping nor a decimal comma.
+  if (!text.includes('.') && /,.*,\d{2}$/.test(text)) return null;
+  if (!text.includes('.') && /^[^,]*,\d{2}$/.test(text)) {
+    text = text.replace(',', '.');
+  } else {
+    text = text.replace(/,/g, '');
+  }
 
   if (text.length === 0) return null;
   if (!/^\d*(?:\.\d*)?$/.test(text)) return null;

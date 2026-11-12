@@ -1103,6 +1103,37 @@ export function TransactionsClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [billState]);
 
+  // A bulk action that went through clears the ticked rows, so the hidden ids field cannot post
+  // them again on the next bulk action (with "create rules" ticked by default). Keyed on each state
+  // object, success only: a refusal keeps the selection so it can be corrected and resubmitted.
+  useEffect(() => {
+    if (bulkCatState.message && !bulkCatState.error) setSelected([]);
+  }, [bulkCatState]);
+  useEffect(() => {
+    if (attrState.message && !attrState.error) setSelected([]);
+  }, [attrState]);
+  useEffect(() => {
+    if (bulkTfrState.message && !bulkTfrState.error) setSelected([]);
+  }, [bulkTfrState]);
+  useEffect(() => {
+    if (bulkRecurringState.message && !bulkRecurringState.error) setSelected([]);
+  }, [bulkRecurringState]);
+  useEffect(() => {
+    if (bulkLoanState.message && !bulkLoanState.error) setSelected([]);
+  }, [bulkLoanState]);
+  useEffect(() => {
+    if (bulkNoteState.message && !bulkNoteState.error) setSelected([]);
+  }, [bulkNoteState]);
+
+  // A selected id that is no longer on the page (filtered out, paged away, or filed out of the
+  // review queue) is dropped, so a bulk action only ever touches rows the person can see.
+  const pageRowIds = page.rows.map((row) => row.id).join(',');
+  useEffect(() => {
+    const visible = new Set(page.rows.map((row) => row.id));
+    setSelected((prev) => (prev.every((id) => visible.has(id)) ? prev : prev.filter((id) => visible.has(id))));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageRowIds]);
+
   // Same idiom as newLoan above: the "Apply a category to all N…" editor stays open on a
   // refusal (a rule someone else in the household owns) so its own inline error is visible
   // where the person is looking, and closes only on the action's own success.
