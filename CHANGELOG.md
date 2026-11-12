@@ -21,6 +21,42 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.60.0] - 2026-11-12
+
+Migration 0030. Accounts closed before this release get a closing date of the day after their last
+activity, so past net worth keeps them until then.
+
+### Fixed
+
+- Transactions: rows filed or marked in a bulk action leave the selection, so the next bulk action
+  can no longer re-file them or rewrite their merchant rules.
+- Spent counts money out only. Money in that is not categorized yet no longer lowers it; it shows
+  as a quiet line under Money in, on Budgets and on Reports. Net is unchanged.
+- The vs last month figure compares the same days of last month instead of the whole month.
+- Goal pace averages complete months only, so the 1st of a month no longer flips a goal off pace.
+- Past net worth keeps an account until the day it was closed.
+- An amount like 12,34 reads as 12.34; an amount the app cannot read for certain, such as
+  1.234,56, becomes a row to fix instead of a wrong number.
+- Bank sync backs off after a failure instead of spending the day's sync allowance.
+- OFX and QFX imports no longer ask for an import profile, on the single-file and batch screens.
+- Reports, Who spent it, the weekly and monthly digests and the savings chart use the same Spent
+  figure as the Dashboard.
+- Bank sync skips accounts you have closed.
+- Members who cannot import no longer see import buttons on the Dashboard or Reports.
+
+### Changed
+
+- Import history shows more on request, and quiet bank syncs fold into one line.
+- Undo import lists the notes, splits and hand-set categories that go with the rows.
+- Backups: each new archive is checked before it is kept, a missed nightly backup runs at start,
+  and the admin's Dashboard shows the age of the last good backup.
+- The review count shows on the phone menu button.
+- Dashboard and Reports load with fewer database queries.
+
+### Security
+
+- next 16.4.6, nodemailer 10.5.0 and undici 7.30.2 for open advisories.
+
 ## [1.59.1] - 2026-10-27
 
 ### Changed
