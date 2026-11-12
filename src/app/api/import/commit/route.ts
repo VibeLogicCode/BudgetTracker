@@ -6,15 +6,17 @@ import { acceptsTransactions, getAccount } from '@/lib/accounts';
 import { importMappingSchema } from '@/lib/import/mapping';
 import { getProfile } from '@/lib/import/presets';
 import { commitStagedImport } from '@/lib/import/flow';
-import { StagingError } from '@/lib/import/staging';
+import { looksLikeOfx } from '@/lib/import/ofx';
+import { StagingError, readStagedFile } from '@/lib/import/staging';
 import { ImportLimitError, MAX_FILE_BYTES } from '@/lib/import/parse';
 
 const bodySchema = z.object({
   stagingId: z.string().uuid(),
   filename: z.string().min(1).max(255),
   accountId: z.number().int().positive(),
-  profileId: z.number().int().positive(),
-  mapping: importMappingSchema,
+  // Both optional only for an OFX/QFX file, which names its own fields; checked below.
+  profileId: z.number().int().positive().optional(),
+  mapping: importMappingSchema.optional(),
 });
 
 export async function POST(request: Request): Promise<Response> {
@@ -49,10 +51,31 @@ export async function POST(request: Request): Promise<Response> {
   if (!acceptsTransactions(account.type)) {
     return Response.json({ error: 'That account only holds a balance you type in.' }, { status: 400 });
   }
-  if (!getProfile(parsed.data.profileId)) return Response.json({ error: 'Unknown import profile' }, { status: 404 });
+  const { profileId, mapping } = parsed.data;
+  if (profileId === undefined) {
+    // No profile is acceptable only when the staged file itself reads as OFX/QFX.
+    try {
+      if (!looksLikeOfx(parsed.data.filename, readStagedFile(parsed.data.stagingId))) {
+        return Response.json({ error: 'Choose an import profile for this file.' }, { status: 400 });
+      }
+    } catch (error) {
+      if (error instanceof StagingError) return Response.json({ error: error.message, code: error.code }, { status: 410 });
+      throw error;
+    }
+  } else {
+    if (!getProfile(profileId)) return Response.json({ error: 'Unknown import profile' }, { status: 404 });
+    if (mapping === undefined) return Response.json({ error: 'Invalid request' }, { status: 400 });
+  }
 
   try {
-    const result = commitStagedImport({ ...parsed.data, userId: user.id });
+    const result = commitStagedImport({
+      stagingId: parsed.data.stagingId,
+      filename: parsed.data.filename,
+      accountId: parsed.data.accountId,
+      profileId: profileId ?? null,
+      mapping: mapping ?? null,
+      userId: user.id,
+    });
     return Response.json(result);
   } catch (error) {
     if (error instanceof ImportLimitError) return Response.json({ error: error.message, code: error.code }, { status: 413 });

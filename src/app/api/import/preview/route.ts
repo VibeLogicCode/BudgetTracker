@@ -3,19 +3,43 @@ import { CsrfError, assertSameOrigin } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
 import { isSelfScoped } from '@/lib/auth/viewer';
 import { acceptsTransactions, getAccount } from '@/lib/accounts';
-import { importMappingSchema } from '@/lib/import/mapping';
+import { importMappingSchema, type ImportMapping } from '@/lib/import/mapping';
+import { looksLikeOfx } from '@/lib/import/ofx';
 import { getProfile } from '@/lib/import/presets';
 import { buildPreview } from '@/lib/import/preview';
-import { StagingError, writeStagedFile } from '@/lib/import/staging';
+import { StagingError, readStagedFile, writeStagedFile } from '@/lib/import/staging';
 import { ImportLimitError, MAX_FILE_BYTES } from '@/lib/import/parse';
 
 const bodySchema = z.object({
   stagingId: z.string().uuid(),
   filename: z.string().min(1).max(255),
   accountId: z.coerce.number().int().positive(),
-  profileId: z.coerce.number().int().positive(),
+  // Optional only so an OFX/QFX file can be previewed without one; the check below refuses a
+  // missing profile unless the staged bytes read as OFX.
+  profileId: z.coerce.number().int().positive().optional(),
   mapping: importMappingSchema.optional(),
 });
+
+/**
+ * buildPreview types its mapping as required, but an OFX file never reads it (the format names its
+ * own fields), so a profile-less OFX preview hands it this inert shape.
+ */
+const OFX_PLACEHOLDER_MAPPING: ImportMapping = {
+  hasHeader: false,
+  headerRows: 0,
+  dateCol: 0,
+  dateFormat: 'YYYY-MM-DD',
+  descCols: [0],
+  amountMode: 'signed',
+  amountCol: 0,
+  debitCol: null,
+  creditCol: null,
+  signConvention: 'negative_is_spend',
+  encoding: 'auto',
+  skipRules: null,
+  cardCol: null,
+  balanceCol: null,
+};
 
 function tooLarge(): Response {
   return Response.json({ error: `File is larger than ${MAX_FILE_BYTES} bytes`, code: 'file_too_large' }, { status: 413 });
@@ -75,7 +99,7 @@ export async function POST(request: Request): Promise<Response> {
       stagingId,
       filename: file.name,
       accountId: form.get('accountId'),
-      profileId: form.get('profileId'),
+      profileId: form.get('profileId') ?? undefined,
     };
   } else {
     payload = await request.json();
@@ -92,9 +116,25 @@ export async function POST(request: Request): Promise<Response> {
   if (!acceptsTransactions(account.type)) {
     return Response.json({ error: 'That account only holds a balance you type in.' }, { status: 400 });
   }
-  const profile = getProfile(parsed.data.profileId);
-  if (!profile) return Response.json({ error: 'Unknown import profile' }, { status: 404 });
-  const mapping = parsed.data.mapping ?? profile.mapping;
+  let profileId: number | null = null;
+  let mapping: ImportMapping | null;
+  if (parsed.data.profileId === undefined) {
+    // No profile is acceptable only for a file that reads as OFX/QFX; a CSV without one is refused.
+    try {
+      if (!looksLikeOfx(parsed.data.filename, readStagedFile(parsed.data.stagingId))) {
+        return Response.json({ error: 'Choose an import profile for this file.' }, { status: 400 });
+      }
+    } catch (error) {
+      if (error instanceof StagingError) return Response.json({ error: error.message, code: error.code }, { status: 410 });
+      throw error;
+    }
+    mapping = OFX_PLACEHOLDER_MAPPING;
+  } else {
+    const profile = getProfile(parsed.data.profileId);
+    if (!profile) return Response.json({ error: 'Unknown import profile' }, { status: 404 });
+    profileId = parsed.data.profileId;
+    mapping = parsed.data.mapping ?? profile.mapping;
+  }
   if (!mapping) {
     // profile.mapping is only null when the stored row is unreadable (see
     // ProfileRecord.mappingError) — the import page never offers a profile like that, so this
@@ -108,7 +148,7 @@ export async function POST(request: Request): Promise<Response> {
       stagingId: parsed.data.stagingId,
       filename: parsed.data.filename,
       accountId: parsed.data.accountId,
-      profileId: parsed.data.profileId,
+      profileId,
       mapping,
     });
     return Response.json(preview);

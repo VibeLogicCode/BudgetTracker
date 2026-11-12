@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
 import { upsertAccountCardPerson } from '@/lib/import/card-people';
-import { commitImport, listImportHistory, undoImport } from '@/lib/import/commit';
+import { commitImport, importHistoryPage, listImportHistory, undoImport } from '@/lib/import/commit';
 import { computeRowHashes, DEDUP_HASH_VERSION } from '@/lib/import/dedup';
 import { parseCsv } from '@/lib/import/parse';
 import { getBuiltinPreset } from '@/lib/import/presets';
@@ -693,5 +693,39 @@ describe('v1.12.1: undo removes the balance snapshots that import wrote (item AE
   it('reports zero when the import wrote no balances at all', () => {
     const { importId } = commitOneImportWithoutBalances();
     expect(undoImport(importId).snapshotsDeleted).toBe(0);
+  });
+});
+
+// v1.60.0 item 3b: history pages by id, newest first, so nothing is skipped or repeated.
+describe('listImportHistory paging', () => {
+  function seedImports(count: number) {
+    current = createSeededTestDb();
+    const userId = insertTestUser(current.db, { name: 'Alice', username: 'alice' });
+    const accountId = insertTestAccount(current.db);
+    for (let i = 1; i <= count; i += 1) {
+      current.sqlite
+        .prepare(
+          "insert into imports (account_id, filename, imported_by, rows_added, rows_duplicate, rows_error, created_at) values (?, ?, ?, 0, 0, 0, '2026-08-01T00:00:00.000Z')",
+        )
+        .run(accountId, `file-${i}.csv`, userId);
+    }
+  }
+
+  it('pages 30 imports as 25 then 5 with no overlap', () => {
+    seedImports(30);
+    const first = importHistoryPage({ limit: 25 });
+    expect(first.rows).toHaveLength(25);
+    expect(first.hasMore).toBe(true);
+    const second = importHistoryPage({ limit: 25, beforeId: first.rows.at(-1)!.id });
+    expect(second.rows).toHaveLength(5);
+    expect(second.hasMore).toBe(false);
+    const all = [...first.rows, ...second.rows].map((row) => row.id);
+    expect(new Set(all).size).toBe(30);
+    expect(all).toEqual([...all].sort((a, b) => b - a));
+  });
+
+  it('reports no more when the history ends exactly on a page boundary', () => {
+    seedImports(25);
+    expect(importHistoryPage({ limit: 25 }).hasMore).toBe(false);
   });
 });

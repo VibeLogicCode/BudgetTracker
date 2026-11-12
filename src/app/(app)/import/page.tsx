@@ -5,7 +5,7 @@ import { acceptsTransactions, listAccounts } from '@/lib/accounts';
 import { listUsers } from '@/lib/auth/users';
 import { readEnv } from '@/lib/env';
 import { hasReadableMapping, listProfiles } from '@/lib/import/presets';
-import { listImportHistory } from '@/lib/import/commit';
+import { importHistoryPage } from '@/lib/import/commit';
 import { isSimplefinManaged } from '@/lib/simplefin/connection';
 import { monthLabel } from '@/lib/dates';
 import { monthState, openMonths } from '@/lib/month-close';
@@ -106,6 +106,8 @@ export default async function ImportPage({
     };
   });
 
+  const history = importHistoryPage({ limit: 25 });
+
   return (
     <>
     <CloseMonthCard months={openMonthViews} />
@@ -135,7 +137,8 @@ export default async function ImportPage({
       profiles={profiles}
       initialDetection={initialDetection}
       initialNotice={initialNotice}
-      history={listImportHistory(25)}
+      history={history.rows}
+      historyHasMore={history.hasMore}
       tz={readEnv().tz}
       simplefinManaged={managed.map((a) => a.name)}
       // Active users, offered on each card value's person select (v1.6.0, MUST-6.1). An

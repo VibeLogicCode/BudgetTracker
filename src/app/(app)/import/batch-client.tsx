@@ -99,6 +99,8 @@ export function BatchClient(props: {
   accounts: AccountOption[];
   profiles: ProfileOption[];
   history: ImportHistoryRow[];
+  /** Whether older imports exist beyond `history`, so the card offers Show more. */
+  historyHasMore?: boolean;
   /** The household's time zone, for the history's When column. */
   tz: string;
   simplefinManaged: string[];
@@ -111,7 +113,7 @@ export function BatchClient(props: {
   /** v1.55.2. Something the page has to say on arrival, e.g. that the handed-back file is gone. */
   initialNotice?: string | null;
 }) {
-  const { history, tz, initialDetection = null, initialNotice = null, ...shared } = props;
+  const { history, historyHasMore = false, tz, initialDetection = null, initialNotice = null, ...shared } = props;
   const [rows, setRows] = useState<BatchRow[] | null>(null);
   const [open, setOpen] = useState<DetectionResult | null>(initialDetection);
   const [confirming, setConfirming] = useState(false);
@@ -501,7 +503,7 @@ export function BatchClient(props: {
       {/* Always present so aria-controls names a real element; the card itself mounts only when
           open, and a hidden empty div takes no gap in the column. */}
       <div id="import-history" hidden={!showHistory}>
-        {showHistory ? <ImportHistoryCard history={history} tz={tz} /> : null}
+        {showHistory ? <ImportHistoryCard history={history} hasMore={historyHasMore} tz={tz} /> : null}
       </div>
     </div>
   );

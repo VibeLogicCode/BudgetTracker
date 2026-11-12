@@ -16,7 +16,8 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 
 export interface CommitFlowResult {
   importId: number;
-  profileId: number;
+  /** NULL for an OFX/QFX import: the format names its own fields, so no profile was used. */
+  profileId: number | null;
   rowsAdded: number;
   rowsDuplicate: number;
   rowsError: number;
@@ -66,8 +67,9 @@ export function commitStagedImport(input: {
   stagingId: string;
   filename: string;
   accountId: number;
-  profileId: number;
-  mapping: ImportMapping;
+  /** Required for a CSV; an OFX/QFX file takes none and is recorded with a NULL profile. */
+  profileId: number | null;
+  mapping: ImportMapping | null;
   userId: number;
 }): CommitFlowResult {
   const account = getAccount(input.accountId);
@@ -101,19 +103,25 @@ export function commitStagedImport(input: {
   // externalId, commit.ts:196-198), commitImport is the same call, and undoImport partitions
   // by transaction_imports and has never looked at how a row was deduped.
   const ofx = looksLikeOfx(input.filename, buf) ? parseOfx(buf) : null;
-  const parsed = ofx ?? parseCsv(buf, input.mapping);
+  // A missing profile is only acceptable when the staged bytes themselves read as OFX; a CSV
+  // posted without one is refused here, so the route's relaxed check cannot let one through.
+  if (!ofx && (input.profileId === null || input.mapping === null)) {
+    throw new Error('Choose an import profile for this file.');
+  }
+  const parsed = ofx ?? parseCsv(buf, input.mapping as ImportMapping);
   const hashed = computeRowHashes(input.accountId, parsed.rows);
 
   // The fork/repoint pair is skipped for an OFX file -- an OFX import has no mapping to fork,
-  // so pointing the account at a profile it did not use would be a lie.
+  // so pointing the account at a profile it did not use would be a lie, and the import row
+  // records NULL rather than a profile the file never touched.
   const profileId = ofx
-    ? input.profileId
+    ? null
     : forkProfileIfBuiltin({
-        profileId: input.profileId,
+        profileId: input.profileId as number,
         accountName: account.name,
-        mapping: input.mapping,
+        mapping: input.mapping as ImportMapping,
       });
-  if (!ofx) setAccountProfile(input.accountId, profileId);
+  if (!ofx && profileId !== null) setAccountProfile(input.accountId, profileId);
 
   const committed = commitImport({
     accountId: input.accountId,

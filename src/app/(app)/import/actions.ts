@@ -9,6 +9,7 @@ import { isSelfScoped } from '@/lib/auth/viewer';
 import { getAccount } from '@/lib/accounts';
 import { findUserById } from '@/lib/auth/users';
 import { deleteAccountCardPerson, upsertAccountCardPerson } from '@/lib/import/card-people';
+import { importHistoryPage, type ImportHistoryRow } from '@/lib/import/commit';
 import { importMappingSchema } from '@/lib/import/mapping';
 import { createProfile, forkProfileIfBuiltin, getProfile, getProfileByName, mappingsEqual, setAccountProfile } from '@/lib/import/presets';
 import { deleteStagedFile } from '@/lib/import/staging';
@@ -250,4 +251,25 @@ export async function closeMonthAction(_prev: CloseMonthState, formData: FormDat
   revalidatePath('/import');
   revalidatePath('/dashboard');
   return { closed: parsed.data };
+}
+
+export interface ImportHistoryPageState {
+  rows?: ImportHistoryRow[];
+  hasMore?: boolean;
+  error?: string;
+}
+
+const IMPORT_HISTORY_PAGE_SIZE = 25;
+
+/** The next page of import history, older than `beforeId`, for the History card's Show more. */
+export async function loadImportHistoryAction(beforeId: number): Promise<ImportHistoryPageState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  const user = await requireUser();
+  // The undo route refuses a self viewer, and the page redirects one: history is not theirs to read.
+  if (isSelfScoped(user)) return { error: NOT_AVAILABLE_ERROR };
+  if (!Number.isInteger(beforeId) || beforeId < 1) return { error: 'Invalid request.' };
+
+  const page = importHistoryPage({ limit: IMPORT_HISTORY_PAGE_SIZE, beforeId });
+  return { rows: page.rows, hasMore: page.hasMore };
 }

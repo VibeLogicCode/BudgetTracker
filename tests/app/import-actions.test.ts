@@ -26,7 +26,7 @@ vi.mock('next/cache', () => ({
   revalidatePath: vi.fn(),
 }));
 
-import { saveMappingAction, saveWizardProfileAction, setCardPersonAction } from '@/app/(app)/import/actions';
+import { loadImportHistoryAction, saveMappingAction, saveWizardProfileAction, setCardPersonAction } from '@/app/(app)/import/actions';
 import { getAccount } from '@/lib/accounts';
 import { createProfile, getBuiltinPreset, getProfile, getProfileByName, listProfiles } from '@/lib/import/presets';
 import { writeStagedFile, stagedFilePath } from '@/lib/import/staging';
@@ -386,5 +386,45 @@ describe('saveMappingAction (Lane 5: save a corrected import mapping from the pr
     expect(result.error).toBe('Cross-origin request rejected');
     expect(listProfiles()).toHaveLength(before);
     expect(getAccount(accountId)?.importProfileId).toBeNull();
+  });
+});
+
+// v1.60.0 item 3b: the next page of import history.
+describe('loadImportHistoryAction', () => {
+  function seedImports(count: number) {
+    const userId = insertTestUser(current!.db, { name: 'Alex', username: 'alex' });
+    const accountId = insertTestAccount(current!.db);
+    for (let i = 0; i < count; i += 1) {
+      current!.sqlite
+        .prepare(
+          "insert into imports (account_id, filename, imported_by, rows_added, rows_duplicate, rows_error, created_at) values (?, ?, ?, 1, 0, 0, '2026-08-01T00:00:00.000Z')",
+        )
+        .run(accountId, `file-${i}.csv`, userId);
+    }
+  }
+
+  it('returns the next 25 older than the cursor, and whether more remain', async () => {
+    seedImports(60);
+    const first = await loadImportHistoryAction(61);
+    expect(first.rows).toHaveLength(25);
+    expect(first.hasMore).toBe(true);
+    expect(first.rows![0].id).toBe(60);
+    const next = await loadImportHistoryAction(first.rows!.at(-1)!.id);
+    expect(next.rows![0].id).toBe(35);
+    const tail = await loadImportHistoryAction(11);
+    expect(tail.rows).toHaveLength(10);
+    expect(tail.hasMore).toBe(false);
+  });
+
+  it('refuses a cross-origin call and a self-scoped viewer', async () => {
+    seedImports(3);
+    requestHeaders = new Headers({ origin: 'http://evil.example', host: 'nas.local:3000' });
+    expect((await loadImportHistoryAction(10)).error).toBeTruthy();
+    requestHeaders = new Headers({ origin: 'http://nas.local:3000', host: 'nas.local:3000' });
+    FAKE_USER.visibility = 'self';
+    FAKE_USER.role = 'member';
+    const refused = await loadImportHistoryAction(10);
+    expect(refused.error).toBeTruthy();
+    expect(refused.rows).toBeUndefined();
   });
 });

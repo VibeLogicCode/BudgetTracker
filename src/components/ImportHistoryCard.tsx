@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Notice } from '@/components/ui/Notice';
@@ -9,7 +9,59 @@ import { buttonClass } from '@/components/ui/Button';
 import { ImportIcon } from '@/components/icons';
 import { localDateTimeOf } from '@/lib/dates';
 import { transactionsHref } from '@/lib/transaction-links';
-import type { ImportHistoryRow } from '@/lib/import/commit';
+// Relative on purpose: a 'use server' module is a bundle boundary, and the client-bundle guard
+// walks only `@/` edges, the same way import-client.tsx reaches the page's other actions.
+import { loadImportHistoryAction } from '../app/(app)/import/actions';
+import type { ImportHistoryRow, UndoSideEffects } from '@/lib/import/commit';
+
+/** A SimpleFIN run's import row is recognised by its filename: `simplefin <date> <time>`. */
+const SYNC_FILENAME = /^simplefin\b/i;
+
+type HistoryItem = { kind: 'row'; row: ImportHistoryRow } | { kind: 'run'; rows: ImportHistoryRow[] };
+
+/**
+ * Consecutive bank-sync rows that added nothing fold into one run so a day of quiet syncs cannot
+ * push a CSV import and its Undo off the list. A lone quiet sync, any sync that added rows and
+ * every CSV/OFX row stay as plain rows.
+ */
+function groupQuietSyncs(rows: ImportHistoryRow[]): HistoryItem[] {
+  const items: HistoryItem[] = [];
+  let run: ImportHistoryRow[] = [];
+  const flush = () => {
+    if (run.length === 1) items.push({ kind: 'row', row: run[0] });
+    else if (run.length > 1) items.push({ kind: 'run', rows: run });
+    run = [];
+  };
+  for (const row of rows) {
+    if (SYNC_FILENAME.test(row.filename) && row.rowsAdded === 0) run.push(row);
+    else {
+      flush();
+      items.push({ kind: 'row', row });
+    }
+  }
+  flush();
+  return items;
+}
+
+function plural(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/** One line per non-zero count; `alsoRemoved` may be absent from an older server. */
+function sideEffectLines(counts: Partial<UndoSideEffects> | undefined): string[] {
+  if (counts === undefined) return [];
+  const n = (value: number | undefined) => value ?? 0;
+  const out: string[] = [];
+  if (n(counts.splitRows) > 0) out.push(`${plural(n(counts.splitRows), 'transaction', 'transactions')} with split parts (the splits go too)`);
+  if (n(counts.notedRows) > 0) out.push(`${plural(n(counts.notedRows), 'transaction', 'transactions')} with a note (the note goes too)`);
+  if (n(counts.manualCategories) > 0) out.push(`${plural(n(counts.manualCategories), 'transaction', 'transactions')} with a category set by hand`);
+  if (n(counts.renamedRows) > 0) out.push(`${plural(n(counts.renamedRows), 'transaction', 'transactions')} renamed by hand or by a rename rule`);
+  if (n(counts.itemLinks) > 0) out.push(`${plural(n(counts.itemLinks), 'item loses its', 'items lose their')} purchase link`);
+  if (n(counts.loanPayments) > 0) out.push(`${plural(n(counts.loanPayments), 'loan payment', 'loan payments')} reversed`);
+  if (n(counts.installments) > 0) out.push(`${plural(n(counts.installments), 'bill installment', 'bill installments')} set back to unpaid`);
+  if (n(counts.snapshots) > 0) out.push(`${plural(n(counts.snapshots), 'balance figure', 'balance figures')} removed`);
+  return out;
+}
 
 /**
  * Every import, and the button that takes one back out.
@@ -36,8 +88,11 @@ export function ImportHistoryCard({
   extraRows = [],
   /** The household's time zone, a plain prop: @/lib/env cannot be imported into a client file. */
   tz,
+  hasMore: initialHasMore = false,
 }: {
   history: ImportHistoryRow[];
+  /** Whether older imports exist beyond `history`; the card then offers Show more. */
+  hasMore?: boolean;
   tz: string;
   extraRows?: ImportHistoryRow[];
 }) {
@@ -45,8 +100,31 @@ export function ImportHistoryCard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [summary, setSummary] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(initialHasMore);
+  const [loadingMore, setLoadingMore] = useState(false);
+  /** The first row id of each quiet-sync run the household has opened. */
+  const [openRuns, setOpenRuns] = useState<Set<number>>(new Set());
 
   const rows = [...extraRows, ...historyRows.filter((row) => !extraRows.some((extra) => extra.id === row.id))];
+
+  async function showMore() {
+    const oldest = historyRows.at(-1);
+    if (oldest === undefined) return;
+    setError(null);
+    setLoadingMore(true);
+    try {
+      const page = await loadImportHistoryAction(oldest.id);
+      if (page.error !== undefined || page.rows === undefined) {
+        setError(page.error ?? 'Could not load more history.');
+        return;
+      }
+      const more = page.rows;
+      setHistoryRows((current) => [...current, ...more.filter((row) => !current.some((c) => c.id === row.id))]);
+      setHasMore(page.hasMore === true);
+    } finally {
+      setLoadingMore(false);
+    }
+  }
 
   async function undo(importId: number) {
     setError(null);
@@ -62,8 +140,10 @@ export function ImportHistoryCard({
         setError(counts.error ?? 'Could not look up this import.');
         return;
       }
+      const alsoRemoved = sideEffectLines(counts.alsoRemoved);
       const ok = window.confirm(
-        `Undo this import?\n\nWill delete ${counts.willDelete} transactions.\nWill keep ${counts.willKeep} shared with other imports.`,
+        `Undo this import?\n\nWill delete ${counts.willDelete} transactions.\nWill keep ${counts.willKeep} shared with other imports.` +
+          (alsoRemoved.length === 0 ? '' : `\n\nThis also changes:\n${alsoRemoved.map((line) => `- ${line}`).join('\n')}`),
       );
       if (!ok) return;
 
@@ -91,6 +171,62 @@ export function ImportHistoryCard({
     } finally {
       setBusy(false);
     }
+  }
+
+  function renderRow(row: ImportHistoryRow) {
+    return (
+      <tr key={row.id}>
+        {/* v1.16.0 Lane C item 3: When and Account are context for the row, not the
+            fact it is about -- File (below) already carries `cell-stack-headline`, so
+            `cell-stack-meta` puts these on a small muted line under it instead of two
+            more labelled rows of their own. */}
+        <td className="tabnum whitespace-nowrap text-muted cell-stack-meta" data-label="When">
+          {localDateTimeOf(row.createdAt, tz)}
+        </td>
+        {/* Truncate with a title, never a bare ellipsis: the full account name and
+            the full filename stay readable on hover and to a screen reader. */}
+        <td className="cell-truncate cell-stack-meta" title={row.accountName} data-label="Account">
+          {row.accountName}
+        </td>
+        {/* v1.15.0 (responsive rows): the filename is what tells one import from
+            another -- Account repeats across every re-import of the same statement --
+            so it is the phone card's headline. No cell-stack-amount: Added/Dupes/Errors
+            are row counts, not money. */}
+        <td className="cell-truncate font-mono text-xs cell-stack-headline" title={row.filename} data-label="File">
+          {row.filename}
+        </td>
+        <td className="text-muted" data-label="By">{row.importedByName}</td>
+        <td className="tabnum text-right" data-label="Added">{row.rowsAdded}</td>
+        <td className="tabnum text-right text-muted" data-label="Dupes">{row.rowsDuplicate}</td>
+        <td className="tabnum text-right text-muted" data-label="Errors">{row.rowsError}</td>
+        <td className="text-right cell-stack-actions" data-label="">
+          {/* F-03 (v1.31.0): "the rows THIS import added" -- the arrival path
+              transactions-client.tsx's own mobile-fold comment already calls out
+              (`activeImportId`, rendered as a dismissible chip regardless of the
+              filter disclosure's own open/closed state). transactionsHref, never a
+              hand-built `?import=<id>` -- see that module's docblock. Stacked above
+              Undo, not beside it: the fixed-width actions column (colgroup above) is
+              too narrow for two side-by-side buttons, and stacking needs no widening
+              of every other row's column. */}
+          <div className="flex flex-col items-end gap-1.5">
+            <a
+              href={transactionsHref({ range: null, person: null }, { kind: 'import', importId: row.id })}
+              className={buttonClass('secondary', 'sm', 'min-h-11 sm:min-h-0')}
+            >
+              View rows
+            </a>
+            <button
+              type="button"
+              onClick={() => void undo(row.id)}
+              disabled={busy}
+              className={buttonClass('secondary', 'sm')}
+            >
+              Undo
+            </button>
+          </div>
+        </td>
+      </tr>
+    );
   }
 
   return (
@@ -143,62 +279,46 @@ export function ImportHistoryCard({
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
-                <tr key={row.id}>
-                  {/* v1.16.0 Lane C item 3: When and Account are context for the row, not the
-                      fact it is about -- File (below) already carries `cell-stack-headline`, so
-                      `cell-stack-meta` puts these on a small muted line under it instead of two
-                      more labelled rows of their own. */}
-                  <td className="tabnum whitespace-nowrap text-muted cell-stack-meta" data-label="When">
-                    {localDateTimeOf(row.createdAt, tz)}
-                  </td>
-                  {/* Truncate with a title, never a bare ellipsis: the full account name and
-                      the full filename stay readable on hover and to a screen reader. */}
-                  <td className="cell-truncate cell-stack-meta" title={row.accountName} data-label="Account">
-                    {row.accountName}
-                  </td>
-                  {/* v1.15.0 (responsive rows): the filename is what tells one import from
-                      another -- Account repeats across every re-import of the same statement --
-                      so it is the phone card's headline. No cell-stack-amount: Added/Dupes/Errors
-                      are row counts, not money. */}
-                  <td className="cell-truncate font-mono text-xs cell-stack-headline" title={row.filename} data-label="File">
-                    {row.filename}
-                  </td>
-                  <td className="text-muted" data-label="By">{row.importedByName}</td>
-                  <td className="tabnum text-right" data-label="Added">{row.rowsAdded}</td>
-                  <td className="tabnum text-right text-muted" data-label="Dupes">{row.rowsDuplicate}</td>
-                  <td className="tabnum text-right text-muted" data-label="Errors">{row.rowsError}</td>
-                  <td className="text-right cell-stack-actions" data-label="">
-                    {/* F-03 (v1.31.0): "the rows THIS import added" -- the arrival path
-                        transactions-client.tsx's own mobile-fold comment already calls out
-                        (`activeImportId`, rendered as a dismissible chip regardless of the
-                        filter disclosure's own open/closed state). transactionsHref, never a
-                        hand-built `?import=<id>` -- see that module's docblock. Stacked above
-                        Undo, not beside it: the fixed-width actions column (colgroup above) is
-                        too narrow for two side-by-side buttons, and stacking needs no widening
-                        of every other row's column. */}
-                    <div className="flex flex-col items-end gap-1.5">
-                      <a
-                        href={transactionsHref({ range: null, person: null }, { kind: 'import', importId: row.id })}
-                        className={buttonClass('secondary', 'sm', 'min-h-11 sm:min-h-0')}
-                      >
-                        View rows
-                      </a>
-                      <button
-                        type="button"
-                        onClick={() => void undo(row.id)}
-                        disabled={busy}
-                        className={buttonClass('secondary', 'sm')}
-                      >
-                        Undo
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {groupQuietSyncs(rows).map((item) => {
+                if (item.kind === 'row') return renderRow(item.row);
+                const first = item.rows[0];
+                const last = item.rows[item.rows.length - 1];
+                const open = openRuns.has(first.id);
+                return (
+                  <Fragment key={`run-${first.id}`}>
+                    <tr>
+                      <td colSpan={8} className="text-muted">
+                        <button
+                          type="button"
+                          aria-expanded={open}
+                          onClick={() =>
+                            setOpenRuns((current) => {
+                              const next = new Set(current);
+                              if (!next.delete(first.id)) next.add(first.id);
+                              return next;
+                            })
+                          }
+                          className="text-left underline underline-offset-2"
+                        >
+                          {item.rows.length} bank syncs with nothing new
+                        </button>
+                        {` · ${localDateTimeOf(last.createdAt, tz)} to ${localDateTimeOf(first.createdAt, tz)}`}
+                      </td>
+                    </tr>
+                    {open ? item.rows.map((row) => renderRow(row)) : null}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </TableWrap>
         )}
+        {hasMore ? (
+          <div className="flex justify-center pt-3">
+            <button type="button" onClick={() => void showMore()} disabled={loadingMore} className={buttonClass('secondary', 'sm')}>
+              Show more
+            </button>
+          </div>
+        ) : null}
       </Card>
     </>
   );

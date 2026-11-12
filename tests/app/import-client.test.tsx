@@ -2002,3 +2002,66 @@ describe('ImportClient — tells the batch list what it imported', () => {
     expect(onImported).not.toHaveBeenCalled();
   });
 });
+
+// v1.60.0 item 9: an OFX/QFX file names its own fields, so there is no profile to pick.
+describe('ImportClient — no profile pick for an OFX/QFX file', () => {
+  const OFX_DETECTION = {
+    stagingId: '55555555-5555-4555-8555-555555555555',
+    filename: 'march.qfx',
+    profile: null,
+    profileReason: 'This is an OFX/QFX file; it names its own columns.',
+    profileConfidence: 'certain' as const,
+    source: 'ofx' as const,
+    account: null,
+    accountReason: 'Nothing in this file says which account it belongs to.',
+    accountConfidence: 'none' as const,
+  };
+
+  function renderOfx() {
+    return render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        simplefinManaged={[]}
+        initialDetection={OFX_DETECTION}
+      />,
+    );
+  }
+
+  it('shows no profile select and enables Preview once an account is set, posting no profileId', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      json: async () => previewBody({ stagingId: OFX_DETECTION.stagingId, filename: 'march.qfx', profileId: null, source: 'ofx' }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { container, queryByText, getByRole } = renderOfx();
+
+    expect(queryByText('Import profile')).toBeNull();
+    const selects = container.querySelectorAll('select');
+    expect(selects).toHaveLength(1);
+    const preview = getByRole('button', { name: /^preview$/i }) as HTMLButtonElement;
+    expect(preview.disabled).toBe(true);
+
+    fireEvent.change(selects[0], { target: { value: '10' } });
+    expect((getByRole('button', { name: /^preview$/i }) as HTMLButtonElement).disabled).toBe(false);
+
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
+    expect(body).toMatchObject({ stagingId: OFX_DETECTION.stagingId, accountId: 10 });
+    expect('profileId' in body).toBe(false);
+  });
+
+  it('still shows the profile select for a CSV and keeps Preview off until one is chosen', () => {
+    const { queryByText, getByRole } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        simplefinManaged={[]}
+        initialDetection={{ ...OFX_DETECTION, filename: 'march.csv', source: 'csv', account: { id: 10, name: 'Joint Chequing' } }}
+      />,
+    );
+    expect(queryByText('Import profile')).not.toBeNull();
+    expect((getByRole('button', { name: /^preview$/i }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});

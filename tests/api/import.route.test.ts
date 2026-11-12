@@ -12,6 +12,7 @@ import { setUserVisibility } from '@/lib/auth/users';
 import { listAudit } from '@/lib/audit';
 import { getBuiltinPreset, getProfileByName } from '@/lib/import/presets';
 import { MAX_FILE_BYTES } from '@/lib/import/parse';
+import { writeStagedFile } from '@/lib/import/staging';
 
 const fixture = (name: string) => fs.readFileSync(path.join(process.cwd(), 'fixtures', name));
 
@@ -472,5 +473,80 @@ describe('POST /api/import/commit and /api/import/undo', () => {
     );
     expect(response.status).toBe(403);
     expect((current!.sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(before);
+  });
+});
+
+// v1.60.0 item 9: the routes accept a missing profile only for a file that reads as OFX.
+describe('import routes - OFX without a profile', () => {
+  const OFX_STATEMENT = `OFXHEADER:100
+  DATA:OFXSGML
+  VERSION:102
+  SECURITY:NONE
+  ENCODING:USASCII
+  CHARSET:1252
+  COMPRESSION:NONE
+  OLDFILEUID:NONE
+  NEWFILEUID:NONE
+  
+  <OFX>
+  <BANKMSGSRSV1><STMTTRNRS><STMTRS>
+  <CURDEF>CAD
+  <BANKACCTFROM><BANKID>000000000<ACCTID>0000000<ACCTTYPE>CHECKING</BANKACCTFROM>
+  <BANKTRANLIST>
+  <DTSTART>20260801<DTEND>20260831
+  <STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20260803120000<TRNAMT>-42.10<FITID>FIT-0001<NAME>MAPLE GROCER</STMTTRN>
+  <STMTTRN><TRNTYPE>CREDIT<DTPOSTED>20260815120000<TRNAMT>2100.00<FITID>FIT-0003<NAME>PAYROLL DEPOSIT</STMTTRN>
+  </BANKTRANLIST>
+  </STMTRS></STMTTRNRS></BANKMSGSRSV1>
+  </OFX>`;
+
+  function ofxUpload(filename = 'march.qfx') {
+    const form = new FormData();
+    form.append('file', new File([OFX_STATEMENT], filename, { type: 'application/x-ofx' }));
+    form.append('accountId', String(accountId));
+    return new Request('http://nas.local:3000/api/import/preview', { method: 'POST', headers: headers(), body: form });
+  }
+
+  it('previews and commits an OFX file with no profileId, recording a NULL profile', async () => {
+    const previewResponse = await previewRoute(ofxUpload());
+    expect(previewResponse.status).toBe(200);
+    const preview = (await previewResponse.json()) as { stagingId: string; source: string; profileId: number | null };
+    expect(preview).toMatchObject({ source: 'ofx', profileId: null });
+
+    const commitResponse = await commitRoute(
+      jsonRequest('http://nas.local:3000/api/import/commit', { stagingId: preview.stagingId, filename: 'march.qfx', accountId }),
+    );
+    expect(commitResponse.status).toBe(200);
+    const committed = (await commitResponse.json()) as { importId: number; rowsAdded: number };
+    expect(committed.rowsAdded).toBe(2);
+    expect(
+      (current!.sqlite.prepare('select profile_id as p from imports where id = ?').get(committed.importId) as { p: number | null }).p,
+    ).toBeNull();
+  });
+
+  it('still refuses a CSV preview and commit with no profile', async () => {
+    const form = new FormData();
+    form.append('file', new File([fixture('td-chequing.csv')], 'td-chequing.csv', { type: 'text/csv' }));
+    form.append('accountId', String(accountId));
+    const previewResponse = await previewRoute(
+      new Request('http://nas.local:3000/api/import/preview', { method: 'POST', headers: headers(), body: form }),
+    );
+    expect(previewResponse.status).toBe(400);
+
+    // An OFX-named file whose bytes are not OFX is a CSV as far as the routes are concerned.
+    const fake = new FormData();
+    fake.append('file', new File([fixture('td-chequing.csv')], 'fake.qfx', { type: 'text/csv' }));
+    fake.append('accountId', String(accountId));
+    const fakeResponse = await previewRoute(
+      new Request('http://nas.local:3000/api/import/preview', { method: 'POST', headers: headers(), body: fake }),
+    );
+    expect(fakeResponse.status).toBe(400);
+
+    const staged = writeStagedFile(fixture('td-chequing.csv'));
+    const commitResponse = await commitRoute(
+      jsonRequest('http://nas.local:3000/api/import/commit', { stagingId: staged, filename: 'td-chequing.csv', accountId }),
+    );
+    expect(commitResponse.status).toBe(400);
+    expect((current!.sqlite.prepare('select count(*) as c from imports').get() as { c: number }).c).toBe(0);
   });
 });

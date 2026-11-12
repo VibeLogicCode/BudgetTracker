@@ -308,6 +308,11 @@ export function ImportClient({
   );
   /** Add a bank opens on the held file only for a CSV: an OFX/QFX file names its own columns. */
   const wizardHref = addBankHref(staged === null || staged.source === 'ofx' ? null : staged);
+  /**
+   * An OFX/QFX file names its own fields, so no profile is picked, shown or posted for it:
+   * Preview needs the file and the account only.
+   */
+  const isOfx = staged?.source === 'ofx';
   /** The server said the staged bytes are gone (swept from DATA_DIR/tmp): offer to choose again. */
   const [stagedGone, setStagedGone] = useState(false);
   /** True while hop 1 is in flight, so the card can say it is reading rather than sit silent. */
@@ -474,7 +479,7 @@ export function ImportClient({
               stagingId: held.stagingId,
               filename: held.filename,
               accountId,
-              profileId,
+              ...(isOfx ? {} : { profileId }),
             }),
           });
     const body = await response.json();
@@ -511,7 +516,7 @@ export function ImportClient({
   const autoPreviewed = useRef(false);
   useEffect(() => {
     if (autoPreviewed.current) return;
-    if (initialDetection === null || accountId === 0 || profileId === 0) return;
+    if (initialDetection === null || accountId === 0 || (initialDetection.source !== 'ofx' && profileId === 0)) return;
     autoPreviewed.current = true;
     void upload(new FormData());
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, on mount, by design (see above)
@@ -553,7 +558,13 @@ export function ImportClient({
       const response = await fetch('/api/import/preview', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ stagingId: staged.stagingId, filename: staged.filename, accountId, profileId, mapping: next }),
+        body: JSON.stringify({
+          stagingId: staged.stagingId,
+          filename: staged.filename,
+          accountId,
+          ...(isOfx ? {} : { profileId }),
+          mapping: next,
+        }),
       });
       const body = await response.json();
       if (!response.ok) {
@@ -573,7 +584,7 @@ export function ImportClient({
   // mid-import is the realistic case) would otherwise leave the button disabled forever,
   // with rows possibly already committed and no way to find out from this screen.
   async function commit() {
-    if (!preview || !mapping || staged === null) return;
+    if (!preview || (!mapping && !isOfx) || staged === null) return;
     // The file this commit sends, kept past the setStaged(null) below for onImported.
     const held = staged;
     setBusy(true);
@@ -581,7 +592,11 @@ export function ImportClient({
       const response = await fetch('/api/import/commit', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ stagingId: held.stagingId, filename: held.filename, accountId, profileId, mapping }),
+        body: JSON.stringify(
+          isOfx
+            ? { stagingId: held.stagingId, filename: held.filename, accountId }
+            : { stagingId: held.stagingId, filename: held.filename, accountId, profileId, mapping },
+        ),
       });
       const body = await response.json();
       if (!response.ok) {
@@ -916,6 +931,7 @@ export function ImportClient({
                   <span className={hintClass}>{detection.accountReason}</span>
                 )}
               </Field>
+              {isOfx ? null : (
               <Field label="Import profile">
                 <select
                   value={profileId}
@@ -940,12 +956,13 @@ export function ImportClient({
                   <span className={hintClass}>{detection.profileReason}</span>
                 )}
               </Field>
+              )}
               </div>
               <div>
                 {/* Also refused while either picker is still unresolved -- see the '' options
                     above: a file nothing could read leaves them blank ON PURPOSE, and previewing
                     into "no account" would be previewing into whichever account sorts first. */}
-                <SubmitButton disabled={!hasFile || accountId === 0 || profileId === 0}>Preview</SubmitButton>
+                <SubmitButton disabled={!hasFile || accountId === 0 || (!isOfx && profileId === 0)}>Preview</SubmitButton>
               </div>
             </form>
           </CardBody>

@@ -214,3 +214,50 @@ describe('commitStagedImport — ruling R10: an asset account refuses to import 
     expect((sqlite.prepare('select count(*) as c from imports').get() as { c: number }).c).toBe(0);
   });
 });
+
+// v1.60.0 item 9: an OFX/QFX import uses no profile, so none is recorded.
+describe('commitStagedImport - OFX without a profile', () => {
+  const OFX_STATEMENT = `OFXHEADER:100
+  DATA:OFXSGML
+  VERSION:102
+  SECURITY:NONE
+  ENCODING:USASCII
+  CHARSET:1252
+  COMPRESSION:NONE
+  OLDFILEUID:NONE
+  NEWFILEUID:NONE
+  
+  <OFX>
+  <BANKMSGSRSV1><STMTTRNRS><STMTRS>
+  <CURDEF>CAD
+  <BANKACCTFROM><BANKID>000000000<ACCTID>0000000<ACCTTYPE>CHECKING</BANKACCTFROM>
+  <BANKTRANLIST>
+  <DTSTART>20260801<DTEND>20260831
+  <STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20260803120000<TRNAMT>-42.10<FITID>FIT-0001<NAME>MAPLE GROCER</STMTTRN>
+  <STMTTRN><TRNTYPE>CREDIT<DTPOSTED>20260815120000<TRNAMT>2100.00<FITID>FIT-0003<NAME>PAYROLL DEPOSIT</STMTTRN>
+  </BANKTRANLIST>
+  </STMTRS></STMTTRNRS></BANKMSGSRSV1>
+  </OFX>`;
+
+  it('stores a NULL profile_id and leaves the account pointing at whatever it had', () => {
+    const { sqlite, userId, accountId } = setup();
+    const stagingId = writeStagedFile(Buffer.from(OFX_STATEMENT, 'utf8'));
+
+    const result = commitStagedImport({ stagingId, filename: 'march.qfx', accountId, profileId: null, mapping: null, userId });
+
+    expect(result).toMatchObject({ rowsAdded: 2, profileId: null });
+    expect((sqlite.prepare('select profile_id as p from imports where id = ?').get(result.importId) as { p: number | null }).p).toBeNull();
+    expect((sqlite.prepare('select import_profile_id as p from accounts where id = ?').get(accountId) as { p: number | null }).p).toBeNull();
+  });
+
+  it('refuses a CSV committed with no profile, and stages nothing', () => {
+    const { sqlite, userId, accountId } = setup();
+    const stagingId = writeStagedFile(fixture('td-chequing.csv'));
+
+    expect(() => commitStagedImport({ stagingId, filename: 'td.csv', accountId, profileId: null, mapping: null, userId })).toThrow(
+      /profile/,
+    );
+    expect((sqlite.prepare('select count(*) as c from imports').get() as { c: number }).c).toBe(0);
+    expect(fs.existsSync(stagedFilePath(stagingId))).toBe(true);
+  });
+});

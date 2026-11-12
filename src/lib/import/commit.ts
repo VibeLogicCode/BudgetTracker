@@ -1,6 +1,17 @@
-import { and, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, lt, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
-import { accounts, imports, transactionImports, transactions, users } from '@/db/schema';
+import {
+  accountBalanceSnapshots,
+  accounts,
+  billInstallments,
+  imports,
+  loanPayments,
+  transactionImports,
+  transactionSplits,
+  transactions,
+  users,
+  warrantyItems,
+} from '@/db/schema';
 import { resolveAttribution } from '@/lib/attribution';
 import { listRules, matchRule } from '@/lib/categorize/rules';
 import { nowIso } from '@/lib/clock';
@@ -368,7 +379,14 @@ export interface ImportHistoryRow {
   createdAt: string;
 }
 
-export function listImportHistory(limit = 50): ImportHistoryRow[] {
+export interface ImportHistoryOptions {
+  limit?: number;
+  /** Keyset cursor: only imports with an id below this, so a page never repeats or skips a row. */
+  beforeId?: number;
+}
+
+export function listImportHistory(options: ImportHistoryOptions = {}): ImportHistoryRow[] {
+  const { limit = 50, beforeId } = options;
   return getDb()
     .select({
       id: imports.id,
@@ -386,9 +404,20 @@ export function listImportHistory(limit = 50): ImportHistoryRow[] {
     .from(imports)
     .innerJoin(accounts, eq(accounts.id, imports.accountId))
     .innerJoin(users, eq(users.id, imports.importedBy))
+    .where(beforeId === undefined ? undefined : lt(imports.id, beforeId))
     .orderBy(desc(imports.id))
     .limit(limit)
     .all();
+}
+
+/**
+ * One page of history, newest first, and whether older imports remain. Reads one row past the page
+ * to answer `hasMore` exactly, so a history that ends on a page boundary shows no dead button.
+ */
+export function importHistoryPage(options: ImportHistoryOptions = {}): { rows: ImportHistoryRow[]; hasMore: boolean } {
+  const limit = options.limit ?? 25;
+  const rows = listImportHistory({ ...options, limit: limit + 1 });
+  return { rows: rows.slice(0, limit), hasMore: rows.length > limit };
 }
 
 /** transaction ids associated with this import, split by whether this is their SOLE association. */
@@ -543,15 +572,150 @@ export function markImportRulesReviewed(input: { importId: number; reviewed?: bo
   return Number(result.changes ?? 0) > 0;
 }
 
+/** What an undo removes or changes beyond the transactions themselves. Each is a count over the rows to be deleted. */
+export interface UndoSideEffects {
+  /** Rows carrying split parts, which go with the row. */
+  splitRows: number;
+  /** Rows with a note. */
+  notedRows: number;
+  /** Rows whose category was set by hand. */
+  manualCategories: number;
+  /** Rows renamed by hand or by a rename rule. */
+  renamedRows: number;
+  /** Items whose purchase link clears. */
+  itemLinks: number;
+  /** Loan payments reversed. */
+  loanPayments: number;
+  /** Bill installments set back to unpaid. */
+  installments: number;
+  /** Balance figures removed (the same predicate deleteCsvSnapshotsForAccountDates deletes by). */
+  snapshots: number;
+}
+
 export interface UndoPreview {
   importId: number;
   willDelete: number;
   willKeep: number;
+  alsoRemoved: UndoSideEffects;
+}
+
+// Ids go into IN (...) lists; chunked so a very large import stays under SQLite's variable limit.
+const UNDO_COUNT_CHUNK = 500;
+
+function countOverIds(ids: number[], countChunk: (chunk: number[]) => number): number {
+  let total = 0;
+  for (let i = 0; i < ids.length; i += UNDO_COUNT_CHUNK) total += countChunk(ids.slice(i, i + UNDO_COUNT_CHUNK));
+  return total;
+}
+
+function undoSideEffects(importId: number, sole: number[]): UndoSideEffects {
+  const none: UndoSideEffects = {
+    splitRows: 0,
+    notedRows: 0,
+    manualCategories: 0,
+    renamedRows: 0,
+    itemLinks: 0,
+    loanPayments: 0,
+    installments: 0,
+    snapshots: 0,
+  };
+  if (sole.length === 0) return none;
+  const db = getDb();
+  const countTxns = (extra: ReturnType<typeof sql>) =>
+    countOverIds(
+      sole,
+      (chunk) =>
+        db
+          .select({ n: sql<number>`count(*)` })
+          .from(transactions)
+          .where(and(inArray(transactions.id, chunk), extra))
+          .get()?.n ?? 0,
+    );
+
+  const splitRows = countOverIds(
+    sole,
+    (chunk) =>
+      db
+        .select({ n: sql<number>`count(distinct ${transactionSplits.txnId})` })
+        .from(transactionSplits)
+        .where(inArray(transactionSplits.txnId, chunk))
+        .get()?.n ?? 0,
+  );
+  const itemLinks = countOverIds(
+    sole,
+    (chunk) =>
+      db
+        .select({ n: sql<number>`count(*)` })
+        .from(warrantyItems)
+        .where(inArray(warrantyItems.transactionId, chunk))
+        .get()?.n ?? 0,
+  );
+  const loanPaymentCount = countOverIds(
+    sole,
+    (chunk) =>
+      db
+        .select({ n: sql<number>`count(*)` })
+        .from(loanPayments)
+        .where(inArray(loanPayments.txnId, chunk))
+        .get()?.n ?? 0,
+  );
+  const installments = countOverIds(
+    sole,
+    (chunk) =>
+      db
+        .select({ n: sql<number>`count(*)` })
+        .from(billInstallments)
+        .where(inArray(billInstallments.paidTxnId, chunk))
+        .get()?.n ?? 0,
+  );
+
+  // Snapshots: the dates of the rows being deleted, on the import's account, source 'csv' -- the
+  // exact predicate undoImport hands deleteCsvSnapshotsForAccountDates.
+  let snapshots = 0;
+  const importRow = db.select({ accountId: imports.accountId }).from(imports).where(eq(imports.id, importId)).get();
+  if (importRow !== undefined) {
+    const dates = new Set<string>();
+    for (let i = 0; i < sole.length; i += UNDO_COUNT_CHUNK) {
+      for (const row of db
+        .select({ date: transactions.date })
+        .from(transactions)
+        .where(inArray(transactions.id, sole.slice(i, i + UNDO_COUNT_CHUNK)))
+        .all()) {
+        dates.add(row.date);
+      }
+    }
+    const dateList = [...dates];
+    for (let i = 0; i < dateList.length; i += UNDO_COUNT_CHUNK) {
+      snapshots +=
+        db
+          .select({ n: sql<number>`count(*)` })
+          .from(accountBalanceSnapshots)
+          .where(
+            and(
+              eq(accountBalanceSnapshots.accountId, importRow.accountId),
+              eq(accountBalanceSnapshots.source, 'csv'),
+              inArray(accountBalanceSnapshots.date, dateList.slice(i, i + UNDO_COUNT_CHUNK)),
+            ),
+          )
+          .get()?.n ?? 0;
+    }
+  }
+
+  return {
+    splitRows,
+    notedRows: countTxns(sql`coalesce(trim(${transactions.notes}), '') <> ''`),
+    manualCategories: countTxns(sql`${transactions.categorizationSource} = 'manual'`),
+    renamedRows: countTxns(sql`${transactions.displaySource} in ('manual', 'rename')`),
+    itemLinks,
+    loanPayments: loanPaymentCount,
+    installments,
+    snapshots,
+  };
 }
 
 export function previewUndoImport(importId: number): UndoPreview {
   const { sole, shared } = partitionByAssociation(importId);
-  return { importId, willDelete: sole.length, willKeep: shared.length };
+  return { importId, willDelete: sole.length, willKeep: shared.length, alsoRemoved: undoSideEffects(importId, sole) };
 }
 
 export interface UndoResult {
