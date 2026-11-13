@@ -14,8 +14,16 @@ import { resolveRenameRule, reviewQueueCount } from '@/lib/categorize/engine';
 import { alwaysAskRuleFor, listRecurringMarkRules, listRules, recurringMarkFor } from '@/lib/categorize/rules';
 import type { RecurringMark } from '@/lib/categorize/mark-kinds';
 import { splitsForTransactions } from '@/lib/splits';
-import { countMatchingMerchant, groupTransactionsByCategory, importedTransactionIds, listTransactions } from '@/lib/transactions';
-import { todayIso } from '@/lib/dates';
+import {
+  countMatchingMerchant,
+  groupTransactionsByCategory,
+  groupTransactionsByMerchant,
+  importedTransactionIds,
+  listTransactions,
+} from '@/lib/transactions';
+import { lastBulkUndo } from '@/lib/bulk-undo';
+import { suggestTransferPairs } from '@/lib/transfer-pairs';
+import { localTimeLabel, todayIso } from '@/lib/dates';
 import { resolveRange } from '@/lib/date-range';
 import { readEnv } from '@/lib/env';
 // v1.26.0 Lane 3a: readFilter moved out of this file into a module the SERVER ACTIONS can share --
@@ -54,7 +62,8 @@ export default async function TransactionsPage({
 }) {
   const viewer = await requireUser();
   const params = await searchParams;
-  const today = todayIso(new Date(), readEnv().tz);
+  const now = new Date();
+  const today = todayIso(now, readEnv().tz);
   const one = (key: string) => {
     const value = params[key];
     return Array.isArray(value) ? value[0] : value;
@@ -90,9 +99,22 @@ export default async function TransactionsPage({
    * "N transactions in this view" line, taken from the same count `CategoryGroupPage.totalCount`
    * reports, which is how the two views are kept from stating different totals.
    */
-  const groups = readGroupMode(params)
-    ? groupTransactionsByCategory(filter, viewer, { page: readGroupPage(params) })
-    : null;
+  const groupMode = readGroupMode(params);
+  const groups = groupMode === 'category' ? groupTransactionsByCategory(filter, viewer, { page: readGroupPage(params) }) : null;
+  /**
+   * v1.62.0 (plan item 1). `?group=merchant`: the same `filter`, grouped by merchant -- in review
+   * mode the queue as one decision per merchant. A self viewer never reaches review mode
+   * (`reviewMode` above), so for them this can only ever group their own ordinary list.
+   */
+  const merchantGroups =
+    groupMode === 'merchant' ? groupTransactionsByMerchant(filter, viewer, { page: readGroupPage(params) }) : null;
+  /**
+   * v1.62.0 (plan item 3). The viewer's own last bulk change, while it can still be undone -- one
+   * per person, so a self viewer gets theirs and nobody else's. The time is formatted here, in the
+   * household's zone, so the client never has to know it.
+   */
+  const lastUndo = lastBulkUndo(viewer.id, now);
+  const undo = lastUndo === null ? null : { label: lastUndo.label, until: localTimeLabel(lastUndo.expiresAt, now, readEnv().tz) };
   // Ruling: cheap even when nobody is looking at it -- one count(*) behind REVIEW_WHERE, the
   // same query the nav badge already runs. Always computed, never gated on reviewMode, so the
   // "Needs review (N)" chip stays accurate when a filtered view happens to be review-empty.
@@ -105,6 +127,9 @@ export default async function TransactionsPage({
   // v1.61.0 item 4a: the held rows themselves, in review mode only (listWaitingSetAside also hands
   // a self viewer nothing, and reviewMode is already false for one).
   const possibleDuplicates = reviewMode ? listWaitingSetAside(viewer) : [];
+  // v1.62.0 (plan item 2, C4): suggested transfer pairs, in review mode only. A self viewer never
+  // reaches review mode, and is skipped outright besides (suggestTransferPairs would hand them none).
+  const transferPairs = reviewMode && !selfScopedViewer ? suggestTransferPairs(viewer) : null;
   const duplicatesView = readDuplicatesView(params, reviewMode);
   // Review-mode-only (ruling: matchingCount is computed for review-mode rows only, Lane 1's own
   // docblock on the filter). A plain object keyed by id, the same shape loanLinks/splits below
@@ -181,9 +206,12 @@ export default async function TransactionsPage({
       recurringMarks={recurringMarks}
       alwaysAskMerchants={alwaysAskMerchants}
       groups={groups}
+      merchantGroups={merchantGroups}
+      undo={undo}
       currentQuery={currentQueryString(params)}
       possibleDuplicates={possibleDuplicates}
       possibleDuplicateCount={possibleDuplicateCount}
+      transferPairs={transferPairs}
       // v1.61.0 item 2b: who is looking, so the row menu offers Delete on an imported row only to
       // a viewer deleteTransaction will let delete it.
       viewerId={viewer.id}

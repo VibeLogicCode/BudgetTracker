@@ -7,6 +7,9 @@ import { defaultBoundsAround } from '@/lib/categorize/amount-bounds';
 import { FormError } from '@/components/FormError';
 import { PossibleDuplicatesCard } from '@/components/PossibleDuplicatesCard';
 import { QuickAddTransaction } from '@/components/QuickAddTransaction';
+import { MerchantGroups } from '@/components/review/MerchantGroups';
+import { TransferPairsCard } from '@/components/review/TransferPairsCard';
+import { UndoBar, type UndoOffer } from '@/components/review/UndoBar';
 import { SubmitButton } from '@/components/SubmitButton';
 import { AlwaysAskDialog } from '@/components/transactions/AlwaysAskDialog';
 import { SplitDialog, type SplitTarget } from '@/components/transactions/SplitDialog';
@@ -50,10 +53,12 @@ import { budgetCardId, budgetsHref } from '@/lib/budgets-links';
 import { monthLabel } from '@/lib/dates';
 import type { SplitRow } from '@/lib/splits';
 import type { WaitingSetAsideRow } from '@/lib/import/set-aside';
+import type { TransferPairSuggestions } from '@/lib/transfer-pairs';
 import type {
   CategorizationSource,
   CategoryGroupPage,
   CategoryGroupRow,
+  MerchantGroupPage,
   SortDirection,
   TransactionPage,
   TransactionRow,
@@ -427,10 +432,18 @@ const SOURCE_FILTER_OPTIONS: { value: '' | CategorizationSource; label: string; 
  * v1.26.0 Lane 3a item 2. `?group=category`. Two options, one param, same shape as everything
  * above -- and a mode switch rather than a filter, which is why it reads "List" / "By category"
  * instead of naming what is being kept.
+ *
+ * v1.62.0 (plan item 1): `By merchant`. The pill offers List / By category in the ordinary list and
+ * List / By merchant in review mode -- a queue is mostly uncategorized rows, so By category there is
+ * one cluster, while by merchant it is the handful of decisions review is. Each is still honoured
+ * by URL in the other mode, just not advertised.
  */
-const GROUP_VIEW_OPTIONS: { value: '' | 'category'; label: string; param: string | null }[] = [
+type GroupView = '' | 'category' | 'merchant';
+
+const GROUP_VIEW_OPTIONS: { value: GroupView; label: string; param: string | null }[] = [
   { value: '', label: 'List', param: null },
   { value: 'category', label: 'By category', param: 'category' },
+  { value: 'merchant', label: 'By merchant', param: 'merchant' },
 ];
 
 /**
@@ -488,9 +501,12 @@ export function TransactionsClient({
   recurringMarks = {},
   alwaysAskMerchants = [],
   groups = null,
+  merchantGroups = null,
+  undo = null,
   currentQuery = '',
   possibleDuplicates = [],
   possibleDuplicateCount = 0,
+  transferPairs = null,
   viewerId = null,
   isAdmin = false,
   importedRowIds = [],
@@ -556,6 +572,17 @@ export function TransactionsClient({
    */
   groups?: CategoryGroupPage | null;
   /**
+   * v1.62.0 (plan item 1). groupTransactionsByMerchant's page of merchant groups for the same
+   * filter, or `null` whenever `?group=merchant` is off -- the one signal for that view, as `groups`
+   * is for the category view. In review mode each group carries one decision for its queued rows.
+   */
+  merchantGroups?: MerchantGroupPage | null;
+  /**
+   * v1.62.0 (plan item 3). The viewer's own last bulk change while it can still be undone
+   * (lastBulkUndo, formatted by page.tsx), or `null`. Shown by UndoBar above the bulk toolbar.
+   */
+  undo?: UndoOffer | null;
+  /**
    * Bug fix (a report, category chips silently dropping every other filter): the querystring
    * this request arrived with, already parsed by page.tsx (readFilter's own `params`) and handed
    * down as a plain string rather than re-derived from `window.location.search` on the client.
@@ -575,6 +602,12 @@ export function TransactionsClient({
   possibleDuplicates?: WaitingSetAsideRow[];
   /** v1.61.0: waitingSetAsideCount(), for the `Possible duplicates (N)` chip. 0 for a self viewer. */
   possibleDuplicateCount?: number;
+  /**
+   * v1.62.0 (plan item 2). suggestTransferPairs' pairs, loaded by page.tsx in review mode only and
+   * never for a self viewer; `null` otherwise. Rendered by TransferPairsCard after the Possible
+   * duplicates card, in both the List and By merchant views; the card hides itself when empty.
+   */
+  transferPairs?: TransferPairSuggestions | null;
   /**
    * v1.61.0 item 2b. Who is looking, so the row menu offers Delete on an imported row only to a
    * viewer the server will let delete it (an admin, the row's person, anyone for a shared row).
@@ -941,7 +974,7 @@ export function TransactionsClient({
     sourceParam === 'rule' || sourceParam === 'bayes' || sourceParam === 'manual' || sourceParam === 'none'
       ? sourceParam
       : '';
-  const activeGroupView: '' | 'category' = groups !== null ? 'category' : '';
+  const activeGroupView: GroupView = groups !== null ? 'category' : merchantGroups !== null ? 'merchant' : '';
   /**
    * 2026-09-08, docs/superpowers/specs/2026-09-08-grouped-review-navigation-design.md §5.1.
    * `?via=groups` is PROVENANCE, not a filter: groupDrillHref stamps it, readFilter never reads
@@ -1486,24 +1519,7 @@ export function TransactionsClient({
             actions refuse them regardless -- this only keeps a person from finding a control that
             would then say no. */}
         {row.isTransfer || selfScoped ? null : (
-          <RowMenuButton
-            onSelect={() => {
-              const window = defaultBoundsAround(row.amountCents);
-              setRuleRow({
-                id: row.id,
-                amountMode: 'about',
-                amountMin: centsToInput(window.minCents),
-                amountMax: centsToInput(window.maxCents),
-                // A whole dollar: a split point between two policies is a round number a person
-                // picks, not a premium read off a statement.
-                splitPoint: centsToInput(Math.round(Math.abs(row.amountCents) / 100) * 100),
-                // Only a live category seeds the dialog: the picker lists live ones only, so an
-                // archived id would sit in its hidden input unseen and be submitted anyway.
-                categoryId: row.categoryId !== null && !archivedCategoryIdSet.has(row.categoryId) ? row.categoryId : null,
-                person: '',
-              });
-            }}
-          >
+          <RowMenuButton onSelect={() => openRuleDialog(row)}>
             Create a rule…
           </RowMenuButton>
         )}
@@ -1581,7 +1597,31 @@ export function TransactionsClient({
    * in sync -- each function below looks its target row up by id from `page.rows` instead, the
    * same page data every other control on this file already reads from.
    */
-  const findRow = (id: number) => page.rows.find((row) => row.id === id);
+  // v1.62.0: a merchant group card opens Create a rule from its newest row, which need not be on
+  // this row page, so the groups' newest rows are looked in too.
+  const findRow = (id: number) =>
+    page.rows.find((row) => row.id === id) ?? merchantGroups?.groups.find((group) => group.newest.id === id)?.newest;
+
+  /**
+   * The kebab's "Create a rule…" and (v1.62.0) a merchant group card's: one opener, so the dialog
+   * starts the same way from either. See ruleDialog for what each field means.
+   */
+  function openRuleDialog(row: TransactionRow) {
+    const window = defaultBoundsAround(row.amountCents);
+    setRuleRow({
+      id: row.id,
+      amountMode: 'about',
+      amountMin: centsToInput(window.minCents),
+      amountMax: centsToInput(window.maxCents),
+      // A whole dollar: a split point between two policies is a round number a person
+      // picks, not a premium read off a statement.
+      splitPoint: centsToInput(Math.round(Math.abs(row.amountCents) / 100) * 100),
+      // Only a live category seeds the dialog: the picker lists live ones only, so an
+      // archived id would sit in its hidden input unseen and be submitted anyway.
+      categoryId: row.categoryId !== null && !archivedCategoryIdSet.has(row.categoryId) ? row.categoryId : null,
+      person: '',
+    });
+  }
 
   /** Reported (item 1): names the row it acts on ("Rename Coffee run"), the copy pattern the
    *  note dialog below established first. Nothing about what this SUBMITS changed from the
@@ -2454,6 +2494,9 @@ export function TransactionsClient({
             node: (
               <form action={attrAction} className="flex flex-wrap items-center gap-2">
                 <input type="hidden" name="ids" value={selected.join(',')} />
+                {/* v1.62.0: marks this as the bulk bar's Person, the one that records an undo --
+                    the per-row picker posts to the same action without it. */}
+                <input type="hidden" name="bulk" value="1" />
                 <select name="attributedUserId" aria-label="Person for the selected transactions" className={selectClass}>
                   <option value="">Household/unattributed</option>
                   {people.map((p) => (
@@ -2938,6 +2981,27 @@ export function TransactionsClient({
           </span>
         </CardFooter>
       </Card>
+    );
+  }
+
+  /**
+   * v1.62.0 (plan item 1). The merchant groups, with this page's filter as their decisions' scope,
+   * the group pager built by filterHref (`?gpage=`, as the category groups page), and the row
+   * menu's own Create a rule opener. `actionable` is review mode.
+   */
+  function merchantGroupList(groupPage: MerchantGroupPage, actionable: boolean) {
+    return (
+      <MerchantGroups
+        groupPage={groupPage}
+        scope={currentQuery}
+        categories={categories}
+        people={people}
+        today={today}
+        actionable={actionable}
+        previousHref={groupPage.page > 1 ? filterHref(currentQuery, 'gpage', String(groupPage.page - 1)) : null}
+        nextHref={groupPage.page < groupPage.pageCount ? filterHref(currentQuery, 'gpage', String(groupPage.page + 1)) : null}
+        onCreateRule={openRuleDialog}
+      />
     );
   }
 
@@ -3466,7 +3530,8 @@ export function TransactionsClient({
               as five more filter chips.
 
               Sort is offered in BOTH modes -- ordering a queue by amount is as reasonable as
-              ordering the list by it. The other two are NOT offered in review mode, on the same
+              ordering the list by it. (v1.62.0: View now is, as List / By merchant -- its own
+              comment below.) The other two were NOT offered in review mode, on the same
               honesty rule the transfer row above follows: REVIEW_WHERE (src/lib/categorize/
               engine.ts) is `category IS NULL OR source = 'bayes'`, so inside the queue every
               `?source=` option but Guesses selects nothing, and every cluster of a queue that is
@@ -3486,22 +3551,22 @@ export function TransactionsClient({
               own doc comment for why folding it was considered and rejected.
             */}
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-              {reviewMode ? null : (
-                <span className={`${rowVisibility(activeGroupView !== '')} flex-wrap items-center gap-1.5`}>
-                  <span className="text-2xs font-medium uppercase tracking-wide text-muted">View</span>
-                  <PillNav
-                    groupLabel="How to show the transactions"
-                    options={GROUP_VIEW_OPTIONS.map(
-                      (option): PillNavOption => ({
-                        key: option.value === '' ? 'list' : option.value,
-                        href: filterHref(currentQuery, 'group', option.param),
-                        label: option.label,
-                        active: activeGroupView === option.value,
-                      }),
-                    )}
-                  />
-                </span>
-              )}
+              {/* v1.62.0 (plan item 1): shown in review mode too now, as List / By merchant (see
+                  GROUP_VIEW_OPTIONS). A self viewer never reaches review mode, so never sees it. */}
+              <span className={`${rowVisibility(activeGroupView !== '')} flex-wrap items-center gap-1.5`}>
+                <span className="text-2xs font-medium uppercase tracking-wide text-muted">View</span>
+                <PillNav
+                  groupLabel="How to show the transactions"
+                  options={GROUP_VIEW_OPTIONS.filter((option) => option.value !== (reviewMode ? 'category' : 'merchant')).map(
+                    (option): PillNavOption => ({
+                      key: option.value === '' ? 'list' : option.value,
+                      href: filterHref(currentQuery, 'group', option.param),
+                      label: option.label,
+                      active: activeGroupView === option.value,
+                    }),
+                  )}
+                />
+              </span>
               <span className={`${rowVisibility(activeSort !== '')} flex-wrap items-center gap-1.5`}>
                 <span className="text-2xs font-medium uppercase tracking-wide text-muted">Sort</span>
                 <PillNav
@@ -3714,6 +3779,11 @@ export function TransactionsClient({
         </CardBody>
       </Card>
 
+      {/* v1.62.0 (plan item 3). Undo for this person's own last bulk change, in every view, just
+          above the toolbar most of those changes are made from. Renders only its live region when
+          there is nothing to undo. */}
+      <UndoBar undo={undo} />
+
       {selected.length > 0 ? (
         <div className="flex flex-wrap items-end gap-4 rounded-lg border border-accent-soft bg-accent-soft px-4 py-3">
           <span className="py-2 text-sm font-semibold text-accent-soft-fg">{selected.length} selected</span>
@@ -3765,7 +3835,17 @@ export function TransactionsClient({
         {activeQueueChip === '' ? (
           <PossibleDuplicatesCard rows={possibleDuplicates} today={today} viewerId={viewerId} isAdmin={isAdmin} />
         ) : null}
-        {page.rows.length === 0 ? (
+        {/* v1.62.0 (plan item 2). Suggested transfer pairs, after the held rows and above the queue,
+            in both the List and By merchant views. Hides itself when there are none. */}
+        {transferPairs !== null ? <TransferPairsCard pairs={transferPairs.pairs} total={transferPairs.total} today={today} /> : null}
+        {/* v1.62.0 (plan item 1). By merchant: the same queue as one card per merchant, each with one
+            decision. Below the Possible duplicates card, as the list is, and like the list it shows
+            only that card when the queue under it is empty. */}
+        {merchantGroups !== null ? (
+          merchantGroups.groupCount === 0 && activeQueueChip === '' && possibleDuplicates.length > 0 ? null : (
+            merchantGroupList(merchantGroups, true)
+          )
+        ) : page.rows.length === 0 ? (
           // v1.61.0: with held rows above, "Nothing to review" would contradict the card, so an
           // empty queue under them shows only the card.
           activeQueueChip === '' && possibleDuplicates.length > 0 ? null : (
@@ -3852,6 +3932,10 @@ export function TransactionsClient({
           </>
         )}
         </>
+      ) : merchantGroups !== null ? (
+        // v1.62.0: `?group=merchant` outside review is honoured as a read-only summary -- a
+        // merchant decision is for queued rows only (MerchantGroups' own docblock).
+        merchantGroupList(merchantGroups, false)
       ) : page.rows.length === 0 ? (
         <Card as="div">
           <EmptyState

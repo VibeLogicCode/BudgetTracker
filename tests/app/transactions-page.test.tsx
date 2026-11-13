@@ -5,6 +5,10 @@ import { sql } from 'drizzle-orm';
 import { nowIso } from '@/lib/clock';
 import { setRecurringMarks } from '@/lib/categorize/rules';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
+import { captureBulkBefore, recordBulkUndo } from '@/lib/bulk-undo';
+import { localTimeLabel } from '@/lib/dates';
+import { readEnv } from '@/lib/env';
+import { bulkSetAttribution } from '@/lib/transactions';
 
 /**
  * Item BO. No transactions-page test existed before this task -- transactions-client.test.tsx
@@ -870,5 +874,137 @@ describe('TransactionsPage: possible duplicates (v1.61.0)', () => {
     expect(item.textContent).toMatch(/Looks like: FUEL STOP 12 -61\.30 on Mar 9(, \d{4})?, added by hand, Alex/);
     expect(within(item).getByRole('button', { name: /^Keep both/ })).toBeTruthy();
     expect(within(item).getByRole('button', { name: /^Delete this one/ })).toBeTruthy();
+  });
+});
+
+/**
+ * v1.62.0 (plan items 1, 2 and 3). Needs review by merchant, the suggested transfer pairs and the
+ * Undo bar, as the server page hands them to the client. Alex is the household admin, Sam a member.
+ */
+describe('TransactionsPage: review by merchant, transfer pairs and Undo (v1.62.0)', () => {
+  let t: TestDb | null = null;
+  afterEach(() => {
+    vi.useRealTimers();
+    t?.cleanup();
+    t = null;
+  });
+
+  async function renderPage(searchParams: Record<string, string>) {
+    const { default: TransactionsPage } = await import('@/app/(app)/transactions/page');
+    return render(await TransactionsPage({ searchParams: Promise.resolve(searchParams) }));
+  }
+
+  function household() {
+    t = createSeededTestDb();
+    const alex = insertTestUser(t.db, { name: 'Alex', username: 'alex', role: 'admin' });
+    const sam = insertTestUser(t.db, { name: 'Sam', username: 'sam', role: 'member' });
+    const chequing = insertTestAccount(t.db, { name: 'Joint Chequing', type: 'chequing', ownerUserId: null });
+    const savings = insertTestAccount(t.db, { name: 'Joint Savings', type: 'chequing', ownerUserId: null });
+    const add = (accountId: number, merchant: string, amountCents: number, date: string, person: number | null = null) =>
+      t!.db.get<{ id: number }>(sql`
+        insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, attributed_user_id, created_by, created_at, updated_at)
+        values (${accountId}, ${date}, ${merchant}, ${merchant}, ${amountCents}, ${person}, ${alex}, '2026-03-14T09:00:00.000Z', '2026-03-14T09:00:00.000Z')
+        returning id`).id;
+    currentUser.value = { id: alex, name: 'Alex', username: 'alex', role: 'admin', visibility: 'household' };
+    return { alex, sam, chequing, savings, add };
+  }
+
+  it('offers List / By merchant as the View pill in review mode, and List / By category in the list', async () => {
+    household();
+    await renderPage({ review: '1' });
+    const review = screen.getByRole('navigation', { name: 'How to show the transactions' });
+    expect(within(review).getAllByRole('link').map((link) => link.textContent)).toEqual(['List', 'By merchant']);
+    expect(within(review).getByRole('link', { name: 'By merchant' }).getAttribute('href')).toContain('group=merchant');
+    cleanup();
+
+    await renderPage({});
+    const list = screen.getByRole('navigation', { name: 'How to show the transactions' });
+    expect(within(list).getAllByRole('link').map((link) => link.textContent)).toEqual(['List', 'By category']);
+  });
+
+  it('?review=1&group=merchant renders one card per merchant, with its count and decisions', async () => {
+    const s = household();
+    s.add(s.chequing, 'MAPLE GROCER', -4217, '2026-03-02');
+    s.add(s.chequing, 'MAPLE GROCER', -1805, '2026-03-09');
+    s.add(s.chequing, 'MAPLE GROCER', -6340, '2026-03-14');
+    s.add(s.chequing, 'FUEL STOP 12', -6130, '2026-03-05');
+
+    const { container } = await renderPage({ review: '1', group: 'merchant' });
+    const cards = Array.from(container.querySelectorAll('[data-merchant-group]'));
+    expect(cards.map((card) => card.querySelector('h3')?.textContent)).toEqual(['MAPLE GROCER', 'FUEL STOP 12']);
+    expect(cards[0]?.textContent).toContain('3 transactions');
+    expect(screen.getByRole('button', { name: 'File all 3 (MAPLE GROCER)' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'By merchant' }).getAttribute('aria-current')).toBe('page');
+  });
+
+  it("a self viewer's ?review=1&group=merchant serializes no queue group", async () => {
+    const s = household();
+    s.add(s.chequing, 'FUEL STOP 12', -6130, '2026-03-05', s.alex);
+    currentUser.value = { id: s.sam, name: 'Sam', username: 'sam', role: 'member', visibility: 'self' };
+
+    const { container } = await renderPage({ review: '1', group: 'merchant' });
+    expect(container.innerHTML).not.toContain('FUEL STOP 12');
+    expect(container.querySelector('[data-merchant-group]')).toBeNull();
+    expect(screen.queryByRole('button', { name: /^File all/ })).toBeNull();
+  });
+
+  it('an admin sees the suggested transfer pairs in review mode, in both views', async () => {
+    const s = household();
+    s.add(s.chequing, 'TFR TO SAVINGS', -50000, '2026-03-09');
+    s.add(s.savings, 'TFR FROM CHEQUING', 50000, '2026-03-10');
+
+    await renderPage({ review: '1' });
+    expect(screen.getByText('Possible transfers (1)')).toBeTruthy();
+    cleanup();
+
+    await renderPage({ review: '1', group: 'merchant' });
+    expect(screen.getByText('Possible transfers (1)')).toBeTruthy();
+  });
+
+  it("a self viewer's ?review=1 serializes no pair", async () => {
+    const s = household();
+    s.add(s.chequing, 'TFR TO SAVINGS', -50000, '2026-03-09', s.sam);
+    s.add(s.savings, 'TFR FROM CHEQUING', 50000, '2026-03-10', s.sam);
+    currentUser.value = { id: s.sam, name: 'Sam', username: 'sam', role: 'member', visibility: 'self' };
+
+    const { container } = await renderPage({ review: '1' });
+    expect(container.textContent).not.toContain('Possible transfers');
+    expect(screen.queryByRole('button', { name: /^Mark both as a transfer/ })).toBeNull();
+  });
+
+  it("shows the viewer's own last bulk change with the time it can be undone until, and nobody else's", async () => {
+    const s = household();
+    const acted = new Date('2026-03-14T15:00:00.000Z');
+    const mine = s.add(s.chequing, 'MAPLE GROCER', -4217, '2026-03-02');
+    const theirs = s.add(s.chequing, 'FUEL STOP 12', -6130, '2026-03-05', s.sam);
+    const record = (userId: number, label: string, id: number, person: number | null) => {
+      const before = captureBulkBefore({ ids: [id] });
+      bulkSetAttribution([id], person);
+      recordBulkUndo({ userId, kind: 'person', label, before, at: acted });
+    };
+    record(s.alex, 'Attribution updated for 1 transactions.', mine, s.sam);
+    record(s.sam, 'Set Household on 1 transaction.', theirs, null);
+    const now = new Date('2026-03-14T15:04:00.000Z');
+    vi.useFakeTimers({ now, toFake: ['Date'] });
+
+    const { container } = await renderPage({});
+    const bar = container.querySelector('[data-undo-bar]') as HTMLElement;
+    expect(bar.textContent).toContain('Attribution updated for 1 transactions.');
+    expect(bar.textContent).toContain(`Until ${localTimeLabel('2026-03-14T15:15:00.000Z', now, readEnv().tz)}.`);
+    expect(within(bar).getByRole('button', { name: 'Undo' })).toBeTruthy();
+    expect(container.textContent).not.toContain('Set Household on 1 transaction.');
+  });
+
+  it('shows no Undo once the change is over 15 minutes old', async () => {
+    const s = household();
+    const id = s.add(s.chequing, 'MAPLE GROCER', -4217, '2026-03-02');
+    const before = captureBulkBefore({ ids: [id] });
+    bulkSetAttribution([id], s.sam);
+    recordBulkUndo({ userId: s.alex, kind: 'person', label: 'Attribution updated for 1 transactions.', before, at: new Date('2026-03-14T15:00:00.000Z') });
+    vi.useFakeTimers({ now: new Date('2026-03-14T15:15:01.000Z'), toFake: ['Date'] });
+
+    const { container } = await renderPage({});
+    expect(container.querySelector('[data-undo-bar]')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
   });
 });

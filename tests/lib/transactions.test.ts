@@ -13,9 +13,11 @@ import {
   displayNameOf,
   getTransaction,
   groupTransactionsByCategory,
+  groupTransactionsByMerchant,
   listReviewQueue,
   listTransactions,
   manualTransactionSchema,
+  merchantRowIds,
   transactionOwners,
   updateTransactionNotes,
   type TransactionFilter,
@@ -1690,5 +1692,99 @@ describe('listTransactions source and importId filters (v1.26.0 Lane 2 item 2)',
       },
     ]);
     expect(groups.totalCount).toBe(1);
+  });
+});
+
+/**
+ * v1.62.0 (plan item 1, B1). Review by merchant. The queue: MAPLE GROCER -42.17, -18.05, -63.40 and
+ * FUEL STOP 12 -61.30, -55.00, plus one more MAPLE GROCER filed by hand, which is not in the queue.
+ */
+describe('groupTransactionsByMerchant (v1.62.0)', () => {
+  const QUEUE: TransactionFilter = { reviewOnly: true };
+
+  function queue(opts: { fuelAccount?: 'joint' | 'visa' } = {}) {
+    const s = setup();
+    const groceries = categoryIdByName(s.db, 'Groceries');
+    const coffee = categoryIdByName(s.db, 'Coffee');
+    const fuelAccountId = opts.fuelAccount === 'visa' ? s.aliceVisa : s.joint;
+    const maple = [
+      s.add({ description: 'MAPLE GROCER', amountCents: -4217, date: '2026-03-02' }),
+      s.add({ description: 'MAPLE GROCER', amountCents: -1805, date: '2026-03-09' }),
+      s.add({ description: 'MAPLE GROCER', amountCents: -6340, date: '2026-03-14' }),
+    ];
+    const fuel = [
+      s.add({ description: 'FUEL STOP 12', amountCents: -6130, date: '2026-03-05', accountId: fuelAccountId }),
+      s.add({ description: 'FUEL STOP 12', amountCents: -5500, date: '2026-03-11', accountId: fuelAccountId }),
+    ];
+    const filed = s.add({ description: 'MAPLE GROCER', amountCents: -2999, date: '2026-03-20', categoryId: groceries, source: 'manual' });
+    return { ...s, groceries, coffee, maple, fuel, filed };
+  }
+
+  it('groups the queue by merchant, largest group first, with each group count and total', () => {
+    const { maple } = queue();
+    const page = groupTransactionsByMerchant(QUEUE, VIEWER);
+
+    expect(page.groups.map((group) => [group.merchant, group.count, group.totalCents, group.firstDate, group.lastDate])).toEqual([
+      ['MAPLE GROCER', 3, -12362, '2026-03-02', '2026-03-14'],
+      ['FUEL STOP 12', 2, -11630, '2026-03-05', '2026-03-11'],
+    ]);
+    expect(page).toMatchObject({ groupCount: 2, totalCount: 5, page: 1, pageCount: 1 });
+    const mapleGroup = page.groups[0];
+    expect(mapleGroup.newest).toMatchObject({ id: maple[2], date: '2026-03-14', normalizedMerchant: 'MAPLE GROCER' });
+    expect(mapleGroup.displayName).toBe('MAPLE GROCER');
+  });
+
+  it('neither counts nor previews the hand-filed row, which is not in the queue', () => {
+    const { maple, filed } = queue();
+    const mapleGroup = groupTransactionsByMerchant(QUEUE, VIEWER).groups[0];
+
+    expect(mapleGroup.count).toBe(3);
+    expect(mapleGroup.preview.map((row) => row.id)).toEqual([maple[2], maple[1], maple[0]]);
+    expect(mapleGroup.preview.map((row) => row.id)).not.toContain(filed);
+    expect(mapleGroup.newest.id).not.toBe(filed);
+  });
+
+  it('pages by group, not by row', () => {
+    queue();
+    const first = groupTransactionsByMerchant(QUEUE, VIEWER, { page: 1, pageSize: 1 });
+    const second = groupTransactionsByMerchant(QUEUE, VIEWER, { page: 2, pageSize: 1 });
+
+    expect(first.groups.map((group) => group.merchant)).toEqual(['MAPLE GROCER']);
+    expect(second.groups.map((group) => group.merchant)).toEqual(['FUEL STOP 12']);
+    expect(second).toMatchObject({ page: 2, pageSize: 1, pageCount: 2, groupCount: 2, totalCount: 5 });
+    expect(second.groups[0].preview).toHaveLength(2);
+  });
+
+  it('seeds the guess with the category the categorizer named most often (two of three say Groceries)', () => {
+    const { db, maple, groceries, coffee } = queue();
+    db.run(sql`update transactions set categorization_source = 'bayes', category_id = ${groceries} where id in (${maple[0]}, ${maple[2]})`);
+    db.run(sql`update transactions set categorization_source = 'bayes', category_id = ${coffee} where id = ${maple[1]}`);
+
+    const page = groupTransactionsByMerchant(QUEUE, VIEWER);
+    expect(page.groups.find((group) => group.merchant === 'MAPLE GROCER')?.guessCategoryId).toBe(groceries);
+    expect(page.groups.find((group) => group.merchant === 'FUEL STOP 12')?.guessCategoryId).toBeNull();
+  });
+
+  it('an account filter narrows the groups', () => {
+    const { aliceVisa } = queue({ fuelAccount: 'visa' });
+    const page = groupTransactionsByMerchant({ ...QUEUE, accountId: aliceVisa }, VIEWER);
+
+    expect(page.groups.map((group) => [group.merchant, group.count])).toEqual([['FUEL STOP 12', 2]]);
+    expect(page.totalCount).toBe(2);
+  });
+
+  it('merchantExact narrows the list to one merchant, the no-name group included', () => {
+    const { maple, add } = queue();
+    const nameless = add({ description: '', amountCents: -100 });
+
+    expect(listTransactions({ ...QUEUE, merchantExact: 'MAPLE GROCER' }, VIEWER).rows.map((row) => row.id).sort((a, b) => a - b)).toEqual(maple);
+    expect(listTransactions({ ...QUEUE, merchantExact: '' }, VIEWER).rows.map((row) => row.id)).toEqual([nameless]);
+  });
+
+  it('merchantRowIds is every non-transfer row of the merchant, filed or not', () => {
+    const { maple, filed, add } = queue();
+    add({ description: 'MAPLE GROCER', amountCents: 5000, isTransfer: true });
+
+    expect(merchantRowIds('MAPLE GROCER').sort((a, b) => a - b)).toEqual([...maple, filed]);
   });
 });

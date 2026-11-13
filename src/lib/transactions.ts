@@ -175,6 +175,13 @@ export interface TransactionFilter {
    */
   importId?: number | null;
   /**
+   * v1.62.0 (plan item 1, review by merchant). One merchant's rows: `normalized_merchant = ?`,
+   * exact, `''` included (the group of rows with no merchant name). Never read from the URL: the
+   * merchant group's decision sets it on the filter the posted querystring rebuilds, so the rows it
+   * writes are the rows the group header counted. One more AND clause, so it only ever narrows.
+   */
+  merchantExact?: string | null;
+  /**
    * v1.26.0 Lane 2 item 1. Which column orders the list. `undefined` -- the ONLY default -- leaves
    * listTransactions' order exactly as it has always been: newest first, or oldest first while
    * `reviewOnly` is set (working a queue front-to-back). `direction` below is read only when this
@@ -480,6 +487,8 @@ function buildWhere(filter: TransactionFilter, viewer: Viewer): SQL | undefined 
   // import_id and not transaction_imports.
   if (filter.source !== undefined) clauses.push(eq(transactions.categorizationSource, filter.source));
   if (typeof filter.importId === 'number') clauses.push(eq(transactions.importId, filter.importId));
+  // v1.62.0: a string, `''` included -- the no-merchant-name group is a real group.
+  if (typeof filter.merchantExact === 'string') clauses.push(eq(transactions.normalizedMerchant, filter.merchantExact));
 
   if (clauses.length === 0) return undefined;
   return and(...clauses);
@@ -942,6 +951,190 @@ export function groupTransactionsByCategory(
   };
 }
 
+/** v1.62.0 (plan item 1). One merchant's rows within a filtered set. See groupTransactionsByMerchant. */
+export interface MerchantGroupRow {
+  /** `normalized_merchant`, exactly as stored; `''` is the group of rows with no merchant name. */
+  merchant: string;
+  /** What the card is headed with: the newest row's display name (displayNameOf). */
+  displayName: string;
+  /** Rows in the group, every page of them. */
+  count: number;
+  /** Signed sum of the rows' own amounts, integer cents. */
+  totalCents: number;
+  /** Oldest and newest row dates in the group. */
+  firstDate: string;
+  lastDate: string;
+  /** The category the categorizer guessed most often across the group's rows, or null for none. */
+  guessCategoryId: number | null;
+  /** The group's newest row, whole, so the card can open the Create a rule dialog from it. */
+  newest: TransactionRow;
+  /** At most PREVIEW_LIMIT newest rows, newest first. */
+  preview: CategoryPreviewRow[];
+}
+
+/** v1.62.0. A page of merchant groups, plus the size of the whole filtered set. */
+export interface MerchantGroupPage {
+  groups: MerchantGroupRow[];
+  /** Group pagination, never row pagination (`?gpage=`), as CategoryGroupPage. */
+  page: number;
+  pageSize: number;
+  pageCount: number;
+  /** How many merchants the filter produces, across every page. */
+  groupCount: number;
+  /** Rows in the whole filtered set: the sum of every group's count, since a row has one merchant. */
+  totalCount: number;
+}
+
+/**
+ * v1.62.0 (plan item 1, review by merchant). "For this filter, which merchants, how many rows each,
+ * how much each" -- the Needs review queue as a handful of decisions instead of one per row.
+ *
+ * The shape of groupTransactionsByCategory, and for its reasons: ONE `buildWhere` shared with the
+ * list, so a group can never count a row the list would not show; group pagination, never row
+ * pagination; grouping in one query with the page sliced in memory. No splits join: a split row
+ * still has one merchant, so `sum(amount_cents)` is the group's money and `count(*)` its rows.
+ *
+ * Largest group first (count), then the larger amount, then the merchant text -- a total order, so
+ * two equal groups cannot swap between group page 1 and group page 2.
+ *
+ * Three more reads, all bounded by the visible page (25 groups by default) rather than by the whole
+ * set: the most common Bayes guess per merchant (the category the card's picker opens on), the five
+ * newest rows per merchant (one window function, as attachPreviews), and the newest row of each
+ * merchant whole, through baseQuery, which the Create a rule dialog opens from.
+ *
+ * `viewer` is REQUIRED for the reason listTransactions gives (v1.13.0 ruling R2).
+ */
+export function groupTransactionsByMerchant(
+  filter: TransactionFilter,
+  viewer: Viewer,
+  paging?: { page?: number; pageSize?: number },
+): MerchantGroupPage {
+  const pageSize = Math.min(200, Math.max(1, paging?.pageSize && paging.pageSize > 0 ? paging.pageSize : 25));
+  const page = Math.max(1, paging?.page ?? 1);
+  const where = buildWhere(filter, viewer);
+
+  const rows = getDb()
+    .select({
+      merchant: transactions.normalizedMerchant,
+      count: sql<number>`count(*)`,
+      totalCents: sql<number>`coalesce(sum(${transactions.amountCents}), 0)`,
+      firstDate: sql<string>`min(${transactions.date})`,
+      lastDate: sql<string>`max(${transactions.date})`,
+    })
+    .from(transactions)
+    .where(where)
+    .groupBy(transactions.normalizedMerchant)
+    .all();
+
+  rows.sort(
+    (a, b) =>
+      b.count - a.count ||
+      Math.abs(b.totalCents) - Math.abs(a.totalCents) ||
+      (a.merchant < b.merchant ? -1 : a.merchant > b.merchant ? 1 : 0),
+  );
+
+  const groupCount = rows.length;
+  const totalCount = rows.reduce((sum, row) => sum + row.count, 0);
+  const pageRows = rows.slice((page - 1) * pageSize, page * pageSize);
+  const merchants = pageRows.map((row) => row.merchant);
+
+  const guesses = new Map<string, { categoryId: number; c: number }>();
+  const previews = new Map<string, CategoryPreviewRow[]>();
+  const newest = new Map<string, TransactionRow>();
+  if (merchants.length > 0) {
+    const inPage = and(where, inArray(transactions.normalizedMerchant, merchants));
+
+    // Most votes wins; a tie goes to the lower category id, so the same queue always opens the same way.
+    const guessRows = getDb()
+      .select({
+        merchant: transactions.normalizedMerchant,
+        categoryId: transactions.categoryId,
+        c: sql<number>`count(*)`,
+      })
+      .from(transactions)
+      .where(and(inPage, eq(transactions.categorizationSource, 'bayes'), isNotNull(transactions.categoryId)))
+      .groupBy(transactions.normalizedMerchant, transactions.categoryId)
+      .all();
+    for (const row of guessRows) {
+      if (row.categoryId === null) continue;
+      const best = guesses.get(row.merchant);
+      if (best === undefined || row.c > best.c || (row.c === best.c && row.categoryId < best.categoryId)) {
+        guesses.set(row.merchant, { categoryId: row.categoryId, c: row.c });
+      }
+    }
+
+    const ranked = getDb()
+      .select({
+        merchant: sql<string>`${transactions.normalizedMerchant}`.as('merchant_preview_merchant'),
+        id: transactions.id,
+        date: transactions.date,
+        description: sql<string>`coalesce(${transactions.displayDescription}, ${transactions.rawDescription})`.as('merchant_preview_description'),
+        amountCents: transactions.amountCents,
+        rank: sql<number>`row_number() over (partition by ${transactions.normalizedMerchant} order by ${transactions.date} desc, ${transactions.id} desc)`.as('merchant_preview_rank'),
+      })
+      .from(transactions)
+      .where(inPage)
+      .as('merchant_ranked');
+    const previewRows = getDb()
+      .select({ merchant: ranked.merchant, id: ranked.id, date: ranked.date, description: ranked.description, amountCents: ranked.amountCents, rank: ranked.rank })
+      .from(ranked)
+      .where(lte(ranked.rank, PREVIEW_LIMIT))
+      .all();
+    const newestIds: number[] = [];
+    for (const row of previewRows) {
+      const bucket = previews.get(row.merchant) ?? [];
+      bucket.push({ id: row.id, date: row.date, description: row.description, amountCents: row.amountCents });
+      previews.set(row.merchant, bucket);
+      if (row.rank === 1) newestIds.push(row.id);
+    }
+    // The window's order is restated, as attachPreviews does: SQLite does not promise the outer
+    // SELECT keeps it.
+    for (const bucket of previews.values()) bucket.sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
+
+    if (newestIds.length > 0) {
+      for (const row of baseQuery().where(inArray(transactions.id, newestIds)).all()) newest.set(row.normalizedMerchant, row);
+    }
+  }
+
+  // A group whose newest row could not be read back (deleted between the two reads) is left off
+  // the page rather than shown without the row its controls act from.
+  const groups: MerchantGroupRow[] = pageRows.flatMap((row) => {
+    const top = newest.get(row.merchant);
+    if (top === undefined) return [];
+    return [
+      {
+        merchant: row.merchant,
+        displayName: displayNameOf(top),
+        count: row.count,
+        totalCents: row.totalCents,
+        firstDate: row.firstDate,
+        lastDate: row.lastDate,
+        guessCategoryId: guesses.get(row.merchant)?.categoryId ?? null,
+        newest: top,
+        preview: previews.get(row.merchant) ?? [],
+      },
+    ];
+  });
+
+  return { groups, page, pageSize, pageCount: Math.max(1, Math.ceil(groupCount / pageSize)), groupCount, totalCount };
+}
+
+/**
+ * v1.62.0 (plan item 3). Every non-transfer row of one merchant: the set applyCategoryToMatching
+ * (src/lib/categorize/engine.ts) can write, so the undo snapshot taken before "Apply to all N"
+ * covers every row that action may move. A superset is harmless -- recordBulkUndo keeps only the
+ * rows that changed. Not a read-model (ids only, no money, no names); its one caller,
+ * applyToAllMatchingAction, is household-only.
+ */
+export function merchantRowIds(normalizedMerchant: string): number[] {
+  return getDb()
+    .select({ id: transactions.id })
+    .from(transactions)
+    .where(and(eq(transactions.normalizedMerchant, normalizedMerchant), eq(transactions.isTransfer, false)))
+    .all()
+    .map((row) => row.id);
+}
+
 /**
  * null for a row outside the viewer's scope -- deliberately the same answer as "no such row", and
  * deliberately not a throw. The warranty detail page looks a linked transaction up by id
@@ -1298,8 +1491,9 @@ export function bulkConfirmOwnCategory(
  *      like a live protection, which is the same failure mode the v1.27.0 ops guard was written
  *      to prevent.
  *
- * No parameter is threaded for it. There is one caller (bulkTransferAction) and one right answer;
- * an unexercised knob here would be configuration nobody sets and every test has to guess at.
+ * No parameter is threaded for it. Both callers (bulkTransferAction, and v1.62.0's merchant group
+ * "Mark all N as transfers", which is the same statement about one merchant) want the one right
+ * answer; an unexercised knob here would be configuration nobody sets and every test has to guess at.
  */
 export function bulkSetTransfer(
   ids: number[],

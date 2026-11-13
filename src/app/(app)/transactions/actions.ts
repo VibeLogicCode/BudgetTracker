@@ -32,12 +32,21 @@ import {
   deleteTransaction,
   getTransaction,
   listTransactions,
+  merchantRowIds,
   merchantsOfTransactions,
   transactionOwners,
   updateTransactionNotes,
   type TransactionFilter,
   type TransactionRow,
 } from '@/lib/transactions';
+import {
+  captureBulkBefore,
+  recordBulkUndo,
+  undoLastBulkAction,
+  type BulkBefore,
+  type BulkUndoKind,
+} from '@/lib/bulk-undo';
+import { findUserById } from '@/lib/auth/users';
 // v1.26.0 Lane 3a: the ONE parser this route's querystring has (filter-params.ts's own docblock) --
 // shared with page.tsx so a group bulk action writes the set the group header counted, not a set
 // some second parse happened to agree with.
@@ -72,7 +81,7 @@ import {
   type RecurringMark,
 } from '@/lib/categorize/rules';
 import { boundsProblem } from '@/lib/categorize/amount-bounds';
-import { isCategoryArchived } from '@/lib/categories';
+import { isCategoryArchived, listCategories } from '@/lib/categories';
 import { dismissSetAsideRow, releaseSetAsideRow } from '@/lib/import/set-aside';
 
 /**
@@ -176,6 +185,32 @@ function splitSkipSentence(skipped: number): string | null {
   const verb = skipped === 1 ? 'was' : 'were';
   const pronoun = skipped === 1 ? 'its' : 'their';
   return `${skipped} split ${noun} ${verb} skipped, clear ${pronoun} split first.`;
+}
+
+/** v1.62.0. A category's own name, as the Categorize and Move messages say it ("as Groceries"). */
+function categoryName(categoryId: number): string {
+  return listCategories({ includeArchived: true }).find((category) => category.id === categoryId)?.name ?? 'that category';
+}
+
+/** "1 transaction" / "3 transactions". */
+function transactionCount(count: number): string {
+  return `${count} transaction${count === 1 ? '' : 's'}`;
+}
+
+/** v1.62.0 (plan item 3). Appended to a bulk change's message when it was too large to record. */
+const TOO_LARGE_TO_UNDO = 'This change is too large to undo.';
+
+/**
+ * v1.62.0 (plan item 3). Records a bulk change that SUCCEEDED as the person's one undo record,
+ * labelled with `lead` -- the first sentence of the action's own success message, so the Undo bar
+ * names the change in the words the banner just used. Returns the message to send back: `message`
+ * itself, or `message` plus TOO_LARGE_TO_UNDO when the change was over the size an undo can hold
+ * (recordBulkUndo has then dropped the previous record, so Undo never names an older change). A
+ * refusal never reaches here, which is what keeps the previous record in place.
+ */
+function withUndo(user: SessionUser, kind: BulkUndoKind, lead: string, before: BulkBefore, message: string): string {
+  const outcome = recordBulkUndo({ userId: user.id, kind, label: lead, before, at: new Date() });
+  return outcome === 'too_large' ? `${message} ${TOO_LARGE_TO_UNDO}` : message;
 }
 
 export async function manualEntryAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
@@ -370,6 +405,11 @@ export async function acceptAllGuessesAction(_prev: ActionState, formData: FormD
   const ids = idList.parse(String(formData.get('ids') ?? ''));
   if (ids.length === 0) return { error: 'Nothing to accept.' };
 
+  // v1.62.0 (plan item 3): every posted id is captured, and the record is written after the loop
+  // -- also when it stopped partway, because the rows accepted before the stop stay accepted
+  // (this action's own docblock) and are exactly what an Undo should put back.
+  const before = captureBulkBefore({ ids });
+  const lead = (count: number) => `Accepted ${count} suggestion${count === 1 ? '' : 's'}.`;
   let accepted = 0;
   for (const id of ids) {
     const single = new FormData();
@@ -378,13 +418,13 @@ export async function acceptAllGuessesAction(_prev: ActionState, formData: FormD
     // (confirmCategory trains the Bayes model per call), so these cannot run concurrently.
     const result = await acceptGuessAction({}, single);
     if (result.error) {
-      return {
-        error: accepted > 0 ? `Accepted ${accepted} suggestion${accepted === 1 ? '' : 's'} before stopping. ${result.error}` : result.error,
-      };
+      if (accepted === 0) return { error: result.error };
+      const stopped = `Accepted ${accepted} suggestion${accepted === 1 ? '' : 's'} before stopping. ${result.error}`;
+      return { error: withUndo(user, 'categorize', lead(accepted), before, stopped) };
     }
     accepted += 1;
   }
-  return { message: `Accepted ${accepted} suggestion${accepted === 1 ? '' : 's'}.` };
+  return { message: withUndo(user, 'categorize', lead(accepted), before, lead(accepted)) };
 }
 
 /**
@@ -400,12 +440,14 @@ export async function applyToAllMatchingAction(_prev: ActionState, formData: For
   const normalizedMerchant = String(formData.get('normalizedMerchant') ?? '');
   const categoryId = Number(formData.get('categoryId'));
   if (normalizedMerchant.length === 0 || !Number.isInteger(categoryId) || categoryId <= 0) return { error: 'Pick a category.' };
+  // v1.62.0 (plan item 3): every row applyCategoryToMatching may write, plus the merchant whose rule it writes.
+  const before = captureBulkBefore({ ids: merchantRowIds(normalizedMerchant), merchants: [normalizedMerchant] });
   const result = applyCategoryToMatching({ normalizedMerchant, categoryId, userId: user.id, actorRole: user.role });
   if (!result.ok) return { error: guardedWriteError(result) };
   revalidatePath('/transactions');
   const note = `${archivedNoRuleNote(categoryId, true)}${alwaysAskNoRuleNote([normalizedMerchant], true)}`;
-  if (note !== '') return { message: `Applied to ${result.count} transactions.${note}` };
-  return { message: `Applied to ${result.count} transactions and created a rule.` };
+  const lead = note !== '' ? `Applied to ${result.count} transactions.` : `Applied to ${result.count} transactions and created a rule.`;
+  return { message: withUndo(user, 'categorize', lead, before, `${lead}${note}`) };
 }
 
 /**
@@ -472,9 +514,13 @@ export async function setAttributionAction(_prev: ActionState, formData: FormDat
   if (scope !== null && parsed.data !== String(scope)) return { error: NOT_YOURS_ERROR };
   // Ruling R2 fix round 2: every id must resolve through the viewer, or nothing is written.
   if (!allTransactionsVisible(ids, user)) return { error: NOT_YOURS_ERROR };
+  // v1.62.0 (plan item 3): only the bulk bar's Person form posts `bulk=1`, and only it records an
+  // undo. The per-row person picker posts here too, and a per-row edit is not a bulk change.
+  const before = formData.get('bulk') === '1' ? captureBulkBefore({ ids }) : null;
   bulkSetAttribution(ids, parsed.data === '' ? null : Number(parsed.data));
   revalidatePath('/transactions');
-  return { message: `Attribution updated for ${ids.length} transactions.` };
+  const lead = `Attribution updated for ${ids.length} transactions.`;
+  return { message: before === null ? lead : withUndo(user, 'person', lead, before, lead) };
 }
 
 export async function bulkCategorizeAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
@@ -487,6 +533,7 @@ export async function bulkCategorizeAction(_prev: ActionState, formData: FormDat
   // Ruling R2 fix round 2: every id must resolve through the viewer, or nothing is written.
   if (!allTransactionsVisible(ids, user)) return { error: NOT_YOURS_ERROR };
   const createRules = formData.get('createRules') === 'on';
+  const before = captureBulkBefore({ ids });
   // Ruling R4 fix round 2 (controller finding): actorRole threaded through -- bulkSetCategory
   // refuses the WHOLE batch (writes nothing) rather than silently overwriting a rule someone
   // else in the household owns.
@@ -494,9 +541,11 @@ export async function bulkCategorizeAction(_prev: ActionState, formData: FormDat
   if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
   revalidatePath('/transactions');
   revalidatePath('/review');
-  const changedSentence = `Categorized ${result.changed} transaction${result.changed === 1 ? '' : 's'}.${archivedNoRuleNote(categoryId, createRules)}${alwaysAskNoRuleNote(createRules ? merchantsOfTransactions(ids) : [], createRules)}`;
+  // v1.62.0: the category is named, so the Undo bar can say what it would take back.
+  const lead = `Categorized ${transactionCount(result.changed)} as ${categoryName(categoryId)}.`;
+  const changedSentence = `${lead}${archivedNoRuleNote(categoryId, createRules)}${alwaysAskNoRuleNote(createRules ? merchantsOfTransactions(ids) : [], createRules)}`;
   const skipSentence = splitSkipSentence(result.skipped);
-  return { message: skipSentence ? `${changedSentence} ${skipSentence}` : changedSentence };
+  return { message: withUndo(user, 'categorize', lead, before, skipSentence ? `${changedSentence} ${skipSentence}` : changedSentence) };
 }
 
 export async function bulkTransferAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
@@ -507,6 +556,7 @@ export async function bulkTransferAction(_prev: ActionState, formData: FormData)
   const isTransfer = formData.get('isTransfer') === '1';
   // Ruling R2 fix round 2: every id must resolve through the viewer, or nothing is written.
   if (!allTransactionsVisible(ids, user)) return { error: NOT_YOURS_ERROR };
+  const before = captureBulkBefore({ ids });
   // Ruling R4 fix round 2 (controller finding): actorRole threaded through -- bulkSetTransfer
   // refuses the WHOLE batch (writes nothing) rather than silently overwriting a rule someone
   // else in the household owns.
@@ -518,7 +568,7 @@ export async function bulkTransferAction(_prev: ActionState, formData: FormData)
   const complement = result.changed === 1 ? 'a transfer' : 'transfers';
   const changedSentence = `${verb} ${result.changed} ${noun} as ${complement}.`;
   const skipSentence = splitSkipSentence(result.skipped);
-  return { message: skipSentence ? `${changedSentence} ${skipSentence}` : changedSentence };
+  return { message: withUndo(user, 'transfer', changedSentence, before, skipSentence ? `${changedSentence} ${skipSentence}` : changedSentence) };
 }
 
 const recurringMarkField = z.enum(['recurring', 'not_recurring', 'clear']);
@@ -573,6 +623,9 @@ export async function bulkRecurringMarkAction(_prev: ActionState, formData: Form
   if (!allTransactionsVisible(ids, user)) return { error: NOT_YOURS_ERROR };
   const merchants = merchantsOfTransactions(ids).filter((merchant) => merchant.trim().length > 0);
   if (merchants.length === 0) return { error: 'There is no merchant on these rows to mark. Transfer rows are skipped.' };
+  // v1.62.0 (plan item 3): a mark is a rule about each merchant and changes no row, so the
+  // snapshot is of the merchants' rules alone.
+  const before = captureBulkBefore({ ids: [], merchants });
   const result = setRecurringMarks({ merchants, mark: markOf(mark.data), userId: user.id, actorRole: user.role });
   if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
   if (result.merchants === 0) {
@@ -584,9 +637,13 @@ export async function bulkRecurringMarkAction(_prev: ActionState, formData: Form
   revalidatePath('/insights/recurring');
   revalidatePath('/dashboard');
   const noun = result.merchants === 1 ? 'merchant' : 'merchants';
-  if (mark.data === 'recurring') return { message: `Marked ${result.merchants} ${noun} as recurring.` };
-  if (mark.data === 'not_recurring') return { message: `Marked ${result.merchants} ${noun} as not recurring.` };
-  return { message: `Cleared the mark on ${result.merchants} ${noun}.` };
+  const lead =
+    mark.data === 'recurring'
+      ? `Marked ${result.merchants} ${noun} as recurring.`
+      : mark.data === 'not_recurring'
+        ? `Marked ${result.merchants} ${noun} as not recurring.`
+        : `Cleared the mark on ${result.merchants} ${noun}.`;
+  return { message: withUndo(user, 'recurring', lead, before, lead) };
 }
 
 export async function saveNoteAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
@@ -809,13 +866,15 @@ export async function bulkConfirmGroupAction(_prev: ActionState, formData: FormD
   const ids = groupTransactionIds(filter, parsed.data.groupCategoryId, user);
   if (ids.length === 0) return { error: 'That group is empty now — nothing was changed.' };
 
+  const before = captureBulkBefore({ ids });
   const result = bulkSetCategory(ids, Number(parsed.data.groupCategoryId), user.id, false, user.role);
   if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
   revalidatePath('/transactions');
   revalidatePath('/review');
-  const changedSentence = `Confirmed ${result.changed} transaction${result.changed === 1 ? '' : 's'}. Rules will leave ${result.changed === 1 ? 'it' : 'them'} alone from now on.`;
+  const lead = `Confirmed ${transactionCount(result.changed)}.`;
+  const changedSentence = `${lead} Rules will leave ${result.changed === 1 ? 'it' : 'them'} alone from now on.`;
   const skipSentence = splitSkipSentence(result.skipped);
-  return { message: skipSentence ? `${changedSentence} ${skipSentence}` : changedSentence };
+  return { message: withUndo(user, 'categorize', lead, before, skipSentence ? `${changedSentence} ${skipSentence}` : changedSentence) };
 }
 
 /**
@@ -863,13 +922,16 @@ export async function bulkRecategorizeGroupAction(_prev: ActionState, formData: 
   if (ids.length === 0) return { error: 'That group is empty now — nothing was changed.' };
 
   const createRules = formData.get('createRules') === 'on';
+  const before = captureBulkBefore({ ids });
   const result = bulkSetCategory(ids, categoryId, user.id, createRules, user.role);
   if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
   revalidatePath('/transactions');
   revalidatePath('/review');
-  const changedSentence = `Moved ${result.changed} transaction${result.changed === 1 ? '' : 's'}.${archivedNoRuleNote(categoryId, createRules)}${alwaysAskNoRuleNote(createRules ? merchantsOfTransactions(ids) : [], createRules)}`;
+  // v1.62.0: the destination is named, so the Undo bar can say what it would take back.
+  const lead = `Moved ${transactionCount(result.changed)} to ${categoryName(categoryId)}.`;
+  const changedSentence = `${lead}${archivedNoRuleNote(categoryId, createRules)}${alwaysAskNoRuleNote(createRules ? merchantsOfTransactions(ids) : [], createRules)}`;
   const skipSentence = splitSkipSentence(result.skipped);
-  return { message: skipSentence ? `${changedSentence} ${skipSentence}` : changedSentence };
+  return { message: withUndo(user, 'categorize', lead, before, skipSentence ? `${changedSentence} ${skipSentence}` : changedSentence) };
 }
 
 /**
@@ -902,6 +964,7 @@ export async function bulkConfirmViewAction(_prev: ActionState, formData: FormDa
   const rows = sweepTransactionRows(filter, user);
   if (rows.length === 0) return { error: 'This view is empty now — nothing was changed.' };
 
+  const before = captureBulkBefore({ ids: rows.map((row) => row.id) });
   const result = bulkConfirmOwnCategory(rows, user.id, user.role);
   if (result.changed === 0) {
     const refusal =
@@ -916,15 +979,155 @@ export async function bulkConfirmViewAction(_prev: ActionState, formData: FormDa
 
   const plural = result.changed === 1 ? '' : 's';
   const noun = result.categories === 1 ? 'category' : 'categories';
-  const parts = [
-    `Confirmed ${result.changed} transaction${plural} across ${result.categories} ${noun}. Rules will leave ${result.changed === 1 ? 'it' : 'them'} alone from now on.`,
-  ];
+  const lead = `Confirmed ${result.changed} transaction${plural} across ${result.categories} ${noun}.`;
+  const parts = [`${lead} Rules will leave ${result.changed === 1 ? 'it' : 'them'} alone from now on.`];
   if (result.uncategorized > 0) {
     parts.push(`${result.uncategorized} with no category yet ${result.uncategorized === 1 ? 'was' : 'were'} left for you to pick.`);
   }
   const splits = splitSkipSentence(result.skipped);
   if (splits) parts.push(splits);
-  return { message: parts.join(' ') };
+  return { message: withUndo(user, 'categorize', lead, before, parts.join(' ')) };
+}
+
+/**
+ * v1.62.0 (plan item 1). Review by merchant: one decision for every row of one merchant waiting in
+ * Needs review.
+ *
+ * THE SET IS DERIVED, as the category groups' is (groupScopeSchema's docblock): the page's own
+ * querystring plus the merchant, rebuilt by filterFromQuery and swept through the viewer-scoped
+ * list read, so the rows written are exactly the rows the group card counted. `reviewOnly` is
+ * forced on whatever the posted scope says, so a tampered scope can narrow the set but never reach
+ * past the queue (the owner's decision: a merchant decision applies to that merchant's rows in
+ * review only), and a self viewer -- who has no queue -- is refused before anything is read.
+ *
+ * ONE DEFINITION PER RULE. Every decision writes through the writer the rest of this page already
+ * uses for the same statement, so every rule-writing rule already in force applies unchanged:
+ * - category: bulkSetCategory, as the bulk bar's Categorize. Exact rules only, teachTarget's
+ *   amount window, no rule for an archived category or an Always ask merchant (the same two notes),
+ *   the whole group refused when another member owns the merchant's rule, split rows skipped.
+ * - person: bulkSetAttribution, as the bulk bar's Attribute. No rule: a person rule is the Create a
+ *   rule dialog's job, and the card offers that dialog beside this.
+ * - transfer: bulkSetTransfer, as the bulk bar's Mark transfer, which learns the exact rule.
+ * - recurring: setRecurringMarks for the one merchant, as the row menu's Mark recurring.
+ *
+ * The no-merchant-name group (`''`) has nothing to remember a transfer or a recurring mark by, so
+ * those two decisions are refused for it; a category is still filed (confirmCategory writes no rule
+ * for an empty merchant). Each decision records an undo, as every bulk change does.
+ */
+const merchantDecisionSchema = z.object({
+  scope: z.string().max(2000),
+  merchant: z.string().max(200),
+  decision: z.enum(['category', 'person', 'transfer', 'recurring']),
+  categoryId: z.string(),
+  attributedUserId: attributedUserIdField,
+  createRules: z.boolean(),
+});
+
+const NO_MERCHANT_NAME_ERROR = 'This group has no merchant name to remember.';
+
+export async function reviewMerchantGroupAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  const user = await requireUser();
+  if (isSelfScoped(user)) return { error: 'Review is not available on this account.' };
+
+  const parsed = merchantDecisionSchema.safeParse({
+    scope: String(formData.get('scope') ?? ''),
+    merchant: String(formData.get('merchant') ?? ''),
+    decision: formData.get('decision'),
+    categoryId: String(formData.get('categoryId') ?? ''),
+    attributedUserId: String(formData.get('attributedUserId') ?? ''),
+    createRules: formData.get('createRules') === 'on',
+  });
+  if (!parsed.success) return { error: 'Invalid request.' };
+  const { merchant, decision } = parsed.data;
+  if (merchant === '' && (decision === 'transfer' || decision === 'recurring')) return { error: NO_MERCHANT_NAME_ERROR };
+
+  let categoryId = 0;
+  if (decision === 'category') {
+    categoryId = /^\d+$/.test(parsed.data.categoryId) ? Number(parsed.data.categoryId) : 0;
+    if (categoryId <= 0) return { error: 'Pick a category first.' };
+  }
+
+  const ids = sweepTransactionRows({ ...filterFromQuery(parsed.data.scope, user), reviewOnly: true, merchantExact: merchant }, user).map(
+    (row) => row.id,
+  );
+  if (ids.length === 0) return { error: 'That group is empty now — nothing was changed.' };
+
+  const from = merchant === '' ? '' : ` from ${merchant}`;
+  const before = captureBulkBefore({ ids, merchants: merchant === '' ? [] : [merchant] });
+  let kind: BulkUndoKind;
+  let lead: string;
+  let message: string;
+  if (decision === 'category') {
+    const createRules = parsed.data.createRules && merchant !== '';
+    const result = bulkSetCategory(ids, categoryId, user.id, createRules, user.role);
+    if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
+    kind = 'categorize';
+    lead = `Categorized ${transactionCount(result.changed)}${from} as ${categoryName(categoryId)}.`;
+    const notes = `${archivedNoRuleNote(categoryId, createRules)}${alwaysAskNoRuleNote(createRules ? [merchant] : [], createRules)}`;
+    const skipSentence = splitSkipSentence(result.skipped);
+    message = skipSentence ? `${lead}${notes} ${skipSentence}` : `${lead}${notes}`;
+  } else if (decision === 'person') {
+    const person = parsed.data.attributedUserId === '' ? null : Number(parsed.data.attributedUserId);
+    const changed = bulkSetAttribution(ids, person);
+    kind = 'person';
+    const name = person === null ? 'Household' : (findUserById(person)?.name ?? 'that person');
+    lead = `Set the person on ${transactionCount(changed)}${from} to ${name}.`;
+    message = lead;
+  } else if (decision === 'transfer') {
+    const result = bulkSetTransfer(ids, true, user.id, user.role);
+    if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
+    kind = 'transfer';
+    lead = `Marked ${transactionCount(result.changed)}${from} as ${result.changed === 1 ? 'a transfer' : 'transfers'}.`;
+    const skipSentence = splitSkipSentence(result.skipped);
+    message = skipSentence ? `${lead} ${skipSentence}` : lead;
+  } else {
+    const result = setRecurringMarks({ merchants: [merchant], mark: 'recurring', userId: user.id, actorRole: user.role });
+    if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
+    if (result.merchants === 0) return { message: 'Already marked as recurring.' };
+    kind = 'recurring';
+    lead = `${merchant} is marked recurring.`;
+    message = lead;
+  }
+
+  revalidatePath('/transactions');
+  revalidatePath('/budgets');
+  revalidatePath('/dashboard');
+  revalidatePath('/reports');
+  if (decision === 'recurring') {
+    revalidatePath('/insights');
+    revalidatePath('/insights/recurring');
+  }
+  return { message: withUndo(user, kind, lead, before, message) };
+}
+
+/**
+ * v1.62.0 (plan item 3). The Undo bar's button: takes back the signed-in person's own last bulk
+ * change, if it is under 15 minutes old and nothing in it has been edited since. Every rule of
+ * that -- the window, the staleness check, a self viewer's own rows only, the one transaction, the
+ * audit row -- lives in undoLastBulkAction (src/lib/bulk-undo.ts); this does what an action does
+ * here: origin, auth, revalidate, say what happened.
+ */
+export async function undoBulkAction(_prev: ActionState, _formData: FormData): Promise<ActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  const user = await requireUser();
+  const result = undoLastBulkAction({ viewer: user, now: new Date() });
+  if (!result.ok) return { error: result.error };
+
+  revalidatePath('/transactions');
+  revalidatePath('/budgets');
+  revalidatePath('/dashboard');
+  revalidatePath('/reports');
+  revalidatePath('/insights');
+  const parts: string[] = [];
+  if (result.rows > 0) {
+    parts.push(result.rows === 1 ? '1 transaction is back as it was' : `${result.rows} transactions are back as they were`);
+  }
+  if (result.rulesRemoved > 0) parts.push(`${result.rulesRemoved} rule${result.rulesRemoved === 1 ? '' : 's'} removed`);
+  if (result.rulesRestored > 0) parts.push(`${result.rulesRestored} rule${result.rulesRestored === 1 ? '' : 's'} restored`);
+  return { message: parts.length === 0 ? 'Undone.' : `Undone. ${parts.join('; ')}.` };
 }
 
 /**

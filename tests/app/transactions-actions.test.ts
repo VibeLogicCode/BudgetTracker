@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
@@ -7,13 +7,14 @@ import { nowIso } from '@/lib/clock';
 import { createWarrantyItem, getWarrantyItem } from '@/lib/warranty/items';
 import { createItemType } from '@/lib/warranty/types';
 import { setTransactionSplits } from '@/lib/splits';
-import { ARCHIVED_GUESS_ERROR, confirmCategory, runEngine, upsertRenameRule } from '@/lib/categorize/engine';
+import { ALWAYS_ASK_NO_RULE, ARCHIVED_CATEGORY_NO_RULE, ARCHIVED_GUESS_ERROR, confirmCategory, runEngine, upsertRenameRule } from '@/lib/categorize/engine';
 import { listRules, ruleOwnedError, setAlwaysAskRule, setRuleDisabledFlag, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { archiveCategory } from '@/lib/categories';
 import { NOT_YOURS_ERROR } from '@/lib/auth/viewer';
 import { commitImport } from '@/lib/import/commit';
 import { computeRowHashes } from '@/lib/import/dedup';
 import { createManualTransaction } from '@/lib/transactions';
+import { BULK_UNDO_EXPIRED_ERROR, BULK_UNDO_MAX_ROWS, BULK_UNDO_STALE_ERROR, lastBulkUndo } from '@/lib/bulk-undo';
 
 let currentUser: {
   id: number;
@@ -73,6 +74,7 @@ import {
   keepPossibleDuplicateAction,
   manualEntryAction,
   previewAlwaysAskAction,
+  reviewMerchantGroupAction,
   renameTransactionAction,
   saveNoteAction,
   sendBackToReviewAction,
@@ -82,6 +84,7 @@ import {
   setRecurringMarkAction,
   setRowTransferAction,
   unassignFromLoanAction,
+  undoBulkAction,
 } from '@/app/(app)/transactions/actions';
 
 let current: TestDb | null = null;
@@ -814,7 +817,7 @@ describe('bulkTransferAction and bulkCategorizeAction: split rows are skipped an
     const groceries = categoryIdByName(db, 'Groceries');
     const id = addTxn('CONTROL A');
     const result = await bulkCategorizeAction({}, formData({ ids: String(id), categoryId: String(groceries) }));
-    expect(result.message).toBe('Categorized 1 transaction.');
+    expect(result.message).toBe('Categorized 1 transaction as Groceries.');
   });
 
   it('bulkCategorizeAction: an all-split batch of one reports the singular skip sentence', async () => {
@@ -825,7 +828,7 @@ describe('bulkTransferAction and bulkCategorizeAction: split rows are skipped an
     const id = splitAMerchant(addTxn, groceries, gas, userId, 'ACME SPLIT MERCHANT');
 
     const result = await bulkCategorizeAction({}, formData({ ids: String(id), categoryId: String(coffee) }));
-    expect(result.message).toBe('Categorized 0 transactions. 1 split transaction was skipped, clear its split first.');
+    expect(result.message).toBe('Categorized 0 transactions as Coffee. 1 split transaction was skipped, clear its split first.');
   });
 
   it('bulkCategorizeAction: a partially-split batch reports both counts', async () => {
@@ -838,7 +841,7 @@ describe('bulkTransferAction and bulkCategorizeAction: split rows are skipped an
     const b = addTxn('CONTROL B');
 
     const result = await bulkCategorizeAction({}, formData({ ids: `${splitId},${a},${b}`, categoryId: String(coffee) }));
-    expect(result.message).toBe('Categorized 2 transactions. 1 split transaction was skipped, clear its split first.');
+    expect(result.message).toBe('Categorized 2 transactions as Coffee. 1 split transaction was skipped, clear its split first.');
   });
 });
 
@@ -1170,7 +1173,7 @@ describe('bulkCategorizeAction / bulkTransferAction -- ruling R4 fix round 2', (
     const result = await bulkCategorizeAction({}, formData({ ids: String(txnId), categoryId: String(coffee), createRules: 'on' }));
 
     expect(result.error).toBeUndefined();
-    expect(result.message).toBe('Categorized 1 transaction.');
+    expect(result.message).toBe('Categorized 1 transaction as Coffee.');
   });
 
   it('bulkTransferAction: a member is refused over a foreign-owned rule, and the row is unchanged', async () => {
@@ -2239,7 +2242,7 @@ describe('bulkConfirmGroupAction / bulkRecategorizeGroupAction (Lane 3a item 4)'
     );
 
     // Exactly the row the cluster header counted, and no "left the split one alone" sentence.
-    expect(result.message).toBe('Moved 1 transaction.');
+    expect(result.message).toBe('Moved 1 transaction to Groceries.');
     expect(categoryOf(blank)).toBe(groceries);
     expect(
       current!.sqlite.prepare('select category_id, amount_cents from transaction_splits where txn_id = ? order by id').all(split),
@@ -3159,5 +3162,411 @@ describe('v1.61.0: possible duplicates and deleting an imported row', () => {
     expect(s.sqlite.prepare("select detail from audit_log where action = 'delete_transaction'").get()).toEqual({
       detail: 'FUEL STOP 12 (from march.csv)',
     });
+  });
+});
+
+/**
+ * v1.62.0 (plan items 1 and 3). Review by merchant, and Undo around every bulk change.
+ *
+ * The queue: MAPLE GROCER -42.17, -18.05, -63.40 and FUEL STOP 12 -61.30, -55.00, plus one more
+ * MAPLE GROCER filed by hand to Coffee, which is not in the queue. Alex acts; Sam is the other
+ * member. The clock is faked to Date only, so every timestamp and the 15-minute window are explicit.
+ */
+const ACTED = new Date('2026-03-14T15:00:00.000Z');
+const FIVE_MINUTES_ON = new Date('2026-03-14T15:05:00.000Z');
+
+function reviewSetup() {
+  current = createSeededTestDb();
+  const t = current;
+  const alex = insertTestUser(t.db, { name: 'Alex', username: 'alex', role: 'admin' });
+  const sam = insertTestUser(t.db, { name: 'Sam', username: 'sam', role: 'member' });
+  currentUser = { id: alex, name: 'Alex', username: 'alex', role: 'admin' };
+  const accountId = insertTestAccount(t.db, { name: 'Joint Chequing' });
+  ctx = { userId: alex, accountId };
+  const insert = t.sqlite.prepare(
+    `insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, category_id,
+       categorization_source, confidence, attributed_user_id, created_by, created_at, updated_at)
+     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '2026-03-14T09:00:00.000Z', '2026-03-14T09:00:00.000Z') returning id`,
+  );
+  const add = (
+    merchant: string,
+    amountCents: number,
+    date: string,
+    over: { categoryId?: number | null; source?: string; confidence?: number | null; person?: number | null } = {},
+  ): number =>
+    (
+      insert.get(
+        accountId,
+        date,
+        merchant,
+        merchant,
+        amountCents,
+        over.categoryId ?? null,
+        over.source ?? 'none',
+        over.confidence ?? null,
+        over.person ?? null,
+        alex,
+      ) as { id: number }
+    ).id;
+  const groceries = categoryIdByName(t.db, 'Groceries');
+  const coffee = categoryIdByName(t.db, 'Coffee');
+  const gas = categoryIdByName(t.db, 'Gas');
+  const maple = [add('MAPLE GROCER', -4217, '2026-03-02'), add('MAPLE GROCER', -1805, '2026-03-09'), add('MAPLE GROCER', -6340, '2026-03-14')];
+  const fuel = [add('FUEL STOP 12', -6130, '2026-03-05'), add('FUEL STOP 12', -5500, '2026-03-11')];
+  const filed = add('MAPLE GROCER', -2999, '2026-03-12', { categoryId: coffee, source: 'manual' });
+  const rows = () =>
+    t.sqlite
+      .prepare(
+        `select id, category_id as categoryId, categorization_source as source, confidence, is_transfer as isTransfer,
+                attributed_user_id as person from transactions order by id`,
+      )
+      .all();
+  const row = (id: number) =>
+    t.sqlite
+      .prepare(
+        'select category_id as categoryId, categorization_source as source, is_transfer as isTransfer, attributed_user_id as person from transactions where id = ?',
+      )
+      .get(id) as { categoryId: number | null; source: string; isTransfer: number; person: number | null };
+  const rules = () => t.sqlite.prepare('select * from merchant_rules order by id').all() as Array<Record<string, unknown>>;
+  const rulesFor = (pattern: string, kind: string) =>
+    t.sqlite.prepare('select * from merchant_rules where pattern = ? and rule_kind = ? order by id').all(pattern, kind) as Array<
+      Record<string, unknown>
+    >;
+  return { t, alex, sam, accountId, add, groceries, coffee, gas, maple, fuel, filed, rows, row, rules, rulesFor };
+}
+
+/** The By merchant view's own querystring, which every group decision posts as its scope. */
+const MERCHANT_SCOPE = 'review=1&group=merchant';
+
+function decide(fields: Record<string, string>) {
+  return reviewMerchantGroupAction({}, formData({ scope: MERCHANT_SCOPE, ...fields }));
+}
+
+const revalidated = () => vi.mocked(revalidatePath).mock.calls.map(([path]) => path);
+
+describe('reviewMerchantGroupAction (v1.62.0 B3)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ now: ACTED, toFake: ['Date'] });
+    vi.mocked(revalidatePath).mockClear();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('category files exactly the three queued rows and writes one exact rule', async () => {
+    const s = reviewSetup();
+    const result = await decide({ merchant: 'MAPLE GROCER', decision: 'category', categoryId: String(s.groceries), createRules: 'on' });
+
+    expect(result).toEqual({ message: 'Categorized 3 transactions from MAPLE GROCER as Groceries.' });
+    for (const id of s.maple) expect(s.row(id)).toMatchObject({ categoryId: s.groceries, source: 'manual' });
+    expect(s.row(s.filed)).toMatchObject({ categoryId: s.coffee, source: 'manual' });
+    expect(s.rulesFor('MAPLE GROCER', 'category')).toEqual([
+      expect.objectContaining({ match_type: 'exact', category_id: s.groceries, created_by: s.alex }),
+    ]);
+    expect(revalidated()).toEqual(expect.arrayContaining(['/transactions', '/budgets', '/dashboard', '/reports']));
+  });
+
+  it('leaves the same merchant_rules table as the bulk bar over the same ids, a bounded rule covering two rows included', async () => {
+    const run = async (via: 'group' | 'bar') => {
+      const s = reviewSetup();
+      // Covers -42.17 and -63.40 (bounds are on the size of the amount), not -18.05.
+      const bounded = upsertRuleFromCorrection({
+        pattern: 'MAPLE GROCER',
+        matchType: 'exact',
+        ruleKind: 'category',
+        categoryId: s.coffee,
+        amountMinCents: 4000,
+        amountMaxCents: 7000,
+        createdBy: s.alex,
+        actorRole: 'admin',
+        at: new Date('2026-02-02T10:00:00.000Z'),
+      });
+      if (!bounded.ok) throw new Error('fixture');
+      const result =
+        via === 'group'
+          ? await decide({ merchant: 'MAPLE GROCER', decision: 'category', categoryId: String(s.groceries), createRules: 'on' })
+          : await bulkCategorizeAction({}, formData({ ids: s.maple.join(','), categoryId: String(s.groceries), createRules: 'on' }));
+      expect(result.error).toBeUndefined();
+      const out = { rules: s.rules(), rows: s.rows() };
+      current?.cleanup();
+      current = null;
+      return out;
+    };
+
+    const viaGroup = await run('group');
+    const viaBar = await run('bar');
+    expect(viaGroup.rules).toEqual(viaBar.rules);
+    expect(viaGroup.rows).toEqual(viaBar.rows);
+    expect(viaGroup.rules.filter((rule) => rule.pattern === 'MAPLE GROCER').length).toBeGreaterThan(1);
+  });
+
+  it('an archived category files the rows, writes no rule and says so', async () => {
+    const s = reviewSetup();
+    archiveCategory(s.groceries, true);
+    const result = await decide({ merchant: 'MAPLE GROCER', decision: 'category', categoryId: String(s.groceries), createRules: 'on' });
+
+    expect(result.message).toBe(`Categorized 3 transactions from MAPLE GROCER as Groceries. ${ARCHIVED_CATEGORY_NO_RULE}`);
+    for (const id of s.maple) expect(s.row(id).categoryId).toBe(s.groceries);
+    expect(s.rulesFor('MAPLE GROCER', 'category')).toEqual([]);
+  });
+
+  it('an Always ask merchant gets no rule, and the note says why', async () => {
+    const s = reviewSetup();
+    setAlwaysAskRule({ pattern: 'MAPLE GROCER', matchType: 'exact', userId: s.alex, actorRole: 'admin' });
+    const result = await decide({ merchant: 'MAPLE GROCER', decision: 'category', categoryId: String(s.groceries), createRules: 'on' });
+
+    expect(result.message).toBe(`Categorized 3 transactions from MAPLE GROCER as Groceries. ${ALWAYS_ASK_NO_RULE}`);
+    expect(s.rulesFor('MAPLE GROCER', 'category')).toEqual([]);
+  });
+
+  it("a member is refused on Sam's rule, and nothing is written", async () => {
+    const s = reviewSetup();
+    upsertRuleFromCorrection({ pattern: 'MAPLE GROCER', matchType: 'exact', ruleKind: 'category', categoryId: s.coffee, createdBy: s.sam, actorRole: 'member' });
+    currentUser = { id: s.alex, name: 'Alex', username: 'alex', role: 'member' };
+    const rowsBefore = s.rows();
+    const rulesBefore = s.rules();
+
+    const result = await decide({ merchant: 'MAPLE GROCER', decision: 'category', categoryId: String(s.groceries), createRules: 'on' });
+
+    expect(result).toEqual({ error: ruleOwnedError('Sam') });
+    expect(s.rows()).toEqual(rowsBefore);
+    expect(s.rules()).toEqual(rulesBefore);
+    expect(lastBulkUndo(s.alex, ACTED)).toBeNull();
+  });
+
+  it('person sets the queued rows only, and writes no rule', async () => {
+    const s = reviewSetup();
+    const rulesBefore = s.rules();
+    const result = await decide({ merchant: 'MAPLE GROCER', decision: 'person', attributedUserId: String(s.sam) });
+
+    expect(result).toEqual({ message: 'Set the person on 3 transactions from MAPLE GROCER to Sam.' });
+    for (const id of s.maple) expect(s.row(id).person).toBe(s.sam);
+    expect(s.row(s.filed).person).toBeNull();
+    expect(s.rules()).toEqual(rulesBefore);
+  });
+
+  it('transfer marks the queued rows and learns the exact transfer rule', async () => {
+    const s = reviewSetup();
+    const result = await decide({ merchant: 'FUEL STOP 12', decision: 'transfer' });
+
+    expect(result).toEqual({ message: 'Marked 2 transactions from FUEL STOP 12 as transfers.' });
+    for (const id of s.fuel) expect(s.row(id).isTransfer).toBe(1);
+    expect(s.rulesFor('FUEL STOP 12', 'transfer')).toEqual([expect.objectContaining({ match_type: 'exact' })]);
+  });
+
+  it('recurring marks the merchant and changes no row', async () => {
+    const s = reviewSetup();
+    const rowsBefore = s.rows();
+    const result = await decide({ merchant: 'FUEL STOP 12', decision: 'recurring' });
+
+    expect(result).toEqual({ message: 'FUEL STOP 12 is marked recurring.' });
+    expect(s.rulesFor('FUEL STOP 12', 'recurring')).toEqual([expect.objectContaining({ match_type: 'exact' })]);
+    expect(s.rows()).toEqual(rowsBefore);
+    expect(revalidated()).toContain('/insights');
+  });
+
+  it('the no-merchant-name group refuses transfer and recurring, and still files a category', async () => {
+    const s = reviewSetup();
+    const nameless = s.add('', -900, '2026-03-13');
+
+    expect(await decide({ merchant: '', decision: 'transfer' })).toEqual({ error: 'This group has no merchant name to remember.' });
+    expect(await decide({ merchant: '', decision: 'recurring' })).toEqual({ error: 'This group has no merchant name to remember.' });
+    expect(s.row(nameless)).toMatchObject({ isTransfer: 0, categoryId: null });
+
+    const result = await decide({ merchant: '', decision: 'category', categoryId: String(s.groceries), createRules: 'on' });
+    expect(result).toEqual({ message: 'Categorized 1 transaction as Groceries.' });
+    expect(s.row(nameless)).toMatchObject({ categoryId: s.groceries, source: 'manual' });
+  });
+
+  it('refuses a self viewer before anything is read', async () => {
+    const s = reviewSetup();
+    currentUser = { id: s.sam, name: 'Sam', username: 'sam', role: 'member', visibility: 'self' };
+    const rowsBefore = s.rows();
+
+    expect(await decide({ merchant: 'MAPLE GROCER', decision: 'category', categoryId: String(s.groceries) })).toEqual({
+      error: 'Review is not available on this account.',
+    });
+    expect(s.rows()).toEqual(rowsBefore);
+  });
+
+  it('a tampered scope cannot reach past the queue: the hand-filed row stays as it is', async () => {
+    const s = reviewSetup();
+    const result = await reviewMerchantGroupAction(
+      {},
+      formData({ scope: '', merchant: 'MAPLE GROCER', decision: 'category', categoryId: String(s.groceries), createRules: 'on' }),
+    );
+
+    expect(result.message).toBe('Categorized 3 transactions from MAPLE GROCER as Groceries.');
+    expect(s.row(s.filed)).toMatchObject({ categoryId: s.coffee, source: 'manual' });
+  });
+
+  it('an empty group, or no category picked, writes nothing', async () => {
+    const s = reviewSetup();
+    expect(await decide({ merchant: 'HARBOUR MART', decision: 'transfer' })).toEqual({ error: 'That group is empty now — nothing was changed.' });
+    expect(await decide({ merchant: 'MAPLE GROCER', decision: 'category', categoryId: '' })).toEqual({ error: 'Pick a category first.' });
+    expect(lastBulkUndo(s.alex, ACTED)).toBeNull();
+  });
+});
+
+describe('undo around every bulk change (v1.62.0 B4)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ now: ACTED, toFake: ['Date'] });
+    vi.mocked(revalidatePath).mockClear();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  type Fixture = ReturnType<typeof reviewSetup>;
+  const toRuleFiled = (s: Fixture, ids: number[], categoryId: number) =>
+    s.t.sqlite.prepare(`update transactions set category_id = ?, categorization_source = 'rule' where id in (${ids.join(',')})`).run(categoryId);
+
+  const CASES: {
+    name: string;
+    prepare?: (s: Fixture) => void;
+    act: (s: Fixture) => Promise<{ message?: string; error?: string }>;
+    label: string;
+  }[] = [
+    {
+      name: 'bulkCategorizeAction',
+      act: (s) => bulkCategorizeAction({}, formData({ ids: s.maple.join(','), categoryId: String(s.groceries), createRules: 'on' })),
+      label: 'Categorized 3 transactions as Groceries.',
+    },
+    {
+      name: 'bulkTransferAction',
+      act: (s) => bulkTransferAction({}, formData({ ids: s.fuel.join(','), isTransfer: '1' })),
+      label: 'Marked 2 transactions as transfers.',
+    },
+    {
+      name: 'setAttributionAction from the bulk bar (bulk=1)',
+      act: (s) => setAttributionAction({}, formData({ ids: s.maple.join(','), attributedUserId: String(s.sam), bulk: '1' })),
+      label: 'Attribution updated for 3 transactions.',
+    },
+    {
+      name: 'bulkRecurringMarkAction',
+      act: (s) => bulkRecurringMarkAction({}, formData({ ids: s.fuel.join(','), mark: 'recurring' })),
+      label: 'Marked 1 merchant as recurring.',
+    },
+    {
+      name: 'bulkConfirmGroupAction',
+      prepare: (s) => toRuleFiled(s, s.fuel, s.gas),
+      act: (s) => bulkConfirmGroupAction({}, formData({ scope: 'source=rule&group=category', groupCategoryId: String(s.gas) })),
+      label: 'Confirmed 2 transactions.',
+    },
+    {
+      name: 'bulkRecategorizeGroupAction',
+      act: (s) =>
+        bulkRecategorizeGroupAction(
+          {},
+          formData({ scope: 'review=1&group=category', groupCategoryId: '', categoryId: String(s.groceries), createRules: 'on' }),
+        ),
+      label: 'Moved 5 transactions to Groceries.',
+    },
+    {
+      name: 'bulkConfirmViewAction',
+      prepare: (s) => toRuleFiled(s, s.fuel, s.gas),
+      act: () => bulkConfirmViewAction({}, formData({ scope: 'source=rule&group=category' })),
+      label: 'Confirmed 2 transactions across 1 category.',
+    },
+    {
+      name: 'applyToAllMatchingAction',
+      act: (s) => applyToAllMatchingAction({}, formData({ normalizedMerchant: 'MAPLE GROCER', categoryId: String(s.groceries) })),
+      label: 'Applied to 4 transactions and created a rule.',
+    },
+    {
+      name: 'acceptAllGuessesAction',
+      prepare: (s) =>
+        s.t.sqlite
+          .prepare(`update transactions set category_id = ?, categorization_source = 'bayes', confidence = 0.62 where id in (${s.maple.join(',')})`)
+          .run(s.groceries),
+      act: (s) => acceptAllGuessesAction({}, formData({ ids: s.maple.join(',') })),
+      label: 'Accepted 3 suggestions.',
+    },
+    {
+      name: 'reviewMerchantGroupAction',
+      act: (s) => decide({ merchant: 'MAPLE GROCER', decision: 'category', categoryId: String(s.groceries), createRules: 'on' }),
+      label: 'Categorized 3 transactions from MAPLE GROCER as Groceries.',
+    },
+  ];
+
+  it.each(CASES)('$name leaves a record whose undo restores the rows and rules', async ({ prepare, act, label }) => {
+    const s = reviewSetup();
+    prepare?.(s);
+    const rowsBefore = s.rows();
+    const rulesBefore = s.rules();
+
+    const result = await act(s);
+    expect(result.error).toBeUndefined();
+    expect(lastBulkUndo(s.alex, FIVE_MINUTES_ON)?.label).toBe(label);
+    expect({ rows: s.rows(), rules: s.rules() }).not.toEqual({ rows: rowsBefore, rules: rulesBefore });
+
+    vi.setSystemTime(FIVE_MINUTES_ON);
+    const undone = await undoBulkAction({}, formData({}));
+    expect(undone.message).toMatch(/^Undone\. /);
+    expect(s.rows()).toEqual(rowsBefore);
+    expect(s.rules()).toEqual(rulesBefore);
+    expect(lastBulkUndo(s.alex, FIVE_MINUTES_ON)).toBeNull();
+  });
+
+  it('the per-row person picker records nothing', async () => {
+    const s = reviewSetup();
+    const result = await setAttributionAction({}, formData({ ids: String(s.maple[0]), attributedUserId: String(s.sam) }));
+    expect(result.message).toBe('Attribution updated for 1 transactions.');
+    expect(lastBulkUndo(s.alex, ACTED)).toBeNull();
+  });
+
+  it('a refused action keeps the previous record', async () => {
+    const s = reviewSetup();
+    currentUser = { id: s.sam, name: 'Sam', username: 'sam', role: 'member' };
+    await bulkTransferAction({}, formData({ ids: s.fuel.join(','), isTransfer: '1' }));
+    upsertRuleFromCorrection({ pattern: 'MAPLE GROCER', matchType: 'exact', ruleKind: 'category', categoryId: s.coffee, createdBy: s.alex, actorRole: 'admin' });
+
+    const refused = await bulkCategorizeAction({}, formData({ ids: s.maple.join(','), categoryId: String(s.groceries), createRules: 'on' }));
+    expect(refused).toEqual({ error: ruleOwnedError('Alex') });
+    expect(lastBulkUndo(s.sam, ACTED)?.label).toBe('Marked 2 transactions as transfers.');
+  });
+
+  it('the undo says what it put back', async () => {
+    const s = reviewSetup();
+    await bulkCategorizeAction({}, formData({ ids: s.maple.join(','), categoryId: String(s.groceries), createRules: 'on' }));
+    vi.mocked(revalidatePath).mockClear();
+
+    expect(await undoBulkAction({}, formData({}))).toEqual({ message: 'Undone. 3 transactions are back as they were; 1 rule removed.' });
+    expect(revalidated()).toEqual(expect.arrayContaining(['/transactions', '/budgets', '/dashboard', '/reports', '/insights']));
+  });
+
+  it('refuses with nothing to undo, past 15 minutes, and once a row was edited since', async () => {
+    const s = reviewSetup();
+    expect(await undoBulkAction({}, formData({}))).toEqual({ error: BULK_UNDO_EXPIRED_ERROR });
+
+    await bulkCategorizeAction({}, formData({ ids: s.maple.join(','), categoryId: String(s.groceries), createRules: 'on' }));
+    vi.setSystemTime(new Date('2026-03-14T15:15:01.000Z'));
+    expect(await undoBulkAction({}, formData({}))).toEqual({ error: BULK_UNDO_EXPIRED_ERROR });
+
+    vi.setSystemTime(ACTED);
+    await bulkTransferAction({}, formData({ ids: s.fuel.join(','), isTransfer: '1' }));
+    await setRowTransferAction({}, formData({ transactionId: String(s.fuel[0]), isTransfer: '0' }));
+    const rowsBefore = s.rows();
+    expect(await undoBulkAction({}, formData({}))).toEqual({ error: BULK_UNDO_STALE_ERROR });
+    expect(s.rows()).toEqual(rowsBefore);
+  });
+
+  it('refuses a cross-origin post before anything else', async () => {
+    const s = reviewSetup();
+    await bulkTransferAction({}, formData({ ids: s.fuel.join(','), isTransfer: '1' }));
+    sameOrigin.value = false;
+    expect(await undoBulkAction({}, formData({}))).toEqual({ error: CROSS_ORIGIN_ERROR });
+    expect(lastBulkUndo(s.alex, ACTED)).not.toBeNull();
+  });
+
+  it('a change too large to record says so and drops the older record', async () => {
+    const s = reviewSetup();
+    await bulkTransferAction({}, formData({ ids: s.fuel.join(','), isTransfer: '1' }));
+    const many: number[] = [];
+    for (let i = 0; i <= BULK_UNDO_MAX_ROWS; i += 1) many.push(s.add('HARBOUR MART', -100, '2026-03-01'));
+
+    const result = await setAttributionAction({}, formData({ ids: many.join(','), attributedUserId: String(s.sam), bulk: '1' }));
+    expect(result.message).toBe(`Attribution updated for ${BULK_UNDO_MAX_ROWS + 1} transactions. This change is too large to undo.`);
+    expect(lastBulkUndo(s.alex, ACTED)).toBeNull();
   });
 });

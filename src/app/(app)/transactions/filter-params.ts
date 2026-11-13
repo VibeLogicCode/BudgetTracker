@@ -75,9 +75,15 @@ export function readDirection(raw: string | undefined): SortDirection {
  * exactly as `transfers`/`queue`/`uncat` already behave. One accepted value, not a boolean flag:
  * "grouped by category" is one of several groupings this page could grow (by merchant, by
  * account), and `?group=1` would have to be re-spelled the day a second one lands.
+ *
+ * v1.62.0 (plan item 1): the second one landed. `?group=merchant` groups by merchant -- offered as
+ * the review queue's By merchant view, honoured (not advertised) in the ordinary list.
  */
-export function readGroupMode(params: TransactionParams): boolean {
-  return one(params, 'group') === 'category';
+export type GroupMode = 'category' | 'merchant';
+
+export function readGroupMode(params: TransactionParams): GroupMode | null {
+  const value = one(params, 'group');
+  return value === 'category' || value === 'merchant' ? value : null;
 }
 
 /** `?gpage=`. GROUP pagination, never row pagination -- see groupTransactionsByCategory's own doc

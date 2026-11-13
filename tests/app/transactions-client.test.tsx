@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TransactionsClient } from '@/app/(app)/transactions/transactions-client';
 import { assignToBillAction, createRulesFromRowAction, deleteTransactionAction, previewAlwaysAskAction, previewRowRuleAction, sendBackToReviewAction, setAlwaysAskAction, setCategoryAction } from '@/app/(app)/transactions/actions';
-import type { CategoryGroupPage, CategoryGroupRow, TransactionPage, TransactionRow } from '@/lib/transactions';
+import type { CategoryGroupPage, CategoryGroupRow, MerchantGroupPage, TransactionPage, TransactionRow } from '@/lib/transactions';
 import type { SplitRow } from '@/lib/splits';
 import type { WaitingSetAsideRow } from '@/lib/import/set-aside';
 
@@ -49,6 +49,9 @@ vi.mock('@/app/(app)/transactions/actions', () => ({
   // v1.61.0 item 4a: the Possible duplicates card's two choices.
   keepPossibleDuplicateAction: vi.fn(async () => ({})),
   dismissPossibleDuplicateAction: vi.fn(async () => ({})),
+  // v1.62.0: review by merchant and the Undo bar.
+  reviewMerchantGroupAction: vi.fn(async () => ({})),
+  undoBulkAction: vi.fn(async () => ({})),
 }));
 
 afterEach(() => {
@@ -5256,5 +5259,155 @@ describe('TransactionsClient — Always ask for rows like this', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Always ask' }));
     expect(await screen.findByRole('button', { name: 'Done' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /back to review/ })).toBeNull();
+  });
+});
+
+/**
+ * v1.62.0 (plan items 1 and 3), the client half: the By merchant view, its Create a rule opener, the
+ * Undo bar and the bulk Person form's `bulk=1`. What the page hands over is asserted in
+ * tests/app/transactions-page.test.tsx, and the group card itself in tests/components/MerchantGroups.test.tsx.
+ */
+describe('v1.62.0: review by merchant and the Undo bar', () => {
+  const NEWEST: TransactionRow = {
+    id: 903,
+    date: '2026-03-14',
+    accountId: 1,
+    accountName: 'Joint Chequing',
+    rawDescription: 'MAPLE GROCER',
+    displayDescription: null,
+    displaySource: null,
+    normalizedMerchant: 'MAPLE GROCER',
+    amountCents: -6340,
+    categoryId: null,
+    categoryName: null,
+    source: 'none',
+    confidence: null,
+    isTransfer: false,
+    attributedUserId: null,
+    attributedUserName: null,
+    notes: null,
+    importId: null,
+  };
+
+  function merchantPage(overrides: Partial<MerchantGroupPage> = {}): MerchantGroupPage {
+    return {
+      groups: [
+        {
+          merchant: 'MAPLE GROCER',
+          displayName: 'MAPLE GROCER',
+          count: 3,
+          totalCents: -12362,
+          firstDate: '2026-03-02',
+          lastDate: '2026-03-14',
+          guessCategoryId: 42,
+          newest: NEWEST,
+          preview: [
+            { id: 903, date: '2026-03-14', description: 'MAPLE GROCER', amountCents: -6340 },
+            { id: 902, date: '2026-03-09', description: 'MAPLE GROCER', amountCents: -1805 },
+            { id: 901, date: '2026-03-02', description: 'MAPLE GROCER', amountCents: -4217 },
+          ],
+        },
+      ],
+      page: 1,
+      pageSize: 25,
+      pageCount: 1,
+      groupCount: 1,
+      totalCount: 3,
+      ...overrides,
+    };
+  }
+
+  function renderMerchants(reviewMode: boolean) {
+    return render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1 })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={CATEGORIES}
+        people={[{ id: 7, name: 'Sam' }]}
+        today="2026-03-14"
+        reviewMode={reviewMode}
+        merchantGroups={merchantPage()}
+        currentQuery={reviewMode ? 'review=1&group=merchant' : 'group=merchant'}
+      />,
+    );
+  }
+
+  it('in review mode the View pill offers List and By merchant, and By merchant is the one shown', () => {
+    const { container } = renderMerchants(true);
+    const nav = screen.getByRole('navigation', { name: 'How to show the transactions' });
+    expect(within(nav).getAllByRole('link').map((link) => link.textContent)).toEqual(['List', 'By merchant']);
+    expect(within(nav).getByRole('link', { name: 'By merchant' }).getAttribute('aria-current')).toBe('page');
+    expect(container.querySelectorAll('[data-merchant-group]')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'File all 3 (MAPLE GROCER)' })).toBeTruthy();
+    // The per-row list is not rendered beside it.
+    expect(container.querySelector('ul[data-transaction-cards]')).toBeNull();
+  });
+
+  it('outside review mode a hand-typed ?group=merchant is a read-only summary', () => {
+    const { container } = renderMerchants(false);
+    expect(container.querySelectorAll('[data-merchant-group]')).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: /^File all/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Mark recurring/ })).toBeNull();
+  });
+
+  it("Create a rule on a group card opens the row menu's rule dialog for the group's newest row", () => {
+    renderMerchants(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Create a rule… (MAPLE GROCER)' }));
+    const dialog = screen.getByRole('dialog', { name: 'Rule for "MAPLE GROCER"' });
+    const form = within(dialog).getByTestId('create-rule-form') as HTMLFormElement;
+    expect((form.querySelector('input[name="normalizedMerchant"]') as HTMLInputElement).value).toBe('MAPLE GROCER');
+    expect(within(dialog).getByRole('combobox', { name: 'When the amount is' })).toBeTruthy();
+    expect((form.querySelector('select[name="amountMode"] option[value="about"]') as HTMLOptionElement).textContent).toBe('About $63.40');
+  });
+
+  it('shows the Undo bar with its label and time above the bulk toolbar, and nothing without an offer', () => {
+    const { container, unmount } = render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1 })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={[]}
+        people={[{ id: 7, name: 'Sam' }]}
+        today="2026-03-14"
+        undo={{ label: 'Categorized 12 transactions as Groceries.', until: '14:32' }}
+      />,
+    );
+    const bar = container.querySelector('[data-undo-bar]') as HTMLElement;
+    expect(bar.textContent).toContain('Categorized 12 transactions as Groceries.');
+    expect(bar.textContent).toContain('Until 14:32.');
+    fireEvent.click(rowScope().getByLabelText('Select transaction 1'));
+    const toolbar = screen.getByText('1 selected').parentElement as HTMLElement;
+    expect(bar.compareDocumentPosition(toolbar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    unmount();
+
+    const without = render(
+      <TransactionsClient page={pageWithRow({ id: 1 })} accounts={[]} categories={[]} people={[]} today="2026-03-14" />,
+    );
+    expect(without.container.querySelector('[data-undo-bar]')).toBeNull();
+  });
+
+  it("the bulk bar's Person form posts bulk=1, and the per-row picker does not", async () => {
+    const { setAttributionAction } = await import('@/app/(app)/transactions/actions');
+    const spy = vi.mocked(setAttributionAction);
+    spy.mockClear();
+    render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1 })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={[]}
+        people={[{ id: 7, name: 'Sam' }]}
+        today="2026-03-14"
+      />,
+    );
+    fireEvent.click(rowScope().getByLabelText('Select transaction 1'));
+    fireEvent.submit(screen.getByRole('button', { name: 'Attribute' }).closest('form') as HTMLFormElement);
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    const posted = spy.mock.calls.at(-1)![1] as FormData;
+    expect(posted.get('bulk')).toBe('1');
+    expect(posted.get('ids')).toBe('1');
+
+    spy.mockClear();
+    fireEvent.change(rowScope().getByLabelText('Person for transaction 1'), { target: { value: '7' } });
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    expect((spy.mock.calls.at(-1)![1] as FormData).get('bulk')).toBeNull();
   });
 });
