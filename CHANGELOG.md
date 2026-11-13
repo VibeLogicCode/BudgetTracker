@@ -21,6 +21,27 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.61.0] - 2026-11-12
+
+Migration 0031. Every transaction now records how it arrived (typed in, CSV, QFX/OFX or bank sync);
+existing rows are labelled from what the data already shows.
+
+### Added
+
+- Possible duplicates: a row with the same account and amount within 3 days of a row that came in
+  another way (for example one you typed in, then the bank brought) is caught. The import preview
+  lists them with a Leave out tick; bank sync and batch import hold them in Needs review, where
+  Keep both or Delete this one decides. Held rows count in no figure until then.
+- Delete one imported row: an admin or the row's owner can delete a single row from a statement or
+  bank sync. It is audited, and importing the same file again leaves it out.
+
+### Changed
+
+- Linking an account to bank sync first shows how many rows already cover the period and starts
+  the first sync the day after the newest imported row, with a date you can change. An account
+  linked to an existing connection now gets its full first window instead of only the last few
+  days.
+
 ## [1.60.1] - 2026-11-12
 
 ### Security
