@@ -2,6 +2,8 @@
 import { describe, it, expect, afterAll, afterEach, vi } from 'vitest';
 import { render } from '@testing-library/react';
 import { currentMonth } from '@/lib/dates';
+import { monthCheckIn } from '@/lib/month-checkin';
+import type { BudgetPredictions } from '@/lib/predict/suggest';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 
 /**
@@ -20,13 +22,24 @@ import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } fr
  * render.
  */
 
-const capturedProps = vi.hoisted(() => ({ selectedPersonId: undefined as number | null | undefined }));
+const capturedProps = vi.hoisted(() => ({
+  selectedPersonId: undefined as number | null | undefined,
+  predictions: undefined as unknown,
+}));
 vi.mock('@/app/(app)/budgets/budgets-client', () => ({
-  BudgetsClient: (props: { selectedPersonId?: number | null }) => {
+  BudgetsClient: (props: { selectedPersonId?: number | null; predictions?: unknown }) => {
     capturedProps.selectedPersonId = props.selectedPersonId;
+    capturedProps.predictions = props.predictions;
     return null;
   },
 }));
+
+// v1.62.0: every month check-in the page computes, to prove a self viewer's page computes only
+// their own -- the real function still runs.
+vi.mock('@/lib/month-checkin', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/month-checkin')>();
+  return { ...actual, monthCheckIn: vi.fn(actual.monthCheckIn) };
+});
 
 const currentUser = vi.hoisted(() => ({
   value: {
@@ -44,6 +57,8 @@ vi.mock('@/lib/auth/session', () => ({
 
 afterEach(() => {
   capturedProps.selectedPersonId = undefined;
+  capturedProps.predictions = undefined;
+  vi.mocked(monthCheckIn).mockClear();
 });
 
 // Pin Date (only) so a run that crosses local midnight or a month end cannot disagree with itself.
@@ -107,5 +122,55 @@ describe('BudgetsPage — v1.21.0 item 1: reading and validating `?person=`', ()
     // be used to reach it even so.
     render(await BudgetsPage({ searchParams: Promise.resolve({ person: String(adultId), month: currentMonth() }) }));
     expect(capturedProps.selectedPersonId).toBe(null);
+  });
+});
+
+describe('BudgetsPage — v1.62.0: one month check-in per rendered section', () => {
+  let t: TestDb | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  function setup() {
+    t = createSeededTestDb();
+    const alexId = insertTestUser(t.db, { name: 'Alex', username: 'alex', role: 'admin' });
+    const samId = insertTestUser(t.db, { name: 'Sam', username: 'sam', role: 'member' });
+    insertTestAccount(t.db, { name: 'Chequing', ownerUserId: alexId });
+    return { alexId, samId };
+  }
+
+  const calls = () => vi.mocked(monthCheckIn).mock.calls.map(([input]) => [input.scope, input.userId]);
+
+  it('a household viewer computes the household and each person', async () => {
+    const { alexId, samId } = setup();
+    currentUser.value = { id: alexId, name: 'Alex', username: 'alex', role: 'admin', visibility: 'household' };
+    const { default: BudgetsPage } = await import('@/app/(app)/budgets/page');
+    render(await BudgetsPage({ searchParams: Promise.resolve({}) }));
+    expect(calls()).toEqual([
+      ['household', null],
+      ['personal', alexId],
+      ['personal', samId],
+    ]);
+  });
+
+  it('a self viewer computes only their own section: no household check-in, in the props or anywhere', async () => {
+    const { alexId, samId } = setup();
+    currentUser.value = { id: samId, name: 'Sam', username: 'sam', role: 'member', visibility: 'self' };
+    const { default: BudgetsPage } = await import('@/app/(app)/budgets/page');
+    render(await BudgetsPage({ searchParams: Promise.resolve({ person: String(alexId) }) }));
+    expect(calls()).toEqual([['personal', samId]]);
+    const predictions = capturedProps.predictions as BudgetPredictions;
+    expect(predictions.household.projections).toEqual([]);
+    expect(predictions.personal.map((entry) => entry.userId)).toEqual([samId]);
+  });
+
+  it('a past month computes none', async () => {
+    const { alexId } = setup();
+    currentUser.value = { id: alexId, name: 'Alex', username: 'alex', role: 'admin', visibility: 'household' };
+    const { default: BudgetsPage } = await import('@/app/(app)/budgets/page');
+    render(await BudgetsPage({ searchParams: Promise.resolve({ month: '2026-01' }) }));
+    expect(calls()).toEqual([]);
+    expect(capturedProps.predictions).toBeNull();
   });
 });

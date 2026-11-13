@@ -90,7 +90,8 @@ const SUGGESTION: CategorySuggestion = {
 function predictionsWith(over: Partial<BudgetPredictions> = {}): BudgetPredictions {
   return {
     monthsUsed: 6,
-    dayOfMonth: 12,
+    checkInMonths: 3,
+    recurringLine: null,
     household: { suggestions: [], projections: [], noAttribution: false },
     personal: [],
     ...over,
@@ -178,8 +179,14 @@ describe('BudgetsClient — review finding 2: archived rows are read-only', () =
 
   it('review LOW cleanup: sectionFrom gives an archived row no projection entry even though it still carries a limit and spend', () => {
     const archived = makeRow({ categoryId: 42, isArchived: true, limitCents: 20000, spentCents: 5000 });
-    const { projections } = sectionFrom({ months: [], byCategory: new Map() }, [archived], 15, 30);
-    expect(projections.some((entry) => entry.categoryId === 42)).toBe(false);
+    const live = makeRow({ categoryId: 43, limitCents: 20000, spentCents: 5000 });
+    const checkIn = { spentCents: 5000, dueCents: 0, everydayCents: 4000, projectedCents: 9000 };
+    const checkIns = new Map([
+      [42, checkIn],
+      [43, checkIn],
+    ]);
+    const { projections } = sectionFrom({ months: [], byCategory: new Map() }, [archived, live], checkIns);
+    expect(projections).toEqual([{ categoryId: 43, projectedCents: 9000 }]);
   });
 
   it('still renders an editable limit form for a non-archived row, behind Edit limits', () => {
@@ -387,24 +394,86 @@ describe('MUST-14.3 to MUST-14.6: the predictive controls', () => {
     expect(Array.from(container.querySelectorAll('button')).some((el) => el.textContent?.startsWith('Use '))).toBe(false);
   });
 
-  it('MUST-14.4: the projection line appears on the card, with its assumption in the title', () => {
+  it('v1.62.0: the card reads "Heading for", in the warning colour past the limit, with nothing in a title', () => {
     const { getByText } = renderBudgets(
       predictionsWith({
         household: { suggestions: [], projections: [{ categoryId: 1, projectedCents: 105900 }], noAttribution: false },
       }),
     );
-    const line = getByText('On pace for $1,059.00');
-    expect(line.getAttribute('title')).toBe('Assumes the rest of the month looks like the 12 days so far.');
+    const line = getByText('Heading for $1,059.00');
+    expect(line.getAttribute('title')).toBeNull();
+    // The row's limit is $200.00, so $1,059.00 is past it.
+    expect(line.className).toContain('text-warning');
   });
 
-  it('MUST-15.3: before the seventh there is no projection line and no placeholder', () => {
-    // The page produces no projections at all before day 7, because projectMonthEnd returns
-    // null. dayOfMonth is set to match, so this test fails if the card ever renders a dash or
-    // an empty pace line rather than nothing.
-    const { container } = renderBudgets(
-      predictionsWith({ dayOfMonth: 3, household: { suggestions: [], projections: [], noAttribution: false } }),
+  it('v1.62.0: a heading line inside the limit carries no warning colour', () => {
+    const { getByText } = renderBudgets(
+      predictionsWith({
+        household: { suggestions: [], projections: [{ categoryId: 1, projectedCents: 18000 }], noAttribution: false },
+      }),
     );
+    expect(getByText('Heading for $180.00').className).not.toContain('text-warning');
+  });
+
+  it('v1.62.0: with no check-in for a row there is no heading line and no placeholder', () => {
+    const { container } = renderBudgets(predictionsWith({ household: { suggestions: [], projections: [], noAttribution: false } }));
+    expect(container.textContent).not.toContain('Heading for');
     expect(container.textContent).not.toContain('On pace for');
+  });
+
+  it('v1.62.0: one visible sentence says what Heading for counts, naming the months it read', () => {
+    const { getByText, rerender } = renderBudgets(predictionsWith());
+    const sentence = getByText(
+      'Where each budget is heading is what you have spent so far, plus bills and recurring charges still due this month, plus what you usually spend in the rest of the month over the last 3 full months.',
+    );
+    expect(sentence.getAttribute('title')).toBeNull();
+    expect(sentence.closest('details')).toBeNull();
+    rerender(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[makeRow()]}
+        householdTotals={{ budgetedLimitCents: 20000, budgetedSpentCents: 5000, totalSpentCents: 5000 }}
+        personal={[]}
+        predictions={predictionsWith({ checkInMonths: 1 })}
+        savingsProgress={null}
+      />,
+    );
+    expect(screen.getByText(/in the rest of the month over the last full month\.$/)).toBeTruthy();
+  });
+
+  it('v1.62.0: before the first full month the sentence says when the heading line appears', () => {
+    const { getByText, container } = renderBudgets(predictionsWith({ checkInMonths: 0 }));
+    expect(getByText('Where each budget is heading appears once there is a full month of history.')).toBeTruthy();
+    expect(container.textContent).not.toContain('Where each budget is heading is what');
+  });
+
+  it('plan item E4: Counting N recurring charges, and M more look recurring linked to Insights only when M > 0', () => {
+    const { container, rerender } = renderBudgets(predictionsWith({ recurringLine: { counted: 3, looks: 2 } }));
+    const line = container.querySelector('[data-recurring-count]');
+    expect(line?.textContent).toBe('Counting 3 recurring charges · 2 more look recurring');
+    expect(line?.querySelector('a')?.getAttribute('href')).toBe('/insights#sharper');
+    expect(line?.querySelector('a')?.textContent).toBe('2 more look recurring');
+
+    const again = (recurringLine: BudgetPredictions['recurringLine']) =>
+      rerender(
+        <BudgetsClient
+          month="2026-03"
+          currentUserId={1}
+          household={[makeRow()]}
+          householdTotals={{ budgetedLimitCents: 20000, budgetedSpentCents: 5000, totalSpentCents: 5000 }}
+          personal={[]}
+          predictions={predictionsWith({ recurringLine })}
+          savingsProgress={null}
+        />,
+      );
+    again({ counted: 1, looks: 0 });
+    expect(container.querySelector('[data-recurring-count]')?.textContent).toBe('Counting 1 recurring charge');
+    expect(container.querySelector('[data-recurring-count] a')).toBeNull();
+    again({ counted: 0, looks: 1 });
+    expect(container.querySelector('[data-recurring-count]')?.textContent).toBe('Counting no recurring charges · 1 more looks recurring');
+    again(null);
+    expect(container.querySelector('[data-recurring-count]')).toBeNull();
   });
 
   it('MUST-14.5: the section gains an apply-all button with its hint', () => {
@@ -461,23 +530,12 @@ describe('MUST-14.3 to MUST-14.6: the predictive controls', () => {
     expect(Array.from(container.querySelectorAll('button')).some((el) => el.textContent?.startsWith('Use '))).toBe(false);
   });
 
-  it('MUST-14.1: a past month renders no Use button and no pace line', () => {
+  it('MUST-14.1: a past month renders no Use button, no heading line and no check-in sentence', () => {
     const { container } = renderBudgets(null);
     openEditLimits(container);
     expect(Array.from(container.querySelectorAll('button')).some((el) => el.textContent?.startsWith('Use '))).toBe(false);
-    expect(container.textContent).not.toContain('On pace for');
-  });
-
-  // MUST-15.3 used to be a shared <th title=...> column header -- there is no shared column
-  // header in a card grid (ruling D7), so the same explanation now rides on each card's OWN
-  // pace line instead, which is strictly more specific (it already names the exact day count,
-  // where the old header's title was one generic sentence for the whole table).
-  it('MUST-15.3: the pace line carries its own explanation, now per card', () => {
-    const { container } = renderBudgets(
-      predictionsWith({ household: { suggestions: [], projections: [{ categoryId: 1, projectedCents: 78000 }], noAttribution: false } }),
-    );
-    const span = Array.from(container.querySelectorAll('span')).find((el) => el.textContent === 'On pace for $780.00');
-    expect(span?.getAttribute('title')).toBe('Assumes the rest of the month looks like the 12 days so far.');
+    expect(container.textContent).not.toContain('Heading for');
+    expect(container.textContent).not.toContain('Where each budget is heading');
   });
 });
 

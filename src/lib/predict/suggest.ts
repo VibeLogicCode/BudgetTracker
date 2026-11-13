@@ -117,6 +117,7 @@ export function suggestBudget(input: {
 /** One section's predictive props. The Budgets page builds these; the client renders them. */
 export interface SectionPredictions {
   suggestions: CategorySuggestion[];
+  /** v1.62.0: the month check-in per budget row (src/lib/month-checkin.ts), read as "Heading for". */
   projections: { categoryId: number; projectedCents: number }[];
   /** MUST-15.2: this personal series is entirely zero while the household one is not. */
   noAttribution: boolean;
@@ -125,8 +126,18 @@ export interface SectionPredictions {
 export interface BudgetPredictions {
   /** MUST-15.1: the clipped window length, which drives the three-months sentence. */
   monthsUsed: number;
-  /** MUST-15.3: the day of the month in the app's TZ. */
-  dayOfMonth: number;
+  /**
+   * v1.62.0: the complete months the month check-in read (0 to CHECKIN_HISTORY_MONTHS). Zero means
+   * no heading line yet, and the page says it appears once there is a full month of history.
+   */
+  checkInMonths: number;
+  /**
+   * v1.62.0 (plan item E4): "Counting N recurring charges · M more look recurring" for the grid on
+   * screen (the household, the selected person, or a self viewer's own), or null when there is
+   * nothing to say. Shape of RecurringCountLine in src/lib/month-checkin.ts, kept here so the
+   * client never imports that server module.
+   */
+  recurringLine: { counted: number; looks: number } | null;
   household: SectionPredictions;
   personal: { userId: number; predictions: SectionPredictions }[];
 }

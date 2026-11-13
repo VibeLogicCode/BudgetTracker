@@ -26,6 +26,13 @@ describe('MUST-4.1 to MUST-4.5: historyMonths', () => {
     expect(historyMonths({ targetMonth: '2026-09', firstDataMonth: '2026-09' })).toEqual([]);
   });
 
+  it('v1.62.0: takes a shorter count through the same rules, for the month check-in', () => {
+    expect(historyMonths({ targetMonth: '2026-03', firstDataMonth: '2020-01', count: 3 })).toEqual(['2025-12', '2026-01', '2026-02']);
+    expect(historyMonths({ targetMonth: '2026-03', firstDataMonth: '2026-02', count: 3 })).toEqual(['2026-02']);
+    expect(historyMonths({ targetMonth: '2026-03', firstDataMonth: '2026-03', count: 3 })).toEqual([]);
+    expect(historyMonths({ targetMonth: '2026-03', firstDataMonth: '2020-01', count: 0 })).toEqual([]);
+  });
+
   it('crosses a year boundary', () => {
     expect(historyMonths({ targetMonth: '2026-01', firstDataMonth: '2020-01' })).toEqual([
       '2025-07',

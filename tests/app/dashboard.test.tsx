@@ -2338,3 +2338,143 @@ describe('DashboardPage — v1.60.0: the money figures', () => {
     });
   });
 });
+
+/**
+ * v1.62.0, the month check-in on the Spent tile and the keep line on the Net tile. Today is
+ * 2026-03-07 (the clock is moved inside these tests and put back afterwards). The oldest row sits
+ * in a partial November, so the check-in reads December to February, and typical income reads the
+ * same three complete months.
+ *
+ * Alex pays rent of $2,000.00 on the 1st of every month and is paid $5,000.00 on the 15th. Sam
+ * buys $300.00 of groceries on the 20th of each past month and $100.00 so far in March. Alex also
+ * has a $15.00 subscription due on March 20th.
+ */
+describe('DashboardPage — v1.62.0: where the month is heading, and what it keeps', () => {
+  let t: TestDb | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+    vi.setSystemTime(new Date('2026-03-18T16:00:00.000Z'));
+  });
+
+  async function setup(opts: { firstRow?: string; marchPay?: number } = {}) {
+    vi.setSystemTime(new Date('2026-03-07T16:00:00.000Z'));
+    t = createTestDb();
+    const alex = await createUser({ name: 'Alex', username: 'alex', password: 'correct horse battery', role: 'admin' });
+    const sam = await createUser({ name: 'Sam', username: 'sam', password: 'correct horse battery', role: 'member' });
+    const accountId = createAccount({ name: 'Chequing', type: 'chequing', ownerUserId: alex.id });
+    const rent = createCategory({ name: 'Rent', parentId: null });
+    const groceries = createCategory({ name: 'Groceries', parentId: null });
+    const pay = createCategory({ name: 'Pay', parentId: null, isIncome: true });
+    const add = (date: string, description: string, amountCents: number, categoryId: number | null, person: number) =>
+      createManualTransaction({
+        accountId,
+        date,
+        description,
+        amountCents,
+        categoryId,
+        attributedUserId: person,
+        userId: alex.id,
+        actorRole: 'admin',
+      });
+    add(opts.firstRow ?? '2025-11-20', 'CORNER CAFE', -1234, groceries, alex.id);
+    for (const month of ['2025-12', '2026-01', '2026-02']) {
+      if (`${month}-01` > (opts.firstRow ?? '')) add(`${month}-01`, 'CEDAR PROPERTY MGMT', -200000, rent, alex.id);
+      if (`${month}-15` > (opts.firstRow ?? '')) add(`${month}-15`, 'PAYROLL', 500000, pay, alex.id);
+      if (`${month}-20` > (opts.firstRow ?? '')) add(`${month}-20`, 'MAPLE GROCER', -30000, groceries, sam.id);
+    }
+    add('2026-03-01', 'CEDAR PROPERTY MGMT', -200000, rent, alex.id);
+    add('2026-03-03', 'MAPLE GROCER', -10000, groceries, sam.id);
+    if (opts.marchPay !== undefined) add('2026-03-03', 'PAYROLL', opts.marchPay, pay, alex.id);
+    const typeId = t.db.get<{ id: number }>(sql`
+      insert into warranty_item_types (name, kind, is_subscription, created_at)
+      values ('Streaming plan', 'subscription', 1, ${nowIso()}) returning id`).id;
+    t.db.run(sql`
+      insert into warranty_items (name, purchase_date, is_lifetime, owner_user_id, type_id, billing_cycle, billing_amount_cents, created_at, updated_at)
+      values ('Alex streaming', '2026-01-20', 0, ${alex.id}, ${typeId}, 'monthly', 1500, ${nowIso()}, ${nowIso()})`);
+    return { alexId: alex.id, samId: sam.id };
+  }
+
+  async function renderAs(viewer: { id: number; name: string; role: 'admin' | 'member'; visibility: 'household' | 'self' }, params: Record<string, string> = {}) {
+    currentUser.value = { ...viewer, username: viewer.name.toLowerCase() };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    return render(await DashboardPage({ searchParams: Promise.resolve(params) }));
+  }
+
+  const text = (container: HTMLElement, selector: string) => container.querySelector(selector)?.textContent ?? null;
+
+  it('the household: spent, plus the bill still due, plus the usual rest of the month', async () => {
+    const { alexId } = await setup();
+    const { container } = await renderAs({ id: alexId, name: 'Alex', role: 'admin', visibility: 'household' });
+    // $2,100.00 spent + $15.00 due + $300.00 (the median stretch after the 7th: Sam's groceries).
+    // Rent lands on the 1st, so it is counted once, not projected again.
+    expect(text(container, '[data-check-in]')).toBe('Heading for $2,415.00 by Mar 31.');
+    const spentTile = screen.getByText('Spent this month').closest('div');
+    expect(spentTile?.textContent).toContain(
+      'Spent so far, plus bills and recurring charges still due, plus your usual spending for the rest of the month.',
+    );
+  });
+
+  it('the keep line with no income in yet: typical income less where spend is heading, and no "outran" verdict', async () => {
+    const { alexId } = await setup();
+    const { container } = await renderAs({ id: alexId, name: 'Alex', role: 'admin', visibility: 'household' });
+    expect(text(container, '[data-keep-line]')).toBe('On track to keep about $2,585.00. Typical income $5,000.00, $0.00 in so far.');
+    const netTile = screen.getByText('Net this month').closest('div');
+    // Net is -$2,100.00 on the 7th, before the pay lands; the month is still on track to keep money.
+    expect(netTile?.textContent).toContain('-$2,100.00');
+    expect(netTile?.textContent).not.toContain('Spending outran income');
+    expect(container.querySelector('[data-month-framing]')).toBeNull();
+  });
+
+  it('the keep line with more in than typical uses what came in', async () => {
+    const { alexId } = await setup({ marchPay: 600000 });
+    const { container } = await renderAs({ id: alexId, name: 'Alex', role: 'admin', visibility: 'household' });
+    expect(text(container, '[data-keep-line]')).toBe('On track to keep about $3,585.00. Typical income $5,000.00, $6,000.00 in so far.');
+    expect(screen.getByText('Net this month').closest('div')?.textContent).not.toContain('Kept, after everything went out');
+  });
+
+  it("Sam's pill reads Sam's own spend and history, and keeps the outran sentence when the keep line is negative", async () => {
+    const { alexId, samId } = await setup();
+    const { container } = await renderAs({ id: alexId, name: 'Alex', role: 'admin', visibility: 'household' }, { person: String(samId) });
+    // $100.00 spent + nothing due (the subscription is Alex's) + Sam's usual $300.00.
+    expect(text(container, '[data-check-in]')).toBe('Heading for $400.00 by Mar 31.');
+    expect(text(container, '[data-keep-line]')).toBe(
+      'On track to spend about $400.00 more than comes in. Typical income $0.00, $0.00 in so far.',
+    );
+    expect(screen.getByText('Net this month').closest('div')?.textContent).toContain('Spending outran income');
+  });
+
+  it("a self viewer reads only their own bills and history, whatever the URL asks for", async () => {
+    const { alexId, samId } = await setup();
+    const { container } = await renderAs({ id: samId, name: 'Sam', role: 'member', visibility: 'self' }, { person: String(alexId) });
+    expect(text(container, '[data-check-in]')).toBe('Heading for $400.00 by Mar 31.');
+    expect(container.textContent).not.toContain('$2,415.00');
+  });
+
+  it('hides the keep line when typical income is not known yet, and keeps the check-in', async () => {
+    // The first statement starts on January 20th: February is the one complete month, too few
+    // for typical income.
+    const { alexId } = await setup({ firstRow: '2026-01-20' });
+    const { container } = await renderAs({ id: alexId, name: 'Alex', role: 'admin', visibility: 'household' });
+    expect(container.querySelector('[data-check-in]')).not.toBeNull();
+    expect(container.querySelector('[data-keep-line]')).toBeNull();
+  });
+
+  it('shows neither line for a past month', async () => {
+    const { alexId } = await setup();
+    const { container } = await renderAs({ id: alexId, name: 'Alex', role: 'admin', visibility: 'household' }, { month: '2026-02' });
+    expect(container.querySelector('[data-check-in]')).toBeNull();
+    expect(container.querySelector('[data-keep-line]')).toBeNull();
+    expect(container.querySelector('[data-recurring-count]')).toBeNull();
+  });
+
+  it('plan item E4: counts the charge still due and links the rhythms nobody marked', async () => {
+    const { alexId } = await setup();
+    const { container } = await renderAs({ id: alexId, name: 'Alex', role: 'admin', visibility: 'household' });
+    // Due: Alex's subscription. Looks recurring: the rent on the 1st, which nobody marked. The pay
+    // is money in, and March's early groceries broke that rhythm.
+    const line = container.querySelector('[data-recurring-count]');
+    expect(line?.textContent).toBe('Counting 1 recurring charge · 1 more looks recurring');
+    expect(line?.querySelector('a')?.getAttribute('href')).toBe('/insights#sharper');
+  });
+});

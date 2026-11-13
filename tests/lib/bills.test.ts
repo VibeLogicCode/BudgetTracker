@@ -239,7 +239,7 @@ describe('upcomingBills — clock-free', () => {
 });
 
 describe('safeToSpend', () => {
-  it('computes budgetedRemainingCents, a projection and billsDueCents together on one fixture', () => {
+  it('computes budgetedRemainingCents and billsDueCents together on one fixture', () => {
     const { db, types, item, spend } = setup();
     const food = categoryIdByName(db, 'Food');
     const groceries = categoryIdByName(db, 'Groceries');
@@ -261,11 +261,12 @@ describe('safeToSpend', () => {
     const result = safeToSpend({ month: '2026-03', today: '2026-03-20' , viewer: HOUSEHOLD });
 
     expect(result.budgetedRemainingCents).toBe(10000);
-    expect(result.projectedSpendCents).toBe(62000);
     expect(result.billsDueCents).toBe(121500);
+    // v1.62.0: the straight-line pace nothing displayed is gone; the month check-in replaced it.
+    expect(Object.keys(result).sort()).toEqual(['billsDueCents', 'budgetedRemainingCents']);
   });
 
-  it('passes through projectMonthEnd’s null before day 7, without touching the other fields', () => {
+  it('reads the same before day 7 as after it', () => {
     const { db, item, types, spend } = setup();
     const food = categoryIdByName(db, 'Food');
     const groceries = categoryIdByName(db, 'Groceries');
@@ -276,7 +277,6 @@ describe('safeToSpend', () => {
 
     const result = safeToSpend({ month: '2026-03', today: '2026-03-05' , viewer: HOUSEHOLD });
 
-    expect(result.projectedSpendCents).toBeNull();
     expect(result.budgetedRemainingCents).toBe(30000);
     expect(result.billsDueCents).toBe(0);
   });
@@ -425,6 +425,29 @@ describe('v1.13.0: bills take a viewer, and the sinking-fund reader', () => {
     expect(mine.map((bill) => bill.name)).toEqual(['Bike insurance']);
     const ours = upcomingBills({ today: '2026-08-27', days: 30, viewer: { id: adultId, role: 'admin', visibility: 'household' } });
     expect(ours).toHaveLength(2);
+  });
+
+  it('v1.62.0: ownerUserId narrows to one person, and a self viewer’s own scope still wins', () => {
+    current = createSeededTestDb();
+    const db = current.db;
+    const alex = insertTestUser(db, { name: 'Alex', username: 'alex' });
+    const sam = insertTestUser(db, { name: 'Sam', username: 'sam', role: 'member' });
+    const subType = insertItemType(db, 'subscription', 'Streaming');
+    insertItem(db, { ownerUserId: alex, typeId: subType, purchaseDate: '2026-01-01', billingCycle: 'monthly', billingAmountCents: 1500, name: 'STREAMBOX' });
+    insertItem(db, { ownerUserId: sam, typeId: subType, purchaseDate: '2026-01-01', billingCycle: 'monthly', billingAmountCents: 2500, name: 'Gym plan' });
+    const billType = insertItemType(db, 'bill', 'Phone bill');
+    const samBill = insertItem(db, { ownerUserId: sam, typeId: billType, purchaseDate: '2024-01-15', name: 'Sam phone' });
+    addInstallment({ itemId: samBill, dueDate: '2026-03-20', amountCents: 6200 });
+
+    const names = (bills: { name: string }[]) => bills.map((bill) => bill.name).sort();
+    const today = '2026-03-07';
+    expect(names(upcomingBills({ today, days: 30, viewer: HOUSEHOLD }))).toEqual(['Gym plan', 'STREAMBOX', 'Sam phone']);
+    expect(names(upcomingBills({ today, days: 30, ownerUserId: alex, viewer: HOUSEHOLD }))).toEqual(['STREAMBOX']);
+    expect(names(upcomingBills({ today, days: 30, ownerUserId: sam, viewer: HOUSEHOLD }))).toEqual(['Gym plan', 'Sam phone']);
+    // A self viewer asking for somebody else still reads only their own.
+    const samSelf: Viewer = { id: sam, role: 'member', visibility: 'self' };
+    expect(names(upcomingBills({ today, days: 30, ownerUserId: alex, viewer: samSelf }))).toEqual(['Gym plan', 'Sam phone']);
+    expect(names(upcomingBills({ today, days: 30, ownerUserId: null, viewer: samSelf }))).toEqual(['Gym plan', 'Sam phone']);
   });
 
   it('safeToSpend reads the PERSONAL budget scope for a self viewer (micro-ruling M8)', () => {

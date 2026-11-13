@@ -4,11 +4,13 @@ import { acceptsTransactions, listAccounts } from '@/lib/accounts';
 import { isSelfScoped, ownerScope } from '@/lib/auth/viewer';
 import { findUserById, listAttributablePeople } from '@/lib/auth/users';
 import { safeToSpend, upcomingBills } from '@/lib/bills';
+import { typicalIncomeFrom } from '@/lib/budget-income';
 import { budgetProgress, budgetTotals, uncategorizedSpend } from '@/lib/budgets';
 import { listCategories } from '@/lib/categories';
 import { reviewQueueCount } from '@/lib/categorize/engine';
-import { addMonths, isMonthKey, monthEnd, monthLabel, monthOf, monthStart, todayIso } from '@/lib/dates';
+import { addMonths, dayLabel, isMonthKey, monthEnd, monthLabel, monthOf, monthStart, todayIso } from '@/lib/dates';
 import { listGoals } from '@/lib/goals';
+import { monthCheckIn, recurringCountLine, type MonthCheckIn, type RecurringCountLine } from '@/lib/month-checkin';
 import { householdInsights } from '@/lib/insights';
 import { insightsHref } from '@/lib/insights-links';
 import { unreviewedRuleImports } from '@/lib/import/commit';
@@ -337,6 +339,42 @@ export default async function DashboardPage({
     viewer,
   ).totalCents;
 
+  /**
+   * v1.62.0, the month check-in (src/lib/month-checkin.ts): where this month is heading, from the
+   * Spent tile's own figure. The current month only. A person pill or a self viewer reads that
+   * person's own bills, charges and history; everyone else the household's. An explicit branch,
+   * not a scope ternary (tests/ops/budget-scope-branch).
+   */
+  let checkIn: MonthCheckIn | null = null;
+  if (isCurrentMonth) {
+    if (scopeUserId === null) {
+      checkIn = monthCheckIn({ month, today, scope: 'household', userId: null, rows, viewer, spentTotalCents: spentCents });
+    } else {
+      checkIn = monthCheckIn({ month, today, scope: 'personal', userId: scopeUserId, rows, viewer, spentTotalCents: spentCents });
+    }
+  }
+  const heading = checkIn?.total ?? null;
+  // Plan item E4: the quiet line under the check-in, for the same scope.
+  const recurringLine = recurringCountLine({ checkIn, today, ownerUserId: scopeUserId, viewer });
+
+  /**
+   * v1.62.0, the keep line on the Net tile (current month only): expected income less where spend
+   * is heading. Expected income is the larger of what has come in so far and typical income
+   * (src/lib/budget-income.ts, the last three complete months), never day-aligned: two paydays a
+   * day apart would otherwise be counted twice. Nothing when typical income is unknown (too little
+   * history) or there is no check-in. Same scope as every other figure here.
+   *
+   * Read off `trend` (the twelve months ending this one, this scope), so the keep line adds no
+   * cashflow read (v1.60.0 item 13c). The one difference from the Budgets income line's own
+   * 12-month lookback: a scope whose only row is exactly twelve months old reads as unknown here.
+   */
+  const typicalIncomeCents =
+    heading === null ? null : typicalIncomeFrom(trend.filter((row) => row.month < thisMonth)).typicalIncomeCents;
+  const keep =
+    heading === null || typicalIncomeCents === null
+      ? null
+      : { cents: Math.max(incomeCents, typicalIncomeCents) - heading.projectedCents, typicalIncomeCents };
+
   const budgetRows = rows.filter((row) => !row.isIncome && (row.limitCents !== null || row.spentCents !== 0));
   /** Of the rows this page actually draws -- see the budgets CardHeader below for why it says this. */
   const overBudgetCount = budgetRows.filter((row) => row.overBudget).length;
@@ -560,6 +598,23 @@ export default async function DashboardPage({
                   </Link>
                 </>
               ) : null}
+              {/* v1.62.0: the month check-in, and what it counts in plain words. */}
+              {heading !== null ? (
+                <>
+                  <br />
+                  <span data-check-in>{`Heading for ${formatCents(heading.projectedCents)} by ${dayLabel(monthEnd(month), today)}.`}</span>
+                  <br />
+                  <span className="text-xs text-subtle">
+                    Spent so far, plus bills and recurring charges still due, plus your usual spending for the rest of the month.
+                  </span>
+                  {recurringLine !== null ? (
+                    <>
+                      <br />
+                      <RecurringCountText line={recurringLine} />
+                    </>
+                  ) : null}
+                </>
+              ) : null}
             </>
           }
           // Item 1: spending UP is bad news, so goodWhenUp is false here -- the one tile in this
@@ -580,7 +635,8 @@ export default async function DashboardPage({
         />
       </div>
 
-      <MonthFramingNote netCents={netCents} history={trimmedTrend} month={month} />
+      {/* v1.62.0: a month on track to keep money is not framed as a losing one mid-month. */}
+      {keep !== null && keep.cents >= 0 ? null : <MonthFramingNote netCents={netCents} history={trimmedTrend} month={month} />}
 
       {/* The supporting numbers, unchanged: still cards, still a grid. They are deliberately NOT
           nested inside the band above -- a card inside a card is the one container mistake this
@@ -622,7 +678,20 @@ export default async function DashboardPage({
           */
           hint={
             <>
-              {netCents < 0 ? 'Spending outran income' : 'Kept, after everything went out'}
+              {/* v1.62.0: mid-month, a keep line that is not negative replaces the sentence about
+                  the month so far -- "outran" on the 3rd, before the pay lands, reads as a verdict. */}
+              {keep !== null && keep.cents >= 0 ? null : netCents < 0 ? 'Spending outran income' : 'Kept, after everything went out'}
+              {keep !== null ? (
+                <>
+                  {keep.cents >= 0 ? null : <br />}
+                  <span data-keep-line>
+                    {keep.cents >= 0
+                      ? `On track to keep about ${formatCents(keep.cents)}.`
+                      : `On track to spend about ${formatCents(-keep.cents)} more than comes in.`}{' '}
+                    {`Typical income ${formatCents(keep.typicalIncomeCents)}, ${formatCents(incomeCents)} in so far.`}
+                  </span>
+                </>
+              ) : null}
               {savings?.noSavingsAccount ? (
                 <>
                   <br />
@@ -1152,6 +1221,30 @@ function MonthFramingNote({
         </>
       )}
     </p>
+  );
+}
+
+/**
+ * v1.62.0 (plan item E4). "Counting N recurring charges · M more look recurring", under the check-in.
+ * The second half links to the Insights card that lists them, and only when there is one.
+ */
+function RecurringCountText({ line }: { line: RecurringCountLine }) {
+  const counted =
+    line.counted === 0
+      ? 'Counting no recurring charges'
+      : `Counting ${line.counted} recurring charge${line.counted === 1 ? '' : 's'}`;
+  return (
+    <span className="text-xs text-subtle" data-recurring-count>
+      {counted}
+      {line.looks > 0 ? (
+        <>
+          {' · '}
+          <Link href="/insights#sharper" className="underline hover:text-ink">
+            {line.looks} more {line.looks === 1 ? 'looks' : 'look'} recurring
+          </Link>
+        </>
+      ) : null}
+    </span>
   );
 }
 

@@ -7,7 +7,7 @@ import { HISTORY_MONTHS, SEASONAL_MIN_MONTHS } from '@/lib/predict/constants';
  */
 
 /**
- * MUST-4.1 / MUST-4.2 / MUST-4.5: the last HISTORY_MONTHS full calendar months ending
+ * MUST-4.1 / MUST-4.2 / MUST-4.5: the last HISTORY_MONTHS (or `count`) full calendar months ending
  * immediately before the target. The current, partial month is never in the window: a month
  * with eleven days in it is not a month, and including it would drag every median down at
  * the start of every month and up at the end of it.
@@ -16,9 +16,13 @@ import { HISTORY_MONTHS, SEASONAL_MIN_MONTHS } from '@/lib/predict/constants';
  * household's first data month. Without it every median on a new install is zero, because
  * the window would be padded with months the household did not exist for.
  */
-export function historyMonths(input: { targetMonth: string; firstDataMonth: string | null }): string[] {
+export function historyMonths(input: { targetMonth: string; firstDataMonth: string | null; count?: number }): string[] {
   if (input.firstDataMonth === null) return [];
-  const months = monthRange(addMonths(input.targetMonth, -HISTORY_MONTHS), addMonths(input.targetMonth, -1));
+  // v1.62.0: the month check-in reads a shorter window (CHECKIN_HISTORY_MONTHS) through the same
+  // rules -- full months only, ending before the target, clipped at the first data month.
+  const count = input.count ?? HISTORY_MONTHS;
+  if (count <= 0) return [];
+  const months = monthRange(addMonths(input.targetMonth, -count), addMonths(input.targetMonth, -1));
   return months.filter((month) => month >= input.firstDataMonth!);
 }
 

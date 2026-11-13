@@ -263,6 +263,7 @@ describe('ComingUpCard expected recurring charges', () => {
     typicalCents: 90_000,
     late: false,
     accountName: 'Travel Visa',
+    newestTransactionId: 1,
     ...over,
   });
   const bill: UpcomingBill = { itemId: 1, name: 'Streaming', kind: 'subscription', dueDate: '2026-08-26', amountCents: 7700, installmentId: 41, overdue: false };

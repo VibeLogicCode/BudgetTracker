@@ -24,7 +24,11 @@ export const SEASONAL_CLAMP_MAX_PCT = 200; // ratio ceiling, 2.0x
 export const SUGGESTION_FLOOR_CENTS = 500; // $5, below which no suggestion is offered
 export const SUGGESTION_CAP_MULTIPLE = 3; // never more than 3x the median
 
-// The pace projection (spec section 8)
+// The month check-in (v1.62.0, replacing the straight-line pace of spec section 8). The usual
+// rest-of-month spending is read from this many full months before the current one.
+export const CHECKIN_HISTORY_MONTHS = 3;
+// The pace alert and the digest's pace list only (MUST-9.6 condition 1). The page shows the
+// check-in from the 1st.
 export const PACE_MIN_DAY_OF_MONTH = 7;
 
 // The pace notification (spec section 9.2)

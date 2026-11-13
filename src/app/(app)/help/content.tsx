@@ -363,9 +363,11 @@ export const HELP_SECTIONS: HelpSection[] = [
         <P>
           Once there are three full calendar months of history, each category can also show a
           suggestion, which is the median of your own past months and nothing else. It is applied
-          only when you press. From the seventh of the month onward a budgeted category also shows
-          where it is heading if the rest of the month looks like the days so far. Both are
-          arithmetic on your own data; neither is a recommendation.
+          only when you press. Once there is one full month of history, a budgeted category also
+          shows where it is heading: what you have spent so far, plus bills and recurring charges
+          still due this month, plus what you usually spend in the rest of the month over the last 3
+          full months. A payment that always lands early in the month, like rent on the 1st, is not
+          counted again. Both are arithmetic on your own data; neither is a recommendation.
         </P>
         <P>
           Linking a category to a bill (on the bill&rsquo;s own page, under Contracts &amp;

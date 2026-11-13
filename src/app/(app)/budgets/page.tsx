@@ -5,11 +5,11 @@ import { sinkingFundsFor } from '@/lib/bills';
 import { budgetIncomeLine } from '@/lib/budget-income';
 import { budgetProgress, budgetTotals, rolloverStartMonth, uncategorizedSpend, type BudgetRow, type BudgetScope } from '@/lib/budgets';
 import { listCategories } from '@/lib/categories';
-import { currentMonth, isMonthKey, monthEnd, todayIso } from '@/lib/dates';
+import { currentMonth, isMonthKey, todayIso } from '@/lib/dates';
 import { readEnv } from '@/lib/env';
 import { flattenBudgetRows } from '@/lib/notify/evaluate/pace';
+import { monthCheckIn, recurringCountLine, type CheckIn } from '@/lib/month-checkin';
 import { isAllNoSpend, suggestionsFor, type ScopeSuggestions } from '@/lib/predict/history';
-import { projectMonthEnd } from '@/lib/predict/pace';
 import type { BudgetPredictions, CategorySuggestion, SectionPredictions } from '@/lib/predict/suggest';
 import { savingsProgress } from '@/lib/savings-target';
 import { BudgetsClient, type BudgetsIncome } from './budgets-client';
@@ -17,14 +17,14 @@ import { BudgetsClient, type BudgetsIncome } from './budgets-client';
 export const dynamic = 'force-dynamic';
 
 /**
- * MUST-8.7 and MUST-16.4: the projection reuses budgetProgress()'s own spentCents, so it adds
- * no query and can never disagree with the progress bar beside it.
+ * MUST-8.7: each card's "Heading for" is that section's month check-in (src/lib/month-checkin.ts),
+ * which starts from budgetProgress()'s own spentCents, so it can never disagree with the progress
+ * bar beside it. v1.62.0: `checkIns` replaces the straight-line pace's day and month length.
  */
 export function sectionFrom(
   scoped: ScopeSuggestions,
   rows: BudgetRow[],
-  dayOfMonth: number,
-  daysInMonth: number,
+  checkIns: ReadonlyMap<number, CheckIn>,
 ): SectionPredictions {
   const suggestions: CategorySuggestion[] = [];
   for (const [categoryId, result] of scoped.byCategory) {
@@ -37,9 +37,9 @@ export function sectionFrom(
     // line there would sit with nothing beside it.
     if (row.isArchived) continue;
     if (row.limitCents === null) continue;
-    const projectedCents = projectMonthEnd({ spentCents: row.spentCents, dayOfMonth, daysInMonth });
-    if (projectedCents === null) continue;
-    projections.push({ categoryId: row.categoryId, projectedCents });
+    const checkIn = checkIns.get(row.categoryId);
+    if (checkIn === undefined) continue;
+    projections.push({ categoryId: row.categoryId, projectedCents: checkIn.projectedCents });
   }
   return { suggestions, projections, noAttribution: false };
 }
@@ -113,8 +113,6 @@ export default async function BudgetsPage({
 
   const { tz } = readEnv();
   const today = todayIso(new Date(), tz);
-  const dayOfMonth = Number(today.slice(8, 10));
-  const daysInMonth = Number(monthEnd(month).slice(8, 10));
 
   /**
    * Ruling R11 / micro-ruling M9. READ-SIDE ONLY -- see sinkingFundsFor's own doc comment.
@@ -186,13 +184,40 @@ export default async function BudgetsPage({
     // though the Household card never renders them.
     const householdScope = selfScoped ? null : suggestionsFor({ targetMonth: month, scope: 'household', userId: null });
     const householdAllNoSpend = householdScope !== null && isAllNoSpend(householdScope.byCategory);
-    const personalSections = personal.map((person) => {
+    // v1.62.0: one month check-in per rendered section -- the household (never for a self viewer,
+    // ruling R2: no household figure is computed for them, the same gate as householdScope above)
+    // and each personal section, over that section's own rows.
+    const householdCheckIn =
+      household === null
+        ? null
+        : monthCheckIn({
+            month,
+            today,
+            scope: 'household',
+            userId: null,
+            rows: household,
+            viewer,
+            spentTotalCents: budgetTotals(household).totalSpentCents,
+          });
+    const personalCheckIns = personal.map((person) =>
+      monthCheckIn({
+        month,
+        today,
+        scope: 'personal',
+        userId: person.userId,
+        rows: person.rows,
+        viewer,
+        spentTotalCents: budgetTotals(person.rows).totalSpentCents,
+      }),
+    );
+    const noCheckIns = new Map<number, CheckIn>();
+    const personalSections = personal.map((person, index) => {
       const personalScope = suggestionsFor({ targetMonth: month, scope: 'personal', userId: person.userId });
       return {
         userId: person.userId,
         monthsUsed: personalScope.months.length,
         predictions: {
-          ...sectionFrom(personalScope, person.rows, dayOfMonth, daysInMonth),
+          ...sectionFrom(personalScope, person.rows, personalCheckIns[index]?.byCategory ?? noCheckIns),
           // MUST-15.2 and MUST-7.2: derived from the HISTORICAL series suggestionsFor()
           // already computed, not from this month's budgetProgress() snapshot. The current
           // month is excluded from that series by construction (historyMonths), so this
@@ -201,15 +226,24 @@ export default async function BudgetsPage({
         },
       };
     });
+    // Plan item E4: the line under the check-in follows the grid on screen -- a self viewer's own
+    // section, the selected person's, or the household's -- with that section's own check-in.
+    const lineUserId = ownerScope(viewer) ?? selectedPersonId;
+    const lineIndex = lineUserId === null ? -1 : personal.findIndex((person) => person.userId === lineUserId);
+    const lineCheckIn = lineUserId === null ? householdCheckIn : (personalCheckIns[lineIndex] ?? null);
+    const recurringLine = recurringCountLine({ checkIn: lineCheckIn, today, ownerUserId: lineUserId, viewer });
     predictions = {
       // A self viewer has no household scope to count months from, so their own personal
       // scope's month count stands in for it -- the same number that section's own
       // "three full calendar months" sentence is judged against.
       monthsUsed: householdScope !== null ? householdScope.months.length : (personalSections[0]?.monthsUsed ?? 0),
-      dayOfMonth,
+      // The check-in's window is household-wide (it starts after the first data month), so every
+      // section read the same number of months; whichever section was computed says how many.
+      checkInMonths: (householdCheckIn ?? personalCheckIns[0] ?? null)?.monthsUsed ?? 0,
+      recurringLine,
       household:
         householdScope !== null
-          ? sectionFrom(householdScope, household ?? [], dayOfMonth, daysInMonth)
+          ? sectionFrom(householdScope, household ?? [], householdCheckIn?.byCategory ?? noCheckIns)
           : { suggestions: [], projections: [], noAttribution: false },
       personal: personalSections.map(({ userId, predictions: sectionPredictions }) => ({ userId, predictions: sectionPredictions })),
     };

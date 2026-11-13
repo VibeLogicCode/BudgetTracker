@@ -332,7 +332,8 @@ describe('§10.2: the weekly digest', () => {
     expect(body).toContain('Coffee: $45 of $50, $5 left');
     // 2026-09-09: the pace projection, which used to be a message per category on a DAILY slot.
     expect(body).toContain('On pace to go over');
-    expect(body).toContain('Groceries: $300 of $500, on pace for $620');
+    expect(body).toContain('Groceries: $300 of $500, heading for $620');
+    expect(body).not.toContain('on pace for');
     // Between Over and Close: a projection landing past the limit is more use than a threshold
     // that has merely been touched.
     expect(body.indexOf('Over')).toBeLessThan(body.indexOf('On pace to go over'));
@@ -772,7 +773,8 @@ describe('spec section 9: the six predictive messages', () => {
     expect(subject).toBe('On pace to go over: Groceries (August 2026)');
     expect(body).toContain('Household Groceries budget for August 2026 is $600.00.');
     expect(body).toContain('You have spent $410.00 in 12 days.');
-    expect(body).toContain('the month ends near $1,059.00, about $459.00 over.');
+    expect(body).toContain('With what is still due and your usual spending, the month ends near $1,059.00, about $459.00 over.');
+    expect(body).not.toContain('At that rate');
   });
 
   it('budget_pace says "Your" for a personal budget', () => {

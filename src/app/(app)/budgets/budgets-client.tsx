@@ -212,12 +212,53 @@ function SavingsTargetControl({ month, progress }: { month: string; progress: Sa
   );
 }
 
+/**
+ * v1.62.0. The one visible sentence that says what each card's "Heading for" counts, and the quiet
+ * line under it (plan item E4). The window is the check-in's own (1 to 3 complete months), named
+ * as it is, so a household two months in is not told it is three.
+ */
+function CheckInSentence({ months, line }: { months: number; line: BudgetPredictions['recurringLine'] }) {
+  if (months === 0) {
+    return <p className="text-sm text-muted">Where each budget is heading appears once there is a full month of history.</p>;
+  }
+  const window = months === 1 ? 'the last full month' : `the last ${months} full months`;
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="text-sm text-muted">
+        Where each budget is heading is what you have spent so far, plus bills and recurring charges still due this month,
+        plus what you usually spend in the rest of the month over {window}.
+      </p>
+      {line !== null ? <RecurringCountText line={line} /> : null}
+    </div>
+  );
+}
+
+/** "Counting N recurring charges · M more look recurring". The second half links to Insights only when M > 0. */
+function RecurringCountText({ line }: { line: { counted: number; looks: number } }) {
+  const counted =
+    line.counted === 0
+      ? 'Counting no recurring charges'
+      : `Counting ${line.counted} recurring charge${line.counted === 1 ? '' : 's'}`;
+  return (
+    <p className="text-xs text-subtle" data-recurring-count>
+      {counted}
+      {line.looks > 0 ? (
+        <>
+          {' · '}
+          <Link href="/insights#sharper" className="underline hover:text-ink">
+            {line.looks} more {line.looks === 1 ? 'looks' : 'look'} recurring
+          </Link>
+        </>
+      ) : null}
+    </p>
+  );
+}
+
 /** Everything a row needs from the predictions, resolved once per section. */
 interface RowPredictions {
   suggestionOf: Map<number, CategorySuggestion>;
+  /** v1.62.0: the month check-in per category, read as "Heading for". */
   projectionOf: Map<number, number>;
-  /** MUST-14.4: the number the projection's title sentence names. */
-  dayOfMonth: number;
 }
 
 /**
@@ -1042,12 +1083,14 @@ function BudgetCategoryCard({
       status={
         <>
           {statusText}
+          {/* v1.62.0: the month check-in. What it counts is said once, in plain words, at the top of
+              the page -- never only in a title. Heading past the limit keeps the warning colour. */}
           {projection !== null ? (
             <>
               {' '}
               ·{' '}
-              <span title={`Assumes the rest of the month looks like the ${predict?.dayOfMonth} days so far.`}>
-                On pace for {formatCents(projection, { currency: true })}
+              <span className={hasLimit && projection > (row.limitCents as number) ? 'text-warning' : undefined}>
+                Heading for {formatCents(projection, { currency: true })}
               </span>
             </>
           ) : null}
@@ -1990,7 +2033,6 @@ export function BudgetsClient({
       : {
           suggestionOf: new Map(section.suggestions.map((entry) => [entry.categoryId, entry])),
           projectionOf: new Map(section.projections.map((entry) => [entry.categoryId, entry.projectedCents])),
-          dayOfMonth: predictions.dayOfMonth,
         };
 
   const householdPredict = rowPredict(predictions?.household);
@@ -2127,10 +2169,11 @@ export function BudgetsClient({
         </p>
         <p>
           Once there are three full calendar months of history, a suggested figure appears
-          beside each category behind <strong className="font-semibold text-ink">Edit limits</strong>, and from the
-          seventh of the current month each card also shows the pace the month is running at. Both are
-          read off your own past spending in that category; neither is an opinion about what the
-          amount ought to be.
+          beside each category behind <strong className="font-semibold text-ink">Edit limits</strong>. Once there is
+          one full month, each card in the current month also shows where it is heading: what you have
+          spent so far, plus bills and recurring charges still due this month, plus what you usually
+          spend in the rest of the month. Both are read off your own past spending in that category;
+          neither is an opinion about what the amount ought to be.
         </p>
         {household !== null ? (
           <p>
@@ -2141,6 +2184,8 @@ export function BudgetsClient({
           </p>
         ) : null}
       </PageGuide>
+
+      {predictions !== null ? <CheckInSentence months={predictions.checkInMonths} line={predictions.recurringLine} /> : null}
 
       <FormError message={banner.error} />
       {banner.message ? <Notice tone="success">{banner.message}</Notice> : null}

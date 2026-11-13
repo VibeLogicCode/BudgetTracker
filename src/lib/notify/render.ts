@@ -550,7 +550,7 @@ export interface BudgetStanding {
  * lands. This is what budget_pace used to send one message per category for, on a DAILY slot.
  */
 export interface BudgetPaceStanding extends BudgetStanding {
-  /** Month-end spend if the rest of the month looks like the part already spent. */
+  /** v1.62.0: the month check-in -- spent, plus what is still due, plus the usual rest of the month. */
   projectedCents: number;
 }
 
@@ -619,7 +619,8 @@ function openMonthReminder(months: readonly string[]): string[] {
 }
 
 /**
- * 2026-09-09. `Name: $spent of $limit, on pace for $projected` -- the pace line.
+ * 2026-09-09. `Name: $spent of $limit, heading for $projected` -- the pace line (v1.62.0: "heading
+ * for", the Budgets card's own words for the month check-in).
  *
  * Deliberately the SAME `Name: $spent of $limit` opening as budgetLines, with a different tail.
  * One shape learned once: the reader's eye already knows where the two figures are, and the clause
@@ -633,7 +634,7 @@ function paceLines(rows: readonly BudgetPaceStanding[]): string[] {
   return rows.map(
     (row) =>
       `${truncateText(row.name, NAME_MAX)}: ${wholeMoney(row.spentCents)} of ${wholeMoney(row.limitCents)}, ` +
-      `on pace for ${wholeMoney(row.projectedCents)}`,
+      `heading for ${wholeMoney(row.projectedCents)}`,
   );
 }
 
@@ -1133,7 +1134,7 @@ export function renderEvent(input: RenderInput): { subject: string; body: string
         body:
           `${scopeWord(input.scope)} ${category} budget for ${label} is ${money(input.limitCents)}. ` +
           `You have spent ${money(input.spentCents)} in ${input.dayOfMonth} days. ` +
-          `At that rate the month ends near ${money(input.projectedCents)}, ` +
+          `With what is still due and your usual spending, the month ends near ${money(input.projectedCents)}, ` +
           `about ${money(input.projectedCents - input.limitCents)} over.`,
       };
     }

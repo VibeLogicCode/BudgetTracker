@@ -288,3 +288,56 @@ describe('BudgetsPage — the income line', () => {
     expect(serialized).not.toContain('50000');
   });
 });
+
+/**
+ * v1.62.0, the month check-in on the real page. The clock is moved inside each test (Date only is
+ * faked) and put back on the file's 2026-03-18 afterwards. The oldest row sits in a partial
+ * November, so the history is December to February.
+ */
+describe('BudgetsPage — v1.62.0: where each budget is heading', () => {
+  let t: TestDb | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+    vi.setSystemTime(new Date('2026-03-18T16:00:00.000Z'));
+  });
+
+  function setup() {
+    t = createSeededTestDb();
+    const db = t.db;
+    const alexId = insertTestUser(db, { name: 'Alex', username: 'alex', role: 'admin' });
+    const accountId = insertTestAccount(db, { name: 'Chequing', ownerUserId: alexId });
+    const row = (date: string, cents: number, category: string, merchant: string) =>
+      db.run(sql`
+        insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, category_id, categorization_source, is_transfer, created_by, created_at, updated_at)
+        values (${accountId}, ${date}, ${merchant}, ${merchant}, ${cents}, ${categoryIdByName(db, category)}, 'manual', 0, ${alexId}, ${nowIso()}, ${nowIso()})`);
+    row('2025-11-20', -1234, 'Coffee', 'CORNER CAFE');
+    for (const date of ['2025-12-01', '2026-01-01', '2026-02-01', '2026-03-01']) row(date, -200000, 'Rent/Mortgage', 'CEDAR PROPERTY MGMT');
+    // On the parent: a child's own line lives in its parent's breakdown, the card carries the parent's.
+    upsertBudget({ scope: 'household', userId: null, categoryId: categoryIdByName(db, 'Housing'), month: '2026-03', amountCents: 210000 });
+    currentUser.value = { id: alexId, name: 'Alex', username: 'alex', role: 'admin', visibility: 'household' };
+  }
+
+  it('the rent case reads one rent on the 7th, with the sentence that explains it and no title', async () => {
+    vi.setSystemTime(new Date('2026-03-07T16:00:00.000Z'));
+    setup();
+    const { default: BudgetsPage } = await import('@/app/(app)/budgets/page');
+    const { container } = render(await BudgetsPage({ searchParams: Promise.resolve({}) }));
+    const line = screen.getByText('Heading for $2,000.00');
+    expect(line.getAttribute('title')).toBeNull();
+    expect(container.textContent).not.toContain('On pace for');
+    expect(
+      screen.getByText(
+        'Where each budget is heading is what you have spent so far, plus bills and recurring charges still due this month, plus what you usually spend in the rest of the month over the last 3 full months.',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('shows the heading line on the 2nd, where the straight-line pace waited for the 7th', async () => {
+    vi.setSystemTime(new Date('2026-03-02T16:00:00.000Z'));
+    setup();
+    const { default: BudgetsPage } = await import('@/app/(app)/budgets/page');
+    render(await BudgetsPage({ searchParams: Promise.resolve({}) }));
+    expect(screen.getByText('Heading for $2,000.00')).toBeTruthy();
+  });
+});

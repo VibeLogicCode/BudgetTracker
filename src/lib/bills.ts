@@ -5,7 +5,6 @@ import { ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { addDaysIso, addMonthsClamped, daysBetweenIso, monthEnd, monthOf, monthsBetween } from '@/lib/dates';
 import { budgetProgress, budgetTotals, type BudgetRow } from '@/lib/budgets';
 import { sumCents } from '@/lib/money';
-import { projectMonthEnd } from '@/lib/predict/pace';
 import { unpaidInstallments } from '@/lib/warranty/installments';
 
 /**
@@ -94,17 +93,23 @@ const RECURRING_KINDS = ['subscription', 'contract'] as const;
  * v1.13.0 ruling R2: `viewer` is REQUIRED. Both halves are scoped -- the cadence half by the
  * item's owner_user_id, and the schedule half through unpaidInstallments' existing ownerUserId
  * option, which has been there since v1.12.0 and needed no change.
+ *
+ * v1.62.0: `ownerUserId` narrows to one person's items (a person pill, a personal Budgets
+ * section), resolved as `ownerScope(viewer) ?? ownerUserId` -- recurring.ts's resolveScope order,
+ * so a self viewer's own scope always wins and the argument can only narrow a viewer already
+ * entitled to every member's bills.
  */
 export function upcomingBills(input: {
   today: string;
   days: number;
   includeOverdue?: boolean;
+  ownerUserId?: number | null;
   viewer: Viewer;
 }): UpcomingBill[] {
   const { today, days } = input;
   const includeOverdue = input.includeOverdue ?? false;
   const windowEnd = addDaysIso(today, days);
-  const scope = ownerScope(input.viewer);
+  const scope = ownerScope(input.viewer) ?? input.ownerUserId ?? null;
 
   const clauses = [
     inArray(warrantyItemTypes.kind, RECURRING_KINDS),
@@ -174,11 +179,9 @@ export function upcomingBills(input: {
  * limit this month (same pair budgetTotals already exposes for the dashboard's own
  * "Spent this month" tile).
  *
- * `projectedSpendCents`: projectMonthEnd fed with the household's total spend so far this
- * month (budgetTotals' totalSpentCents -- every non-income category, budgeted or not, the
- * same total the dashboard headline already uses). Its null before day 7 of the month is
- * passed through untouched, per projectMonthEnd's own contract (src/lib/predict/pace.ts) --
- * this function never works around that guard.
+ * v1.62.0: `projectedSpendCents` (a straight-line pace nothing displayed) is gone. Where the
+ * month is heading is the month check-in's job (src/lib/month-checkin.ts), which reads the same
+ * bills window as billsDueCents below.
  *
  * `billsDueCents`: every upcomingBills() occurrence landing on or before the END of `month`,
  * summed. Deliberately a DIFFERENT window than the dashboard card's own "next 30 days" list:
@@ -204,27 +207,32 @@ export function safeToSpend(input: {
   month: string;
   today: string;
   viewer: Viewer;
-}): { budgetedRemainingCents: number; projectedSpendCents: number | null; billsDueCents: number } {
+}): { budgetedRemainingCents: number; billsDueCents: number } {
   const { month, today } = input;
   const scope = ownerScope(input.viewer);
 
   const totals = budgetTotals(scope === null ? budgetProgress(month) : budgetProgress(month, 'personal', scope));
   const budgetedRemainingCents = totals.budgetedLimitCents - totals.budgetedSpentCents;
 
-  const dayOfMonth = Number(today.slice(8, 10));
-  const daysInMonth = Number(monthEnd(month).slice(8, 10));
-  const projectedSpendCents = projectMonthEnd({
-    spentCents: totals.totalSpentCents,
-    dayOfMonth,
-    daysInMonth,
-  });
+  const billsDueCents = sumCents(billsDueThisMonth({ month, today, viewer: input.viewer }).map((bill) => bill.amountCents));
 
-  const daysUntilMonthEnd = daysBetweenIso(today, monthEnd(month));
-  const billsDueCents = sumCents(
-    upcomingBills({ today, days: daysUntilMonthEnd, viewer: input.viewer }).map((bill) => bill.amountCents),
-  );
+  return { budgetedRemainingCents, billsDueCents };
+}
 
-  return { budgetedRemainingCents, projectedSpendCents, billsDueCents };
+/**
+ * v1.62.0. The bills still due before `month` ends: every upcomingBills() occurrence from `today`
+ * to the month's last day, overdue left out (upcomingBills' default, for the reason its docblock
+ * gives). ONE definition, so safeToSpend's billsDueCents and the month check-in's due part can
+ * never read two different windows.
+ */
+export function billsDueThisMonth(input: {
+  month: string;
+  today: string;
+  ownerUserId?: number | null;
+  viewer: Viewer;
+}): UpcomingBill[] {
+  const daysUntilMonthEnd = daysBetweenIso(input.today, monthEnd(input.month));
+  return upcomingBills({ today: input.today, days: daysUntilMonthEnd, ownerUserId: input.ownerUserId, viewer: input.viewer });
 }
 
 export interface SinkingFund {

@@ -4,7 +4,10 @@ import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser
 import { budgetProgress, type BudgetRow } from '@/lib/budgets';
 import { nowIso } from '@/lib/clock';
 import { assignTransactionToLoan } from '@/lib/loans';
-import { categorySeries, firstDataMonth, isAllNoSpend, seasonalReference, suggestionsFor } from '@/lib/predict/history';
+import { categorySeries, checkInHistoryMonths, firstDataMonth, isAllNoSpend, restOfMonthSpend, seasonalReference, suggestionsFor } from '@/lib/predict/history';
+import { cashflowForRange } from '@/lib/reports';
+import { monthEnd, monthStart } from '@/lib/dates';
+import { setTransactionSplits } from '@/lib/splits';
 import type { SuggestionResult } from '@/lib/predict/suggest';
 import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
@@ -410,5 +413,158 @@ describe('review finding (HIGH): noAttribution reads the historical series, not 
     expect(isAllNoSpend(household.byCategory)).toBe(false);
     expect(isAllNoSpend(personal.byCategory)).toBe(true);
     expect(isAllNoSpend(personal.byCategory) && !isAllNoSpend(household.byCategory)).toBe(true);
+  });
+});
+
+/**
+ * v1.62.0, the month check-in's history: what was spent AFTER today's day of the month in each of
+ * the last three complete months. Fixtures: Alex and Sam, MAPLE GROCER, FUEL STOP 12, STREAMBOX.
+ */
+describe('v1.62.0: restOfMonthSpend', () => {
+  function checkInSetup() {
+    current = createSeededTestDb();
+    const db = current.db;
+    const alex = insertTestUser(db, { name: 'Alex', username: 'alex' });
+    const sam = insertTestUser(db, { name: 'Sam', username: 'sam' });
+    const account = insertTestAccount(db, { name: 'Joint Chequing' });
+    const row = (over: {
+      date: string;
+      amountCents: number;
+      categoryId?: number | null;
+      merchant?: string;
+      person?: number | null;
+      isTransfer?: boolean;
+    }) =>
+      db.get<{ id: number }>(sql`
+        insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, category_id, categorization_source, is_transfer, attributed_user_id, created_by, created_at, updated_at)
+        values (${account}, ${over.date}, ${over.merchant ?? 'MAPLE GROCER'}, ${over.merchant ?? 'MAPLE GROCER'}, ${over.amountCents},
+                ${over.categoryId ?? null}, 'manual', ${over.isTransfer ? 1 : 0}, ${over.person ?? null}, ${alex}, ${nowIso()}, ${nowIso()})
+        returning id`).id;
+    // The oldest row sits in a PARTIAL November, so the window is December to February.
+    row({ date: '2025-11-20', amountCents: -1234, categoryId: categoryIdByName(db, 'Coffee') });
+    return { db, alex, sam, row };
+  }
+
+  it('with day 0 and nothing excluded, matches categorySeries row for row and cashflow month for month', () => {
+    const { db, row } = checkInSetup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const restaurants = categoryIdByName(db, 'Restaurants');
+    const salary = categoryIdByName(db, 'Salary');
+    row({ date: '2025-12-04', amountCents: -4217, categoryId: groceries });
+    row({ date: '2025-12-19', amountCents: -1805, categoryId: restaurants });
+    row({ date: '2026-01-10', amountCents: 900, categoryId: groceries }); // a refund nets
+    row({ date: '2026-01-11', amountCents: -6340, categoryId: groceries });
+    row({ date: '2026-02-03', amountCents: -6130, categoryId: null, merchant: 'FUEL STOP 12' }); // uncategorized out counts
+    row({ date: '2026-02-05', amountCents: 5000, categoryId: null, merchant: 'FUEL STOP 12' }); // uncategorized in does not
+    row({ date: '2026-02-06', amountCents: 250000, categoryId: salary }); // income never
+    row({ date: '2026-02-07', amountCents: -50000, categoryId: groceries, isTransfer: true }); // a transfer never
+
+    const rest = restOfMonthSpend({ targetMonth: '2026-03', dayOfMonth: 0, scope: 'household', userId: null });
+    expect(rest.months).toEqual(['2025-12', '2026-01', '2026-02']);
+    expect(rest.daysAfter).toEqual([31, 31, 28]);
+
+    const series = categorySeries({ months: rest.months, scope: 'household', userId: null });
+    expect([...rest.byCategory.keys()]).toEqual(series.map((entry) => entry.categoryId));
+    for (const entry of series) expect(rest.byCategory.get(entry.categoryId)).toEqual(entry.monthlyCents);
+
+    expect(rest.totalByMonth).toEqual(
+      rest.months.map((month) => cashflowForRange({ from: monthStart(month), to: monthEnd(month) }, {}, HOUSEHOLD_VIEWER).spendCents),
+    );
+    expect(rest.totalByMonth).toEqual([4217 + 1805, 6340 - 900, 6130]);
+  });
+
+  it('reads only rows dated after the day: day 7 is out, day 8 is in', () => {
+    const { db, row } = checkInSetup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    row({ date: '2026-01-07', amountCents: -4217, categoryId: groceries });
+    row({ date: '2026-01-08', amountCents: -1805, categoryId: groceries });
+    const rest = restOfMonthSpend({ targetMonth: '2026-03', dayOfMonth: 7, scope: 'household', userId: null });
+    expect(rest.daysAfter).toEqual([24, 24, 21]);
+    expect(rest.byCategory.get(groceries)).toEqual([0, 1805, 0]);
+    expect(rest.totalByMonth).toEqual([0, 1805, 0]);
+  });
+
+  it('a month shorter than the day has no days and no spend', () => {
+    checkInSetup();
+    const rest = restOfMonthSpend({ targetMonth: '2026-03', dayOfMonth: 30, scope: 'household', userId: null });
+    expect(rest.daysAfter).toEqual([1, 1, 0]);
+  });
+
+  it('leaves out a row that paid a bill installment', () => {
+    const { db, alex, row } = checkInSetup();
+    const insurance = categoryIdByName(db, 'Home Insurance');
+    const paid = row({ date: '2026-02-20', amountCents: -18000, categoryId: insurance, merchant: 'HARBOUR INSURANCE' });
+    const typeId = db.get<{ id: number }>(sql`
+      insert into warranty_item_types (name, kind, is_subscription, created_at) values ('Insurance bill', 'bill', 0, ${nowIso()}) returning id`).id;
+    const itemId = db.get<{ id: number }>(sql`
+      insert into warranty_items (name, purchase_date, is_lifetime, owner_user_id, type_id, created_at, updated_at)
+      values ('Insurance', '2025-01-20', 0, ${alex}, ${typeId}, ${nowIso()}, ${nowIso()}) returning id`).id;
+    db.run(sql`
+      insert into bill_installments (item_id, due_date, amount_cents, paid_at, paid_txn_id, created_at)
+      values (${itemId}, '2026-02-20', 18000, ${nowIso()}, ${paid}, ${nowIso()})`);
+    const rest = restOfMonthSpend({ targetMonth: '2026-03', dayOfMonth: 7, scope: 'household', userId: null });
+    expect(rest.totalByMonth).toEqual([0, 0, 0]);
+    expect(rest.byCategory.get(insurance)).toEqual([0, 0, 0]);
+  });
+
+  it('drops a merchant the caller excludes', () => {
+    const { db, row } = checkInSetup();
+    const subscriptions = categoryIdByName(db, 'Subscriptions');
+    row({ date: '2026-01-15', amountCents: -1699, categoryId: subscriptions, merchant: 'STREAMBOX' });
+    row({ date: '2026-01-16', amountCents: -4217, categoryId: subscriptions, merchant: 'MAPLE GROCER' });
+    const rest = restOfMonthSpend({
+      targetMonth: '2026-03',
+      dayOfMonth: 7,
+      scope: 'household',
+      userId: null,
+      excludeMerchant: (merchant) => merchant === 'STREAMBOX',
+    });
+    expect(rest.byCategory.get(subscriptions)).toEqual([0, 4217, 0]);
+    expect(rest.totalByMonth).toEqual([0, 4217, 0]);
+  });
+
+  it('applies the personal scope', () => {
+    const { db, alex, sam, row } = checkInSetup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    row({ date: '2026-01-15', amountCents: -4217, categoryId: groceries, person: alex });
+    row({ date: '2026-01-16', amountCents: -1805, categoryId: groceries, person: sam });
+    const mine = restOfMonthSpend({ targetMonth: '2026-03', dayOfMonth: 7, scope: 'personal', userId: alex });
+    expect(mine.byCategory.get(groceries)).toEqual([0, 4217, 0]);
+    expect(mine.totalByMonth).toEqual([0, 4217, 0]);
+    const household = restOfMonthSpend({ targetMonth: '2026-03', dayOfMonth: 7, scope: 'household', userId: null });
+    expect(household.totalByMonth).toEqual([0, 6022, 0]);
+  });
+
+  it('counts a split row at its parts', () => {
+    const { db, alex, row } = checkInSetup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const clothing = categoryIdByName(db, 'Clothing');
+    const id = row({ date: '2026-01-15', amountCents: -10000, categoryId: groceries });
+    setTransactionSplits({
+      txnId: id,
+      parts: [
+        { categoryId: groceries, amountCents: -6000 },
+        { categoryId: clothing, amountCents: -4000 },
+      ],
+      userId: alex,
+    });
+    const rest = restOfMonthSpend({ targetMonth: '2026-03', dayOfMonth: 7, scope: 'household', userId: null });
+    expect(rest.byCategory.get(groceries)).toEqual([0, 6000, 0]);
+    expect(rest.byCategory.get(clothing)).toEqual([0, 4000, 0]);
+    expect(rest.totalByMonth).toEqual([0, 10000, 0]);
+  });
+
+  it('leaves out the first data month, which is usually partial', () => {
+    current = createSeededTestDb();
+    const account = insertTestAccount(current.db, { name: 'Joint Chequing' });
+    const alex = insertTestUser(current.db, { name: 'Alex', username: 'alex' });
+    const groceries = categoryIdByName(current.db, 'Groceries');
+    // The first statement starts on December 20th, so December is not a full month.
+    current.db.run(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, category_id, categorization_source, is_transfer, created_by, created_at, updated_at)
+      values (${account}, '2025-12-20', 'MAPLE GROCER', 'MAPLE GROCER', -4217, ${groceries}, 'manual', 0, ${alex}, ${nowIso()}, ${nowIso()})`);
+    expect(checkInHistoryMonths('2026-03')).toEqual(['2026-01', '2026-02']);
+    expect(checkInHistoryMonths('2026-01')).toEqual([]);
+    expect(restOfMonthSpend({ targetMonth: '2026-01', dayOfMonth: 7, scope: 'household', userId: null }).months).toEqual([]);
   });
 });

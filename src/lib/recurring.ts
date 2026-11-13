@@ -544,6 +544,8 @@ export interface ExpectedCharge {
   late: boolean;
   /** The account the newest charge landed on. */
   accountName: string;
+  /** v1.62.0: the newest charge's id. The month check-in files the expected charge under its category. */
+  newestTransactionId: number;
 }
 
 /**
@@ -553,21 +555,25 @@ export interface ExpectedCharge {
  * merchant. A covering item with no row (no billing amount, nothing unpaid in the window, a loan
  * payment rule) leaves the merchant listed. `bills` is the card's own upcomingBills list (overdue
  * included); omitted, it is fetched the same way. The overdue bound is the card's
- * (COMING_UP_OVERDUE_DAYS), applied there as it is to bills. Scoped like upcomingBills -- the
- * viewer only, no person pill.
+ * (COMING_UP_OVERDUE_DAYS), applied there as it is to bills. Scoped like upcomingBills.
+ *
+ * v1.62.0: `ownerUserId` narrows to one person's charges (a person pill, a personal Budgets
+ * section) through resolveScope, so a self viewer's own scope still wins.
  */
 export function expectedRecurringCharges(input: {
   today: string;
   days: number;
+  ownerUserId?: number | null;
   viewer: Viewer;
   bills?: readonly UpcomingBill[];
 }): ExpectedCharge[] {
   const windowEnd = addDaysIso(input.today, input.days);
   const out: ExpectedCharge[] = [];
+  const ownerUserId = input.ownerUserId ?? null;
   // Only the rows the card actually shows can stand for a charge (M-1): one overdue past its bound is dropped there.
-  const bills = (input.bills ?? upcomingBills({ today: input.today, days: input.days, includeOverdue: true, viewer: input.viewer })).filter(
-    (bill) => withinComingUpBound(bill, input.today),
-  );
+  const bills = (
+    input.bills ?? upcomingBills({ today: input.today, days: input.days, includeOverdue: true, ownerUserId, viewer: input.viewer })
+  ).filter((bill) => withinComingUpBound(bill, input.today));
   const billItemIds = [...new Set(bills.map((bill) => bill.itemId))];
   // Every item with a bill row covers by name OR vendor (I-1), not only the first needle that matched.
   const billItems =
@@ -580,7 +586,7 @@ export function expectedRecurringCharges(input: {
           .all();
   const billNeedleList = itemNeedles(billItems);
   // The lean read: the same candidate pass, marked merchants only -- no Looks or Forming detectors, no price-rise field, no account options or sorts.
-  const marked = buildCandidates({ today: input.today, scope: resolveScope(input.viewer, null), marksOnly: true });
+  const marked = buildCandidates({ today: input.today, scope: resolveScope(input.viewer, ownerUserId), marksOnly: true });
   for (const { row } of marked) {
     if (row.knownBy !== 'mark') continue;
     const tracked = row.tracked;
@@ -594,11 +600,55 @@ export function expectedRecurringCharges(input: {
       typicalCents: row.typicalCents,
       late: row.late,
       accountName: row.accounts[0]?.name ?? '',
+      newestTransactionId: row.transactionId,
     });
   }
   return out.sort((a, b) =>
     a.expectedDate < b.expectedDate ? -1 : a.expectedDate > b.expectedDate ? 1 : a.merchant < b.merchant ? -1 : a.merchant > b.merchant ? 1 : 0,
   );
+}
+
+/**
+ * v1.62.0, the month check-in. True for a merchant whose charges the check-in counts as DUE this
+ * month, so restOfMonthSpend (src/lib/predict/history.ts) leaves its past charges out and nothing
+ * is projected twice. Built from EXACTLY what the due side counts, and nothing wider:
+ *
+ *   - `expected`: the marked merchants whose next charge is counted as due (their own merchant);
+ *   - `bills`: the items whose bill rows are counted as due, matched by name or vendor
+ *     (itemNeedles / covers, the cover rule the Recurring card already uses).
+ *
+ * Deliberately NOT needles(): that also returns loans and loan payment rules, which have no bill
+ * row. A loan-tracked mortgage would then leave the history while nothing on the due side counted
+ * it, and drop out of the figure entirely until it posted. A bill-kind item's linked payments are
+ * already out of the history (restOfMonthSpend leaves every installment-paid row out); its name
+ * also covers a payment nobody linked. Both inputs arrive already scoped to the viewer and person,
+ * so this reads only the bill items' names (one read).
+ */
+export function dueElsewhereMatcher(input: {
+  bills: readonly UpcomingBill[];
+  expected: readonly ExpectedCharge[];
+}): (merchant: string) => boolean {
+  const itemIds = [...new Set(input.bills.map((bill) => bill.itemId))];
+  const items =
+    itemIds.length === 0
+      ? []
+      : getDb()
+          .select({ itemId: warrantyItems.id, itemName: warrantyItems.name, vendor: warrantyItems.vendor })
+          .from(warrantyItems)
+          .where(inArray(warrantyItems.id, itemIds))
+          .all();
+  const covering = itemNeedles(items);
+  const marked = new Set(input.expected.map((charge) => charge.merchant));
+  // A merchant comes back once per (month, category) cell, so each is decided once.
+  const decided = new Map<string, boolean>();
+  return (merchant) => {
+    let due = decided.get(merchant);
+    if (due === undefined) {
+      due = marked.has(merchant) || covering.some((needle) => covers(needle, merchant));
+      decided.set(merchant, due);
+    }
+    return due;
+  };
 }
 
 /**

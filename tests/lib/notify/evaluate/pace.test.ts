@@ -13,13 +13,20 @@ let t: TestDb;
 let accountId: number;
 let creatorId: number;
 const TZ = 'UTC';
-/** The 12th of a 31-day month, so the projection multiplier is 31/12. */
+/**
+ * The 12th of a 31-day month: 19 days left. v1.62.0: the figure is the month check-in, and its
+ * history is July alone (beforeEach's first row sits in a partial June, which is never read). July
+ * has 19 days after the 12th too, so a July row dated after the 12th adds exactly its own amount:
+ * spent + still due + that July stretch.
+ */
 const NOW = new Date('2026-08-12T12:00:00Z');
 
 beforeEach(() => {
   t = createSeededTestDb();
   accountId = insertTestAccount(t.db);
   creatorId = insertTestUser(t.db, { username: 'creator' });
+  // The household's first, partial month: June. July is the one complete month of history.
+  spend(categoryIdByName(t.db, 'Bank Fees'), 100, null, '2026-06-20');
   resetOutboxPumpForTests();
   setNotifySenderForTests(async () => {});
 });
@@ -57,6 +64,11 @@ function spend(categoryId: number, cents: number, attributedUserId: number | nul
   );
 }
 
+/** What was spent after the 12th in July: the usual rest of the month, for August's check-in. */
+function history(categoryId: number, cents: number, attributedUserId: number | null = null): void {
+  spend(categoryId, cents, attributedUserId, '2026-07-20');
+}
+
 function keys(): string[] {
   return (t.sqlite.prepare('select dedup_key from notification_outbox order by id').all() as { dedup_key: string }[]).map(
     (r) => r.dedup_key,
@@ -67,13 +79,14 @@ describe('MUST-9.6: the four trigger conditions', () => {
   it('fires at a projected 110 percent and stays silent at 105', () => {
     const userId = emailUser();
     const groceries = categoryIdByName(t.db, 'Groceries');
-    // 31/12 of the spend is the projection. A $600 limit needs $660 projected, so $255.49 spent.
+    // Spent + July's $400 after the 12th. A $600 limit needs $660 heading, so $260 spent.
     upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 60000 });
+    history(groceries, 40000);
 
-    spend(groceries, 24000); // projects to 62000, which is 103 percent
+    spend(groceries, 24000); // heading for 64000, which is 106 percent
     expect(evaluateBudgetPace({ userId, now: NOW, tz: TZ })).toBe(0);
 
-    spend(groceries, 2000); // 26000 total, projects to 67167, which is 111 percent
+    spend(groceries, 2000); // 26000 total, heading for 66000, which is 110 percent
     expect(evaluateBudgetPace({ userId, now: NOW, tz: TZ })).toBe(1);
     expect(keys()).toEqual([`pace:h:${groceries}:2026-08`]);
   });
@@ -82,6 +95,8 @@ describe('MUST-9.6: the four trigger conditions', () => {
     const userId = emailUser();
     const groceries = categoryIdByName(t.db, 'Groceries');
     upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 60000 });
+    history(groceries, 40000);
+    // Heading for $900 against $600 -- but the alert keeps its day-7 floor (MUST-9.6 condition 1).
     spend(groceries, 50000, null, '2026-08-01');
     expect(evaluateBudgetPace({ userId, now: new Date('2026-08-06T12:00:00Z'), tz: TZ })).toBe(0);
     expect(keys()).toEqual([]);
@@ -117,6 +132,7 @@ describe('MUST-9.8: once per scope, per category, per month, ever', () => {
     const userId = emailUser();
     const groceries = categoryIdByName(t.db, 'Groceries');
     upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 60000 });
+    history(groceries, 40000);
     spend(groceries, 26000);
 
     expect(evaluateBudgetPace({ userId, now: NOW, tz: TZ })).toBe(1);
@@ -135,8 +151,9 @@ describe('MUST-9.35: household rows reach every enabled user, personal rows only
     const groceries = categoryIdByName(t.db, 'Groceries');
     upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 60000 });
     // Above the $260 spent so far, so MUST-9.6 condition 3 does not stand the personal row
-    // down; the 31/12 projection of $671.67 still clears 110 percent of $300.
+    // down; heading for $660 (with Sam's own July) still clears 110 percent of $300.
     upsertBudget({ scope: 'personal', userId: sam, categoryId: groceries, month: '2026-08', amountCents: 30000 });
+    history(groceries, 40000, sam);
     spend(groceries, 26000, sam);
 
     expect(evaluateBudgetPace({ userId: sam, now: NOW, tz: TZ })).toBe(2);
@@ -179,14 +196,15 @@ describe('MEDIUM fix: PACE_MAX_PER_EVALUATION caps the detector at its five larg
       'General',
     ];
     // Descending spend, 500 cents apart, so every projected overshoot is distinct: 10000 down
-    // to 4500 in 12 steps. All 12 clear the 110 percent floor at day 12 of a 31-day month
-    // (even the smallest, 4500, projects to 11625 against a 11000 floor).
+    // to 4500 in 12 steps. With $70 of July after the 12th each, all 12 clear the 110 percent
+    // floor (even the smallest, 4500, heads for 11500 against a 11000 floor).
     const spentByLeaf = new Map(leaves.map((name, index) => [name, 10000 - index * 500]));
 
     const ids = new Map(leaves.map((name) => [name, categoryIdByName(t.db, name)]));
     for (const name of leaves) {
       const categoryId = ids.get(name)!;
       upsertBudget({ scope: 'household', userId: null, categoryId, month: '2026-08', amountCents: 10000 });
+      history(categoryId, 7000);
       spend(categoryId, spentByLeaf.get(name)!);
     }
 
@@ -215,6 +233,7 @@ describe('notify MUST-4.2: a user with the event switched off hears nothing', ()
     setPref(userId, 'budget_pace', 'telegram', false);
     const groceries = categoryIdByName(t.db, 'Groceries');
     upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 60000 });
+    history(groceries, 40000);
     spend(groceries, 26000);
     expect(evaluateBudgetPace({ userId, now: NOW, tz: TZ })).toBe(0);
     expect(keys()).toEqual([]);
@@ -238,10 +257,12 @@ describe('v1.7.0 Task 11: rollover carry keeps a covered category off the pace a
     const groceries = categoryIdByName(t.db, 'Groceries');
     setRollover({ scope: 'household', userId: null, categoryId: groceries, enabled: true, startMonth: '2026-07' });
     upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-07', amountCents: 100000 });
-    // August: a $500 base. $400 spent at day 12 of a 31-day month projects to about $1033.33 --
-    // over 110% of the $500 base alone -- but only about 69% of the $1500 effective limit.
+    // July spent $200 after the 12th, so $800 carries. August: a $500 base. $400 spent plus July's
+    // $200 heads for $600 -- over 110% of the $500 base alone -- but well under the $1300
+    // effective limit.
+    history(groceries, 20000);
     upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 50000 });
-    expect(effectiveBudget('household', null, groceries, '2026-08').carryCents).toBe(100000);
+    expect(effectiveBudget('household', null, groceries, '2026-08').carryCents).toBe(80000);
 
     spend(groceries, 40000);
     expect(evaluateBudgetPace({ userId, now: NOW, tz: TZ })).toBe(0);
@@ -275,11 +296,13 @@ describe('S-18 fix (v1.13.0 ruling R2): a self-scoped recipient never receives a
 
     // Household budget, someone else's (unattributed) spend -- self must never see this.
     upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 60000 });
-    spend(groceries, 26000); // projects to 111 percent of the $600 household limit
+    history(groceries, 40000);
+    spend(groceries, 26000); // heads for 110 percent of the $600 household limit
 
     // self's OWN personal budget, self's own spend -- self must still see this.
     upsertBudget({ scope: 'personal', userId: self, categoryId: gas, month: '2026-08', amountCents: 60000 });
-    spend(gas, 26000, self); // the identical projection, personal scope
+    history(gas, 40000, self);
+    spend(gas, 26000, self); // the identical figure, personal scope
 
     expect(evaluateBudgetPace({ userId: self, now: NOW, tz: TZ })).toBe(1);
     expect(evaluateBudgetPace({ userId: control, now: NOW, tz: TZ })).toBe(1);
@@ -326,7 +349,8 @@ describe('S-18 fix (v1.13.0 ruling R2): a self-scoped recipient never receives a
 
     const groceries = categoryIdByName(t.db, 'Groceries');
     upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 60000 });
-    spend(groceries, 26000); // projects to 111 percent of the $600 household limit
+    history(groceries, 40000);
+    spend(groceries, 26000); // heads for 110 percent of the $600 household limit
 
     expect(evaluateBudgetPace({ userId: self, now: NOW, tz: TZ })).toBe(1);
 
@@ -335,5 +359,38 @@ describe('S-18 fix (v1.13.0 ruling R2): a self-scoped recipient never receives a
       .all() as { user_id: number | null; dedup_key: string; body: string }[];
     expect(rows.map((r) => [r.user_id, r.dedup_key])).toEqual([[null, `hh:pace:h:${groceries}:2026-08`]]);
     expect(rows[0].body).toContain('Groceries');
+  });
+});
+
+/**
+ * v1.62.0: the alert reads the month check-in, the figure Budgets shows as "Heading for". Today is
+ * 2026-03-07; the history is December to February (the oldest row sits in a partial November).
+ */
+describe('v1.62.0: the pace alert reads the month check-in', () => {
+  const MARCH_7 = new Date('2026-03-07T12:00:00Z');
+
+  it('rent paid on the 1st sends no alert on the 7th, where the straight-line pace sent one', () => {
+    const userId = emailUser();
+    const rent = categoryIdByName(t.db, 'Rent/Mortgage');
+    spend(categoryIdByName(t.db, 'Bank Fees'), 100, null, '2025-11-20');
+    for (const date of ['2025-12-01', '2026-01-01', '2026-02-01', '2026-03-01']) spend(rent, 200000, null, date);
+    upsertBudget({ scope: 'household', userId: null, categoryId: rent, month: '2026-03', amountCents: 210000 });
+    // v1.61.0 projected 200000 * 31 / 7 = 885714, over 110 percent of $2,100. Now: one rent.
+    expect(evaluateBudgetPace({ userId, now: MARCH_7, tz: TZ })).toBe(0);
+    expect(keys()).toEqual([]);
+  });
+
+  it('groceries heading for $630 against a $500 limit alerts, and says what the figure counts', () => {
+    const userId = emailUser();
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    spend(categoryIdByName(t.db, 'Bank Fees'), 100, null, '2025-11-20');
+    spend(groceries, 15000, null, '2026-03-03');
+    spend(groceries, 48000, null, '2025-12-12');
+    spend(groceries, 52000, null, '2026-01-20');
+    spend(groceries, 40000, null, '2026-02-09');
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-03', amountCents: 50000 });
+    expect(evaluateBudgetPace({ userId, now: MARCH_7, tz: TZ })).toBe(1);
+    const body = (t.sqlite.prepare('select body from notification_outbox').get() as { body: string }).body;
+    expect(body).toContain('With what is still due and your usual spending, the month ends near $630.00, about $130.00 over.');
   });
 });

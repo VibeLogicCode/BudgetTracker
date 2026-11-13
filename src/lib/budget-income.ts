@@ -1,6 +1,6 @@
 import { ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { addMonths } from '@/lib/dates';
-import { cashflowTrend, trimLeadingEmptyMonths } from '@/lib/reports';
+import { cashflowTrend, trimLeadingEmptyMonths, type MonthTrendRow } from '@/lib/reports';
 
 /** How many complete calendar months typical income averages. */
 export const TYPICAL_INCOME_MONTHS = 3;
@@ -44,6 +44,21 @@ export interface BudgetIncomeLine {
   noAttributedIncome: boolean;
 }
 
+/**
+ * Typical income over the last TYPICAL_INCOME_MONTHS rows of `history`: complete months, oldest
+ * first, ending with the month before the one in progress. v1.62.0: exported so the Dashboard's
+ * keep line reads typical income off the trend it already holds, with no read of its own.
+ */
+export function typicalIncomeFrom(history: readonly MonthTrendRow[]): { window: MonthTrendRow[]; typicalIncomeCents: number | null } {
+  const window = history.slice(-TYPICAL_INCOME_MONTHS);
+  // The trim drops only months before this scope's first transaction (see its own docblock). Three
+  // or more surviving months means that first row is no later than the window's first month, so
+  // every window month really happened, quiet or not, even when the window itself opens empty.
+  const covered = trimLeadingEmptyMonths([...history]).length >= TYPICAL_INCOME_MONTHS;
+  const windowIncomeCents = window.reduce((sum, row) => sum + row.incomeCents, 0);
+  return { window, typicalIncomeCents: covered ? Math.round(windowIncomeCents / TYPICAL_INCOME_MONTHS) : null };
+}
+
 export function budgetIncomeLine(
   input: { month: string; currentMonth: string; attributedUserId: number | null; budgetedLimitCents: number },
   viewer: Viewer,
@@ -57,13 +72,7 @@ export function budgetIncomeLine(
   // a future month's typical income is still the last three months that actually finished.
   const latest = input.month < input.currentMonth ? input.month : input.currentMonth;
   const history = cashflowTrend(HISTORY_LOOKBACK_MONTHS, { endMonth: addMonths(latest, -1), attributedUserId: scope }, viewer);
-  const window = history.slice(-TYPICAL_INCOME_MONTHS);
-  // The trim drops only months before this scope's first transaction (see its own docblock). Three
-  // or more surviving months means that first row is no later than the window's first month, so
-  // every window month really happened, quiet or not, even when the window itself opens empty.
-  const covered = trimLeadingEmptyMonths(history).length >= TYPICAL_INCOME_MONTHS;
-  const windowIncomeCents = window.reduce((sum, row) => sum + row.incomeCents, 0);
-  const typicalIncomeCents = covered ? Math.round(windowIncomeCents / TYPICAL_INCOME_MONTHS) : null;
+  const { window, typicalIncomeCents } = typicalIncomeFrom(history);
 
   const overTypicalByCents =
     typicalIncomeCents !== null && typicalIncomeCents > 0 && input.budgetedLimitCents > typicalIncomeCents

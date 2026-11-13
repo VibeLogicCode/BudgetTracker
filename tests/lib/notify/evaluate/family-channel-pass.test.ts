@@ -159,8 +159,10 @@ describe('R23: an event nobody has enabled personally still reaches the family c
     const groceries = categoryIdByName(t.db, 'Groceries');
     routeToFamily('budget_pace');
     upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 60000 });
-    // The 12th of a 31-day month, so the projection multiplier is 31/12: $255.49 spent projects to
-    // $660, ten percent past a $600 limit.
+    // v1.62.0: the month check-in. June is the partial first month, July the one complete one, and
+    // July's $404.51 after the 12th plus $255.49 spent heads for $660, ten percent past $600.
+    spend(groceries, 100, '2026-06-20');
+    spend(groceries, 40451, '2026-07-20');
     spend(groceries, 25549, '2026-08-05');
 
     expect(evaluateBudgetPace({ userId: null, now: new Date('2026-08-12T12:00:00Z'), tz: TZ })).toBe(1);
@@ -303,6 +305,8 @@ describe('R23: the household pass and the member path are mutually exclusive, so
     const groceries = categoryIdByName(t.db, 'Groceries');
     routeToFamily('budget_pace');
     upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 60000 });
+    spend(groceries, 100, '2026-06-20');
+    spend(groceries, 40451, '2026-07-20');
     spend(groceries, 25549, '2026-08-05');
 
     const now = new Date('2026-08-12T12:00:00Z');

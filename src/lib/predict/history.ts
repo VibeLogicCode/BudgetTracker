@@ -1,9 +1,10 @@
-import { and, eq, gte, isNotNull, lte, sql } from 'drizzle-orm';
+import { and, eq, gte, isNotNull, lte, sql, type SQL } from 'drizzle-orm';
 import { getDb } from '@/db/client';
-import { transactions, transactionSplits } from '@/db/schema';
+import { billInstallments, transactions, transactionSplits } from '@/db/schema';
 import { listCategories, type CategoryRecord } from '@/lib/categories';
 import { addMonths, monthEnd, monthOf, monthRange, monthStart } from '@/lib/dates';
 import { netSpentCents } from '@/lib/money';
+import { CHECKIN_HISTORY_MONTHS } from '@/lib/predict/constants';
 import { historyMonths, seasonalApplies } from '@/lib/predict/window';
 import { seasonalFactor, suggestBudget, type SuggestionResult } from '@/lib/predict/suggest';
 import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY } from '@/lib/splits';
@@ -157,8 +158,12 @@ function cells(
  * spending child -- by the MUST-3.2 tests below, which assert `categorySeries` and
  * `flatten(budgetProgress(...))` agree on the exact set of category ids.
  */
-function rollup(months: string[], byCategory: Map<number, Map<string, number>>): CategorySeries[] {
-  const all = listCategories({ includeArchived: true }).filter((category) => !category.isIncome);
+function rollup(
+  months: string[],
+  byCategory: Map<number, Map<string, number>>,
+  categoriesAll: CategoryRecord[] = listCategories({ includeArchived: true }),
+): CategorySeries[] {
+  const all = categoriesAll.filter((category) => !category.isIncome);
   const cell = (categoryId: number, month: string) => byCategory.get(categoryId)?.get(month) ?? 0;
 
   const out: CategorySeries[] = [];
@@ -218,6 +223,138 @@ export function firstDataMonth(): string | null {
     .where(eq(transactions.isTransfer, false))
     .get();
   return row?.first ? monthOf(row.first) : null;
+}
+
+/**
+ * v1.62.0, the month check-in's window: up to CHECKIN_HISTORY_MONTHS COMPLETE months before the
+ * target, strictly after the month of the oldest row. The first data month is left out because it
+ * is usually partial -- a household whose statements start on the 20th has no full first month --
+ * and a stretch read from a part-month would say the rest of a month costs nothing.
+ */
+export function checkInHistoryMonths(targetMonth: string): string[] {
+  const first = firstDataMonth();
+  return historyMonths({
+    targetMonth,
+    firstDataMonth: first === null ? null : addMonths(first, 1),
+    count: CHECKIN_HISTORY_MONTHS,
+  });
+}
+
+/** What the usual rest of the month comes to, read from the same stretch of past months. */
+export interface RestOfMonthSpend {
+  /** checkInHistoryMonths(targetMonth), oldest first. Every array below is aligned with it. */
+  months: string[];
+  /** Per month: max(0, len(month) - dayOfMonth), the days that stretch covered. */
+  daysAfter: number[];
+  /** Per row the Budgets page draws (rolled as categorySeries rolls): spend after the day, per month. */
+  byCategory: Map<number, number[]>;
+  /** Per month: every dollar of spend after the day, by cashflowTrend's spend rule. */
+  totalByMonth: number[];
+}
+
+/**
+ * v1.62.0 (the month check-in). Cashflow's spend arm with no income arm (reports.ts,
+ * NOT_UNCATEGORIZED_IN and CASHFLOW_BUCKET): with no category a credit cannot be told from income,
+ * so an uncategorized row counts only when it is money out; a categorized credit is a refund and
+ * still nets against its own category. Per joined row, so a split part is judged on its own.
+ */
+const SPEND_ARM: SQL = sql`(${EFFECTIVE_CATEGORY} is not null or ${EFFECTIVE_AMOUNT} <= 0)`;
+
+/**
+ * v1.62.0. A row that paid a bill installment is that bill, and this month's installment is
+ * already counted as due (src/lib/month-checkin.ts), so its past payments are not usual spending.
+ */
+const NOT_INSTALLMENT_PAYMENT: SQL = sql`not exists (select 1 from ${billInstallments} where ${billInstallments.paidTxnId} = ${transactions.id})`;
+
+/**
+ * v1.62.0, the month check-in's third part: what was spent AFTER `dayOfMonth` in each month of
+ * checkInHistoryMonths. Day-aligned on purpose: it reads the same stretch of past months, so a
+ * payment that always lands early in a month (rent on the 1st) adds nothing for the rest of this
+ * one, whether or not anybody marked it. Per month, because the check-in takes the median of them
+ * (src/lib/predict/pace.ts).
+ *
+ * One grouped read, served by transactions_date_idx: rows after the day by the stored date text
+ * (no Date, no zone -- the stored date is already the household's), SPEND_ROW_WHERE, no
+ * installment payment, the scope, grouped by (month, effective category, merchant) through the
+ * split join cells() uses. Then, in memory: drop the merchants `excludeMerchant` names (what the
+ * check-in counts as due), netSpentCents per (month, category) cell (MUST-4.9), the same rollup
+ * categorySeries uses, and each month's total by cashflow's spend rule (income categories out,
+ * uncategorized money out in full).
+ *
+ * A month shorter than `dayOfMonth` (February on the 30th) has no days and no spend.
+ */
+export function restOfMonthSpend(input: {
+  targetMonth: string;
+  /** 0..31, today's day in the household's zone. Rows dated on this day or before are out. */
+  dayOfMonth: number;
+  scope: 'household' | 'personal';
+  userId: number | null;
+  excludeMerchant?: (normalizedMerchant: string) => boolean;
+}): RestOfMonthSpend {
+  if (input.scope === 'personal' && input.userId === null) throw new Error('Personal rest-of-month spend requires a user');
+  const months = checkInHistoryMonths(input.targetMonth);
+  const daysAfter = months.map((month) => Math.max(0, Number(monthEnd(month).slice(8, 10)) - input.dayOfMonth));
+  const zeros = () => months.map(() => 0);
+  if (daysAfter.every((days) => days === 0)) return { months, daysAfter, byCategory: new Map(), totalByMonth: zeros() };
+
+  const month = sql<string>`substr(${transactions.date}, 1, 7)`;
+  const clauses: SQL[] = [
+    gte(transactions.date, monthStart(months[0])),
+    lte(transactions.date, monthEnd(months[months.length - 1])),
+    sql`cast(substr(${transactions.date}, 9, 2) as integer) > ${input.dayOfMonth}`,
+    ...SPEND_ROW_WHERE,
+    NOT_INSTALLMENT_PAYMENT,
+    SPEND_ARM,
+  ];
+  if (input.scope === 'personal') clauses.push(eq(transactions.attributedUserId, input.userId as number));
+
+  const rows = getDb()
+    .select({
+      month,
+      categoryId: EFFECTIVE_CATEGORY,
+      merchant: transactions.normalizedMerchant,
+      total: sql<number>`sum(${EFFECTIVE_AMOUNT})`,
+    })
+    .from(transactions)
+    .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
+    .where(and(...clauses))
+    .groupBy(month, EFFECTIVE_CATEGORY, transactions.normalizedMerchant)
+    .all();
+
+  const categoriesAll = listCategories({ includeArchived: true });
+  const income = new Set(categoriesAll.filter((category) => category.isIncome).map((category) => category.id));
+  const monthIndex = new Map(months.map((key, index) => [key, index]));
+
+  // Signed sums per (category, month) first, merchants excluded, so the netting below is per cell.
+  const signed = new Map<number, Map<string, number>>();
+  const uncategorizedSigned = zeros();
+  for (const row of rows) {
+    if (input.excludeMerchant?.(row.merchant)) continue;
+    const total = row.total ?? 0;
+    if (row.categoryId === null) {
+      uncategorizedSigned[monthIndex.get(row.month) as number] += total;
+      continue;
+    }
+    const byMonth = signed.get(row.categoryId) ?? new Map<string, number>();
+    byMonth.set(row.month, (byMonth.get(row.month) ?? 0) + total);
+    signed.set(row.categoryId, byMonth);
+  }
+
+  const cellMap = new Map<number, Map<string, number>>();
+  const totalByMonth = uncategorizedSigned.map((total) => netSpentCents(total));
+  for (const [categoryId, byMonth] of signed) {
+    const netted = new Map<string, number>();
+    for (const [key, total] of byMonth) {
+      // MUST-4.9: netSpentCents() per (month, category) cell, before any rollup.
+      netted.set(key, netSpentCents(total));
+      if (!income.has(categoryId)) totalByMonth[monthIndex.get(key) as number] += netSpentCents(total);
+    }
+    cellMap.set(categoryId, netted);
+  }
+
+  const byCategory = new Map<number, number[]>();
+  for (const series of rollup(months, cellMap, categoriesAll)) byCategory.set(series.categoryId, series.monthlyCents);
+  return { months, daysAfter, byCategory, totalByMonth };
 }
 
 /**

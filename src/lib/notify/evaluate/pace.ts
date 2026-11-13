@@ -1,7 +1,8 @@
-import { budgetProgress, flattenBudgetRows, type BudgetRow } from '@/lib/budgets';
+import { budgetProgress, budgetTotals, flattenBudgetRows, type BudgetRow } from '@/lib/budgets';
 import { viewerFor } from '@/lib/auth/users';
 import { HOUSEHOLD_VIEWER, isSelfScoped } from '@/lib/auth/viewer';
-import { currentMonth, monthEnd, todayIso } from '@/lib/dates';
+import { currentMonth, todayIso } from '@/lib/dates';
+import { monthCheckIn, type CheckIn } from '@/lib/month-checkin';
 import { isEventEnabled } from '@/lib/notify/config';
 import { familyChannelNeedsOwnPass } from '@/lib/notify/family-pass';
 import { CHANNELS, budgetPaceKey, type BudgetScopeKey } from '@/lib/notify/events';
@@ -9,7 +10,6 @@ import { householdRoutedChannels } from '@/lib/notify/household';
 import { enqueue, enqueuedAnything } from '@/lib/notify/outbox';
 import { renderEvent } from '@/lib/notify/render';
 import { PACE_MAX_PER_EVALUATION, PACE_MIN_DAY_OF_MONTH, PACE_OVERSHOOT_MIN_PCT } from '@/lib/predict/constants';
-import { projectMonthEnd } from '@/lib/predict/pace';
 
 /**
  * MUST-10.8: no fingerprint. This runs at most once per user per day by construction, and its
@@ -41,8 +41,8 @@ interface PaceCandidate {
 function candidateFor(input: {
   scope: BudgetScopeKey;
   row: BudgetRow;
-  dayOfMonth: number;
-  daysInMonth: number;
+  /** v1.62.0: the scope's month check-in, one per scope per evaluation (src/lib/month-checkin.ts). */
+  checkIns: ReadonlyMap<number, CheckIn>;
 }): PaceCandidate | null {
   const { row } = input;
   // Condition 2: a zero limit is budget_exceeded's business, not a projection's.
@@ -51,12 +51,10 @@ function candidateFor(input: {
   // exclusive by construction, not by ordering.
   if (row.spentCents > row.limitCents) return null;
 
-  // MUST-8.7: spentCents is the number already on the progress bar, not a re-query.
-  const projectedCents = projectMonthEnd({
-    spentCents: row.spentCents,
-    dayOfMonth: input.dayOfMonth,
-    daysInMonth: input.daysInMonth,
-  });
+  // MUST-8.7: the check-in starts from spentCents, the number already on the progress bar. v1.62.0:
+  // the same figure the Budgets card reads as "Heading for" -- spent, plus what is still due, plus
+  // the usual rest of the month -- so a rent paid on the 1st no longer projects as several rents.
+  const projectedCents = input.checkIns.get(row.categoryId)?.projectedCents ?? null;
   if (projectedCents === null) return null;
   // Condition 4: a projected 3 percent overshoot on the 7th is noise; 10 percent is a number
   // worth acting on. Integer comparison, no float ratio (MUST-3.5).
@@ -164,8 +162,6 @@ export function evaluateBudgetPace(input: { userId: number | null; now: Date; tz
   const selfScoped = isSelfScoped(viewer);
 
   const month = currentMonth(input.now, input.tz);
-  // MUST-8.2: from monthEnd, so February is 29 days in 2028 without a leap-year rule here.
-  const daysInMonth = Number(monthEnd(month).slice(8, 10));
 
   // S-18 fix (v1.13.0 ruling R2), round 1: for a self-scoped recipient the household rows exist
   // SOLELY to feed the family channel (enqueue's familyChannelOnly, set below), so with nothing
@@ -175,20 +171,24 @@ export function evaluateBudgetPace(input: { userId: number | null; now: Date; tz
   // Everyone else keeps both scopes unconditionally, exactly as before either round of this fix.
   const wantsHousehold = !selfScoped || householdRoutedChannels('budget_pace').length > 0;
   const scopes: { scope: BudgetScopeKey; rows: BudgetRow[] }[] = [
-    ...(wantsHousehold
-      ? [{ scope: 'household' as const, rows: flattenBudgetRows(budgetProgress(month, 'household', null)) }]
-      : []),
+    ...(wantsHousehold ? [{ scope: 'household' as const, rows: budgetProgress(month, 'household', null) }] : []),
     // R23: the household has no personal budgets to project, and a personal-scope send is not
     // routable at all (enqueue's subjectScope), so its pass reads the household scope alone.
-    ...(recipient === null
-      ? []
-      : [{ scope: 'personal' as const, rows: flattenBudgetRows(budgetProgress(month, 'personal', recipient)) }]),
+    ...(recipient === null ? [] : [{ scope: 'personal' as const, rows: budgetProgress(month, 'personal', recipient) }]),
   ];
 
   const candidates: PaceCandidate[] = [];
   for (const { scope, rows } of scopes) {
-    for (const row of rows) {
-      const candidate = candidateFor({ scope, row, dayOfMonth, daysInMonth });
+    // v1.62.0: one month check-in per scope per evaluation, over the rows already read. The
+    // household's is read as HOUSEHOLD_VIEWER whoever the recipient is: it is the household's own
+    // figure, and for a self-scoped recipient it only ever reaches the family channel (below).
+    const checkIn =
+      scope === 'household'
+        ? monthCheckIn({ month, today, scope, userId: null, rows, viewer: HOUSEHOLD_VIEWER, spentTotalCents: budgetTotals(rows).totalSpentCents })
+        : monthCheckIn({ month, today, scope, userId: recipient, rows, viewer, spentTotalCents: budgetTotals(rows).totalSpentCents });
+    const checkIns = checkIn?.byCategory ?? new Map<number, CheckIn>();
+    for (const row of flattenBudgetRows(rows)) {
+      const candidate = candidateFor({ scope, row, checkIns });
       if (candidate !== null) candidates.push(candidate);
     }
   }

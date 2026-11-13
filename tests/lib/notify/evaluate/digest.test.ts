@@ -320,10 +320,13 @@ describe('the weekly summary carries every budget, instead of one message each',
 
     spend(groceries, 18000, '2026-08-12'); // $80 over
     spend(gas, 25000, '2026-08-13'); // $50 over
-    // 90% of its limit on the 17th of a 31-day month. That is NOT merely "close": at that rate
-    // the month ends near $82 against a $50 limit, which is why this row lands under On pace
-    // since 2026-09-09 rather than under Close. See the Close case in the test below for a row
-    // that really is only close.
+    // 90% of its limit on the 17th of a 31-day month. That is NOT merely "close": v1.62.0's month
+    // check-in adds July's $37 after the 17th (the one complete month; June is the partial first
+    // one), so the month heads for $82 against a $50 limit, which is why this row lands under On
+    // pace rather than under Close. See the Close case in the test below for a row that really is
+    // only close.
+    spend(categoryIdByName(t.db, 'Bank Fees'), 100, '2026-06-20');
+    spend(coffee, 3700, '2026-07-20');
     spend(coffee, 4500, '2026-08-14');
 
     expect(evaluateWeeklyDigest({ userId, slotDate: '2026-08-17', now: NOW })).toBe(1);
@@ -333,7 +336,7 @@ describe('the weekly summary carries every budget, instead of one message each',
     // forever. Cents are for a single-charge alert, not for a figure somebody glances at.
     expect(text).toContain('Groceries: $180 of $100, $80 over');
     expect(text).toContain('Gas: $250 of $200, $50 over');
-    expect(text).toContain('Coffee: $45 of $50, on pace for $82');
+    expect(text).toContain('Coffee: $45 of $50, heading for $82');
     // The total counts what is ALREADY over. A projection is not money spent, so Coffee's $32
     // of projected overshoot is deliberately not in it.
     expect(text).toContain('Total over: $130.');
@@ -365,12 +368,13 @@ describe('the weekly summary carries every budget, instead of one message each',
   });
 
   it('2026-09-09: says nothing about pace before the 7th, when a projection is arithmetic not information', () => {
-    // projectMonthEnd returns null before PACE_MIN_DAY_OF_MONTH, and the summary honours that
-    // rather than inventing its own rule -- $40 spent by the 3rd projects to $413, which would
-    // put a category under On pace on the strength of three days.
+    // v1.62.0: the list keeps the alert's PACE_MIN_DAY_OF_MONTH floor. $40 spent by the 3rd plus
+    // July's $30 after the 3rd heads for $70 against $50, and still nothing is said on the 3rd.
     const userId = emailUser();
     const coffee = categoryIdByName(t.db, 'Coffee');
     upsertBudget({ scope: 'household', userId: null, categoryId: coffee, month: '2026-08', amountCents: 5000 });
+    spend(categoryIdByName(t.db, 'Bank Fees'), 100, '2026-06-20');
+    spend(coffee, 3000, '2026-07-10');
     spend(coffee, 4000, '2026-08-02');
 
     evaluateWeeklyDigest({ userId, slotDate: '2026-08-04', now: new Date('2026-08-03T12:00:00Z') });
