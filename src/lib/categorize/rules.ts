@@ -1,4 +1,4 @@
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { merchantRules, users } from '@/db/schema';
 import { amountWithinBounds, boundsProblem, boundsWidth, isBounded } from '@/lib/categorize/amount-bounds';
@@ -798,6 +798,77 @@ export function deleteExactRule(pattern: string, kind: RuleKind): number {
     )
     .run();
   return Number(result.changes ?? 0);
+}
+
+/** Every column of one merchant_rules row, exactly as stored. What a bulk undo snapshots. */
+export type ExactRuleRow = typeof merchantRules.$inferSelect;
+
+/**
+ * v1.62.0 (bulk undo). Every column of the EXACT rules on these patterns and kinds, enabled and
+ * disabled alike, bounded and unbounded alike, by id. Patterns are compared as stored: the write
+ * choke point above already trimmed and uppercased them, and so does the caller.
+ *
+ * Exact only, because every bulk path writes exact rules only (confirmCategory and its teachTarget,
+ * setTransferFlag, setRecurringMarks), so a snapshot of the exact rows is a snapshot of everything
+ * such an action can change. Kept here rather than in the undo module so the merchant_rules table
+ * keeps one owner.
+ */
+export function exactRuleRows(patterns: readonly string[], kinds: readonly RuleKind[]): ExactRuleRow[] {
+  const wanted = [...new Set(patterns)];
+  if (wanted.length === 0 || kinds.length === 0) return [];
+  return getDb()
+    .select()
+    .from(merchantRules)
+    .where(
+      and(
+        eq(merchantRules.matchType, 'exact'),
+        inArray(merchantRules.pattern, wanted),
+        inArray(merchantRules.ruleKind, [...new Set(kinds)]),
+      ),
+    )
+    .orderBy(asc(merchantRules.id))
+    .all();
+}
+
+/**
+ * v1.62.0 (bulk undo). Puts the exact rules one bulk change touched back the way exactRuleRows saw
+ * them before it, in one transaction:
+ *   - deletes `createdIds`, the rules the change created;
+ *   - re-inserts a `before` row that no longer exists, with its original id and every column (the
+ *     change's housekeeping delete, as setTransferFlag removes the opposite kind);
+ *   - writes back every column of a `before` row that still exists (a teach that changed a bounded
+ *     rule's category, a re-enable).
+ *
+ * A constraint failure (a rule with the same key written since, a category deleted since) throws
+ * and rolls the whole restore back; the caller turns that into its own refusal. Only exact rows
+ * are touched, which is what the name promises: a non-exact `before` row is a programmer error.
+ */
+export function restoreExactRules(input: {
+  before: readonly ExactRuleRow[];
+  createdIds: readonly number[];
+}): { removed: number; restored: number } {
+  for (const row of input.before) {
+    if (row.matchType !== 'exact') throw new Error(`restoreExactRules restores exact rules only (rule ${row.id}).`);
+  }
+  return getDb().transaction((tx) => {
+    let removed = 0;
+    if (input.createdIds.length > 0) {
+      const result = tx
+        .delete(merchantRules)
+        .where(and(inArray(merchantRules.id, [...new Set(input.createdIds)]), eq(merchantRules.matchType, 'exact')))
+        .run();
+      removed = Number(result.changes ?? 0);
+    }
+    let restored = 0;
+    for (const row of input.before) {
+      const { id, ...columns } = row;
+      const existing = tx.select({ id: merchantRules.id }).from(merchantRules).where(eq(merchantRules.id, id)).get();
+      if (existing === undefined) tx.insert(merchantRules).values(row).run();
+      else tx.update(merchantRules).set(columns).where(eq(merchantRules.id, id)).run();
+      restored += 1;
+    }
+    return { removed, restored };
+  });
 }
 
 export function bumpRuleUsage(id: number, at: Date = new Date()): void {

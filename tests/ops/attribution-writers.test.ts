@@ -63,6 +63,8 @@ const WRITERS: Record<string, string> = {
     'the kebab dialog own pass, the second of the three deliberate points: it writes the rule and then applies it to the merchant rows it just counted for the person, in the same transaction',
   'src/lib/import/set-aside.ts#releaseSetAsideRow':
     'Keep both on a held possible duplicate (v1.61.0): inserts the row commitImport set aside, with the person commitImport chose for it then',
+  'src/lib/bulk-undo.ts#undoLastBulkAction':
+    'Undo for the last bulk change (v1.62.0): writes back the person each row had before that one person\'s own bulk change, minutes earlier',
 };
 
 /**
@@ -95,6 +97,11 @@ const WRITERS_NOT_CONSULTING: Record<string, string> = {
     'the row aside; that answer is stored on the set_aside_rows record. Asking again at release ' +
     'would let a rule edited in between move a row nobody touched, and the card cell the order ' +
     'ranks first is not stored anywhere to ask with.',
+  'src/lib/bulk-undo.ts#undoLastBulkAction':
+    'it writes back the exact value that person\'s own bulk change replaced minutes earlier, and only ' +
+    'when nothing has touched the row since. Asking resolveAttribution again would move rows nobody ' +
+    'asked about: a rule written in between, or the account owner, would decide a row the person ' +
+    'only meant to put back.',
 };
 
 const EXPORTS = ['resolveAttribution', 'AttributionSource'];

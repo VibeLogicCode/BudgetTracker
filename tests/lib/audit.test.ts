@@ -45,6 +45,26 @@ describe('audit_log (ruling R3)', () => {
     expect(listAudit(2).map((row) => row.entityId)).toEqual([3, 2]);
   });
 
+  it('records an undone bulk change (v1.62.0) with no migration', async () => {
+    current = createTestDb();
+    const user = await createUser({ name: 'Alex', username: 'alex', password: 'correct horse battery', role: 'admin' });
+    appendAudit({
+      userId: user.id,
+      action: 'undo_bulk_action',
+      entity: 'transactions',
+      entityId: 12,
+      detail: 'Undid: Categorized 12 transactions as Groceries (1 rule removed)',
+      at: '2026-03-10T14:22:00.000Z',
+    });
+    expect(listAudit()[0]).toMatchObject({
+      userName: 'Alex',
+      action: 'undo_bulk_action',
+      entity: 'transactions',
+      entityId: 12,
+      detail: 'Undid: Categorized 12 transactions as Groceries (1 rule removed)',
+    });
+  });
+
   it('stores NULL when no detail is given', async () => {
     current = createTestDb();
     const user = await createUser({ name: 'Alice', username: 'alice', password: 'correct horse battery', role: 'admin' });

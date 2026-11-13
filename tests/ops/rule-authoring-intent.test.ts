@@ -109,6 +109,8 @@ const RULE_AUTHORING_HELPERS: readonly string[] = [
   'setRecurringMarks',
   // Spec 2026-10-21 §2.1: writes (and re-enables) one Always ask rule.
   'setAlwaysAskRule',
+  // v1.62.0 (bulk undo): deletes, re-inserts and rewrites exact rules from a snapshot.
+  'restoreExactRules',
 ];
 
 /** `input.deleteRule` (a FLAG read) must never read as `deleteRule(...)` (a helper CALL) -- the
@@ -417,7 +419,14 @@ describe('v1.27.0 item 1: only an argued list of files may author a merchant rul
       'Spec 2026-10-05 §2.2 and 2026-10-21 §2.1. setRecurringMarkAction and bulkRecurringMarkAction reach ' +
         'setRecurringMarks only, and setAlwaysAskAction reaches setAlwaysAskRule only. "Mark recurring", "Not recurring" ' +
         'and "Always ask for rows like this" are statements about a MERCHANT -- each control names the text it is about, ' +
-        'and no category, flag or link on the row changes.',
+        'and no category, flag or link on the row changes. v1.62.0: reviewMerchantGroupAction\'s Mark recurring ' +
+        'decision on a review-by-merchant group reaches setRecurringMarks only, for the one merchant the group card names.',
+    ],
+    [
+      'src/lib/bulk-undo.ts',
+      'v1.62.0 bulk undo. It restores the exact rules one person\'s own bulk change wrote or removed minutes ' +
+        'earlier, and only through restoreExactRules: the rules it puts back are the ones a snapshot saw before ' +
+        'that change, and the ones it deletes are the ones that change created. It authors nothing new.',
     ],
     [
       'src/lib/packs.ts',

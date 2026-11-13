@@ -21,13 +21,19 @@ import { nowIso } from '@/lib/clock';
  * v1.61.0: 'keep_duplicate' and 'dismiss_duplicate', the two Needs review decisions on a possible
  * duplicate (src/lib/import/set-aside.ts). Both name the set_aside_rows record.
  */
+/**
+ * v1.62.0: 'undo_bulk_action', a person taking back their own last bulk change
+ * (src/lib/bulk-undo.ts). It names `transactions` with the smallest restored id, or
+ * `merchant_rules` with the smallest rule id when only rules came back.
+ */
 export type AuditAction =
   | 'delete_item'
   | 'delete_receipt'
   | 'undo_import'
   | 'delete_transaction'
   | 'keep_duplicate'
-  | 'dismiss_duplicate';
+  | 'dismiss_duplicate'
+  | 'undo_bulk_action';
 
 export function appendAudit(input: {
   userId: number;
