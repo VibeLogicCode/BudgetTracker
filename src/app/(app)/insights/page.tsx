@@ -7,6 +7,7 @@ import { householdInsights } from '@/lib/insights';
 import { readInsightsParams, recurringHref } from '@/lib/insights-links';
 import { recurringCharges } from '@/lib/recurring';
 import { recurringSummary } from '@/lib/recurring-view';
+import { setupSuggestions } from '@/lib/setup-suggestions';
 import { InsightsClient } from './insights-client';
 
 export const dynamic = 'force-dynamic';
@@ -32,5 +33,7 @@ export default async function InsightsPage({
   // The full list: the Dashboard's card is the capped summary of this one.
   const findings = householdInsights({ today, viewer, limit: null });
   const personName = isSelfScoped(viewer) || person === null ? null : (findUserById(person)?.name ?? null);
-  return <InsightsClient summary={summary} findings={findings} person={person} personName={personName} />;
+  // A self viewer's suggestions are their own merchants (setupSuggestions scopes by the viewer).
+  const suggestions = setupSuggestions(viewer, today);
+  return <InsightsClient summary={summary} findings={findings} suggestions={suggestions} person={person} personName={personName} />;
 }

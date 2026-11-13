@@ -13,7 +13,7 @@ describe('visibleNav (micro-ruling M6)', () => {
 
   it('a self viewer loses Import, Review and Settings and keeps the rest', () => {
     expect(visibleNav(child).map((item) => item.href)).toEqual([
-      '/dashboard', '/transactions', '/budgets', '/goals', '/warranties', '/reports', '/insights', '/help',
+      '/dashboard', '/transactions', '/budgets', '/goals', '/warranties', '/reports', '/insights', '/insights/recurring', '/help',
     ]);
   });
 
@@ -57,7 +57,7 @@ describe('navGroups: the rail shows the money-flow sequence it always described'
     const groups = navGroups(household);
     expect(groups[1].label).toBe('Planning');
     expect(groups[1].items.map((item) => item.href)).toEqual([
-      '/budgets', '/goals', '/warranties', '/reports', '/insights',
+      '/budgets', '/goals', '/warranties', '/reports', '/insights', '/insights/recurring',
     ]);
   });
 
@@ -99,9 +99,12 @@ describe('navGroups: the rail shows the money-flow sequence it always described'
   });
 });
 
-describe('activeNavItem on the recurring page (spec 2026-10-06 ยง2.2)', () => {
-  it('keeps Insights lit on /insights/recurring, which has no nav entry of its own', () => {
-    expect(activeNavItem('/insights/recurring')?.href).toBe('/insights');
-    expect(NAV.map((item) => item.href)).not.toContain('/insights/recurring');
+describe('activeNavItem on the recurring page (spec 2026-10-06 ง2.2, v1.62.0 lane E3)', () => {
+  it('gives Recurring an entry under Insights, and lights it on its own page', () => {
+    expect(NAV.find((item) => item.href === '/insights/recurring')?.label).toBe('Recurring');
+    const hrefs = NAV.map((item) => item.href);
+    expect(hrefs.indexOf('/insights/recurring')).toBe(hrefs.indexOf('/insights') + 1);
+    expect(activeNavItem('/insights/recurring')?.href).toBe('/insights/recurring');
+    expect(activeNavItem('/insights')?.href).toBe('/insights');
   });
 });

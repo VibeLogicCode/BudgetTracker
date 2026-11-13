@@ -9,6 +9,7 @@ import {
   ReviewIcon,
   SettingsIcon,
   TransactionsIcon,
+  TrendFlatIcon,
   WarrantiesIcon,
   type IconProps,
 } from '@/components/icons';
@@ -46,7 +47,7 @@ export interface NavGroup {
 }
 
 /**
- * Eleven entries, and only the first ten are a sequence. Those ten follow the order
+ * Twelve entries, and only the first eleven are a sequence. Those eleven follow the order
  * money moves through the app: see the month, check the transactions behind it, fix
  * what the categorizer was unsure of, bring more in, then the planning surfaces,
  * then the back office. Help is not a step in that flow -- it sits outside it, and
@@ -87,6 +88,8 @@ export const NAV: NavItem[] = [
   { href: '/reports', label: 'Reports', Icon: ReportsIcon, group: 'planning' },
   // Spec 2026-10-05 §2.1: what the ledger shows arriving on a rhythm, and the charges that stand out.
   { href: '/insights', label: 'Insights', Icon: InsightsIcon, group: 'planning' },
+  // v1.62.0 lane E3: the full recurring list had no door of its own, only a link from Insights.
+  { href: '/insights/recurring', label: 'Recurring', Icon: TrendFlatIcon, group: 'planning' },
   { href: '/settings', label: 'Settings', Icon: SettingsIcon, group: 'admin' },
   { href: '/help', label: 'Help', Icon: InfoIcon, group: 'admin' },
 ];

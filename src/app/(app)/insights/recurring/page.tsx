@@ -4,6 +4,7 @@ import { RecurringTable } from '@/components/insights/RecurringTable';
 import { buttonClass } from '@/components/ui/Button';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Notice } from '@/components/ui/Notice';
+import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { requireUser } from '@/lib/auth/session';
 import { findUserById } from '@/lib/auth/users';
@@ -50,6 +51,14 @@ export default async function RecurringChargesPage({
           </Link>
         }
       />
+
+      <PageGuide>
+        <p>
+          Every merchant the ledger shows on a rhythm. <strong className="font-semibold text-ink">Mark recurring</strong> on a
+          Looks recurring row tells the month check-in the charge is still due; <strong className="font-semibold text-ink">Not
+          recurring</strong> takes it off this list.
+        </p>
+      </PageGuide>
 
       {personName === null ? null : (
         <Notice tone="info">

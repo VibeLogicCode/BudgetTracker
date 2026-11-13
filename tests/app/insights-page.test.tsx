@@ -107,6 +107,31 @@ describe('InsightsPage', () => {
     expect(screen.getByRole('link', { name: '1 late' }).getAttribute('href')).toBe('/insights/recurring?show=late&sort=next');
   });
 
+  it('puts the Make your numbers sharper card on the page for a Looks merchant, and hides it for a marked one', async () => {
+    const s = await seed();
+    s.monthly('MAPLE STREAMING', s.adult);
+    currentUser.value = { id: s.adult, name: 'Alex', username: 'alex', role: 'admin', visibility: 'household' };
+    const { container, unmount } = await renderPage();
+    expect(screen.getByRole('heading', { name: 'Make your numbers sharper' })).toBeTruthy();
+    expect(container.querySelector('#sharper')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Mark recurring: MAPLE STREAMING' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Full Recurring list' }).getAttribute('href')).toBe('/insights/recurring');
+    unmount();
+    setRecurringMarks({ merchants: ['MAPLE STREAMING'], mark: 'recurring', userId: s.adult, actorRole: 'admin' });
+    await renderPage();
+    expect(screen.queryByRole('heading', { name: 'Make your numbers sharper' })).toBeNull();
+  });
+
+  it('a self viewer is offered only their own merchants', async () => {
+    const s = await seed();
+    s.monthly('MAPLE STREAMING', s.adult);
+    s.monthly('CEDAR PHONE CO', s.child);
+    currentUser.value = { id: s.child, name: 'Robin', username: 'robin', role: 'member', visibility: 'self' };
+    await renderPage();
+    expect(screen.getByRole('button', { name: 'Mark recurring: CEDAR PHONE CO' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Mark recurring: MAPLE STREAMING' })).toBeNull();
+  });
+
   /** Review Focus 4. */
   it('a self viewer’s summary counts only their own charges, whatever ?person= says', async () => {
     const s = await seed();

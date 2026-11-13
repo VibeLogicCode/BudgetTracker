@@ -2,14 +2,16 @@
 
 import Link from 'next/link';
 import { NeedsALookCard } from '@/components/NeedsALookCard';
+import { SetupSuggestionsCard } from '@/components/SetupSuggestionsCard';
 import { RecurringChargesCard } from '@/components/insights/RecurringChargesCard';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { Notice } from '@/components/ui/Notice';
 import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
 import type { InsightRow } from '@/lib/insights';
-import { insightsHref } from '@/lib/insights-links';
+import { insightsHref, recurringHref } from '@/lib/insights-links';
 import type { RecurringSummary } from '@/lib/recurring-view';
+import type { SetupSuggestion } from '@/lib/setup-suggestions';
 
 /**
  * Spec 2026-10-05 §2.1. Recurring charges, then the full Needs a look list. Plain data in, nothing
@@ -18,11 +20,13 @@ import type { RecurringSummary } from '@/lib/recurring-view';
 export function InsightsClient({
   summary,
   findings,
+  suggestions,
   person,
   personName,
 }: {
   summary: RecurringSummary;
   findings: InsightRow[];
+  suggestions: SetupSuggestion[];
   person: number | null;
   /** Set only when a household viewer narrowed the page to one person, so the narrowing is stated. */
   personName: string | null;
@@ -58,6 +62,11 @@ export function InsightsClient({
           </Link>
         </Notice>
       )}
+
+      <SetupSuggestionsCard
+        suggestions={suggestions}
+        recurringHref={recurringHref({ person, account: null, show: 'all', sort: 'monthly' })}
+      />
 
       <RecurringChargesCard summary={summary} person={person} />
 
