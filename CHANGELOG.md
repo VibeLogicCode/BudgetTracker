@@ -21,6 +21,28 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.62.0] - 2026-11-12
+
+### Added
+
+- Review by merchant: Needs review can group rows by merchant, so one decision (category, person,
+  transfer or recurring) files every waiting row of that merchant, with the usual option to
+  remember it as a rule.
+- Undo for bulk changes: each person can undo their own last bulk change for 15 minutes. If any of
+  those rows changed since, Undo refuses rather than overwrite the newer change.
+- Transfer pairs: equal and opposite amounts between two household accounts within 3 days are
+  suggested as one transfer, confirmed in one tap.
+- Make your numbers sharper: Insights lists charges that look recurring, each with Mark recurring
+  and Not recurring and a sentence on why marking helps. Recurring has its own menu entry.
+
+### Changed
+
+- The month check-in replaces the straight-line pace. Heading for is what was spent so far, plus
+  bills and recurring charges still due this month, plus what was usually spent after today's
+  date in recent full months. A large payment early in the month, such as a mortgage, is no
+  longer projected again. The Net tile says how much the month is on track to keep, from typical
+  income, and the pace alert and digest use the same figure.
+
 ## [1.61.0] - 2026-11-12
 
 Migration 0031. Every transaction now records how it arrived (typed in, CSV, QFX/OFX or bank sync);
