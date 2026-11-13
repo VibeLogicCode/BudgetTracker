@@ -91,6 +91,7 @@ function predictionsWith(over: Partial<BudgetPredictions> = {}): BudgetPredictio
   return {
     monthsUsed: 6,
     checkInMonths: 3,
+    checkInShown: true,
     recurringLine: null,
     household: { suggestions: [], projections: [], noAttribution: false },
     personal: [],
@@ -448,11 +449,22 @@ describe('MUST-14.3 to MUST-14.6: the predictive controls', () => {
     expect(container.textContent).not.toContain('Where each budget is heading is what');
   });
 
+  it('v1.62.0: months read but no check-in prints no sentence about figures that are not there', () => {
+    const { container } = renderBudgets(
+      predictionsWith({ checkInMonths: 1, checkInShown: false, recurringLine: { counted: 1, looks: 0, href: '/insights#sharper' } }),
+    );
+    expect(container.textContent).not.toContain('Where each budget is heading');
+    expect(container.querySelector('[data-recurring-count]')).toBeNull();
+  });
+
   it('plan item E4: Counting N recurring charges, and M more look recurring linked to Insights only when M > 0', () => {
-    const { container, rerender } = renderBudgets(predictionsWith({ recurringLine: { counted: 3, looks: 2 } }));
+    const { container, rerender } = renderBudgets(
+      predictionsWith({ recurringLine: { counted: 3, looks: 2, href: '/insights?person=7#sharper' } }),
+    );
     const line = container.querySelector('[data-recurring-count]');
     expect(line?.textContent).toBe('Counting 3 recurring charges · 2 more look recurring');
-    expect(line?.querySelector('a')?.getAttribute('href')).toBe('/insights#sharper');
+    // The link the server built: the person pill rides along, so Insights lists what was counted.
+    expect(line?.querySelector('a')?.getAttribute('href')).toBe('/insights?person=7#sharper');
     expect(line?.querySelector('a')?.textContent).toBe('2 more look recurring');
 
     const again = (recurringLine: BudgetPredictions['recurringLine']) =>
@@ -467,10 +479,10 @@ describe('MUST-14.3 to MUST-14.6: the predictive controls', () => {
           savingsProgress={null}
         />,
       );
-    again({ counted: 1, looks: 0 });
+    again({ counted: 1, looks: 0, href: '/insights#sharper' });
     expect(container.querySelector('[data-recurring-count]')?.textContent).toBe('Counting 1 recurring charge');
     expect(container.querySelector('[data-recurring-count] a')).toBeNull();
-    again({ counted: 0, looks: 1 });
+    again({ counted: 0, looks: 1, href: '/insights#sharper' });
     expect(container.querySelector('[data-recurring-count]')?.textContent).toBe('Counting no recurring charges · 1 more looks recurring');
     again(null);
     expect(container.querySelector('[data-recurring-count]')).toBeNull();

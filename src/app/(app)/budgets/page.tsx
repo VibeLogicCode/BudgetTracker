@@ -237,9 +237,12 @@ export default async function BudgetsPage({
       // scope's month count stands in for it -- the same number that section's own
       // "three full calendar months" sentence is judged against.
       monthsUsed: householdScope !== null ? householdScope.months.length : (personalSections[0]?.monthsUsed ?? 0),
-      // The check-in's window is household-wide (it starts after the first data month), so every
-      // section read the same number of months; whichever section was computed says how many.
-      checkInMonths: (householdCheckIn ?? personalCheckIns[0] ?? null)?.monthsUsed ?? 0,
+      // The section on screen says how many months its check-in read: a person's window starts
+      // from that person's own first data month, so it can be shorter than the household's.
+      checkInMonths: lineCheckIn?.monthsUsed ?? 0,
+      // Months read but no figure (every month read is shorter than today's day): no sentence
+      // explaining figures that are not there.
+      checkInShown: (lineCheckIn?.total ?? null) !== null,
       recurringLine,
       household:
         householdScope !== null

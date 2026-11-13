@@ -215,12 +215,20 @@ export function categorySeries(input: {
   return rollup(input.months, cells(input.months, input.scope, input.userId));
 }
 
-/** MUST-4.3: the month of the oldest non-transfer row, or null on a household with none. */
-export function firstDataMonth(): string | null {
+/**
+ * MUST-4.3: the month of the oldest non-transfer row, or null on a household with none.
+ * v1.62.0: with `userId`, the oldest row attributed to that person (the month check-in's personal
+ * window starts from the person's own first month, not the household's).
+ */
+export function firstDataMonth(userId: number | null = null): string | null {
   const row = getDb()
     .select({ first: sql<string | null>`min(${transactions.date})` })
     .from(transactions)
-    .where(eq(transactions.isTransfer, false))
+    .where(
+      userId === null
+        ? eq(transactions.isTransfer, false)
+        : and(eq(transactions.isTransfer, false), eq(transactions.attributedUserId, userId)),
+    )
     .get();
   return row?.first ? monthOf(row.first) : null;
 }
@@ -230,9 +238,12 @@ export function firstDataMonth(): string | null {
  * target, strictly after the month of the oldest row. The first data month is left out because it
  * is usually partial -- a household whose statements start on the 20th has no full first month --
  * and a stretch read from a part-month would say the rest of a month costs nothing.
+ *
+ * `userId` (a personal check-in) counts from that person's own oldest row: a person whose rows
+ * start in January has no December to read, and a zero December would pull their median down.
  */
-export function checkInHistoryMonths(targetMonth: string): string[] {
-  const first = firstDataMonth();
+export function checkInHistoryMonths(targetMonth: string, userId: number | null = null): string[] {
+  const first = firstDataMonth(userId);
   return historyMonths({
     targetMonth,
     firstDataMonth: first === null ? null : addMonths(first, 1),
@@ -275,12 +286,14 @@ const NOT_INSTALLMENT_PAYMENT: SQL = sql`not exists (select 1 from ${billInstall
  *
  * One grouped read, served by transactions_date_idx: rows after the day by the stored date text
  * (no Date, no zone -- the stored date is already the household's), SPEND_ROW_WHERE, no
- * installment payment, the scope, grouped by (month, effective category, merchant) through the
- * split join cells() uses. Then, in memory: drop the merchants `excludeMerchant` names (what the
- * check-in counts as due), netSpentCents per (month, category) cell (MUST-4.9), the same rollup
- * categorySeries uses, and each month's total by cashflow's spend rule (income categories out,
- * uncategorized money out in full).
+ * installment payment, the scope, grouped by (month, effective category, merchant, row) through
+ * the split join cells() uses. Then, in memory: drop the rows `excludeRow` names (what the
+ * check-in counts as due; it sees the merchant and the row's whole amount, so a bill can claim
+ * only the charges that look like it), netSpentCents per (month, category) cell (MUST-4.9), the
+ * same rollup categorySeries uses, and each month's total by cashflow's spend rule (income
+ * categories out, uncategorized money out in full).
  *
+ * A personal read's months start from that person's own first data month (checkInHistoryMonths).
  * A month shorter than `dayOfMonth` (February on the 30th) has no days and no spend.
  */
 export function restOfMonthSpend(input: {
@@ -289,10 +302,11 @@ export function restOfMonthSpend(input: {
   dayOfMonth: number;
   scope: 'household' | 'personal';
   userId: number | null;
-  excludeMerchant?: (normalizedMerchant: string) => boolean;
+  /** True for a row the check-in already counts as due. `amountCents` is the whole row's signed amount. */
+  excludeRow?: (normalizedMerchant: string, amountCents: number) => boolean;
 }): RestOfMonthSpend {
   if (input.scope === 'personal' && input.userId === null) throw new Error('Personal rest-of-month spend requires a user');
-  const months = checkInHistoryMonths(input.targetMonth);
+  const months = checkInHistoryMonths(input.targetMonth, input.scope === 'personal' ? input.userId : null);
   const daysAfter = months.map((month) => Math.max(0, Number(monthEnd(month).slice(8, 10)) - input.dayOfMonth));
   const zeros = () => months.map(() => 0);
   if (daysAfter.every((days) => days === 0)) return { months, daysAfter, byCategory: new Map(), totalByMonth: zeros() };
@@ -313,23 +327,25 @@ export function restOfMonthSpend(input: {
       month,
       categoryId: EFFECTIVE_CATEGORY,
       merchant: transactions.normalizedMerchant,
+      // The whole row's amount (constant inside a row's group), which a bill's band is judged on.
+      amountCents: transactions.amountCents,
       total: sql<number>`sum(${EFFECTIVE_AMOUNT})`,
     })
     .from(transactions)
     .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
     .where(and(...clauses))
-    .groupBy(month, EFFECTIVE_CATEGORY, transactions.normalizedMerchant)
+    .groupBy(month, EFFECTIVE_CATEGORY, transactions.normalizedMerchant, transactions.id)
     .all();
 
   const categoriesAll = listCategories({ includeArchived: true });
   const income = new Set(categoriesAll.filter((category) => category.isIncome).map((category) => category.id));
   const monthIndex = new Map(months.map((key, index) => [key, index]));
 
-  // Signed sums per (category, month) first, merchants excluded, so the netting below is per cell.
+  // Signed sums per (category, month) first, due rows excluded, so the netting below is per cell.
   const signed = new Map<number, Map<string, number>>();
   const uncategorizedSigned = zeros();
   for (const row of rows) {
-    if (input.excludeMerchant?.(row.merchant)) continue;
+    if (input.excludeRow?.(row.merchant, row.amountCents)) continue;
     const total = row.total ?? 0;
     if (row.categoryId === null) {
       uncategorizedSigned[monthIndex.get(row.month) as number] += total;

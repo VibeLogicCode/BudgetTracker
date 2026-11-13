@@ -367,13 +367,20 @@ export default async function DashboardPage({
    * Read off `trend` (the twelve months ending this one, this scope), so the keep line adds no
    * cashflow read (v1.60.0 item 13c). The one difference from the Budgets income line's own
    * 12-month lookback: a scope whose only row is exactly twelve months old reads as unknown here.
+   *
+   * On the month's last day nothing more is expected to come in: a pay landing tomorrow belongs to
+   * next month. Income is then what came in so far plus uncategorized money in, as Net counts it,
+   * so the keep line agrees with Net and never hides "Spending outran income" on a month that did.
    */
   const typicalIncomeCents =
     heading === null ? null : typicalIncomeFrom(trend.filter((row) => row.month < thisMonth)).typicalIncomeCents;
+  const lastDay = today === monthEnd(month);
+  const expectedIncomeCents =
+    typicalIncomeCents === null ? null : lastDay ? incomeCents + uncategorizedInCents : Math.max(incomeCents, typicalIncomeCents);
   const keep =
-    heading === null || typicalIncomeCents === null
+    heading === null || typicalIncomeCents === null || expectedIncomeCents === null
       ? null
-      : { cents: Math.max(incomeCents, typicalIncomeCents) - heading.projectedCents, typicalIncomeCents };
+      : { cents: expectedIncomeCents - heading.projectedCents, typicalIncomeCents };
 
   const budgetRows = rows.filter((row) => !row.isIncome && (row.limitCents !== null || row.spentCents !== 0));
   /** Of the rows this page actually draws -- see the budgets CardHeader below for why it says this. */
@@ -1239,7 +1246,7 @@ function RecurringCountText({ line }: { line: RecurringCountLine }) {
       {line.looks > 0 ? (
         <>
           {' · '}
-          <Link href="/insights#sharper" className="underline hover:text-ink">
+          <Link href={line.href} className="underline hover:text-ink">
             {line.looks} more {line.looks === 1 ? 'looks' : 'look'} recurring
           </Link>
         </>

@@ -302,7 +302,7 @@ describe('BudgetsPage — v1.62.0: where each budget is heading', () => {
     vi.setSystemTime(new Date('2026-03-18T16:00:00.000Z'));
   });
 
-  function setup() {
+  function setup(opts: { firstRow?: string } = {}) {
     t = createSeededTestDb();
     const db = t.db;
     const alexId = insertTestUser(db, { name: 'Alex', username: 'alex', role: 'admin' });
@@ -311,8 +311,11 @@ describe('BudgetsPage — v1.62.0: where each budget is heading', () => {
       db.run(sql`
         insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, category_id, categorization_source, is_transfer, created_by, created_at, updated_at)
         values (${accountId}, ${date}, ${merchant}, ${merchant}, ${cents}, ${categoryIdByName(db, category)}, 'manual', 0, ${alexId}, ${nowIso()}, ${nowIso()})`);
-    row('2025-11-20', -1234, 'Coffee', 'CORNER CAFE');
-    for (const date of ['2025-12-01', '2026-01-01', '2026-02-01', '2026-03-01']) row(date, -200000, 'Rent/Mortgage', 'CEDAR PROPERTY MGMT');
+    const firstRow = opts.firstRow ?? '2025-11-20';
+    row(firstRow, -1234, 'Coffee', 'CORNER CAFE');
+    for (const date of ['2025-12-01', '2026-01-01', '2026-02-01', '2026-03-01']) {
+      if (date > firstRow) row(date, -200000, 'Rent/Mortgage', 'CEDAR PROPERTY MGMT');
+    }
     // On the parent: a child's own line lives in its parent's breakdown, the card carries the parent's.
     upsertBudget({ scope: 'household', userId: null, categoryId: categoryIdByName(db, 'Housing'), month: '2026-03', amountCents: 210000 });
     currentUser.value = { id: alexId, name: 'Alex', username: 'alex', role: 'admin', visibility: 'household' };
@@ -339,5 +342,15 @@ describe('BudgetsPage — v1.62.0: where each budget is heading', () => {
     const { default: BudgetsPage } = await import('@/app/(app)/budgets/page');
     render(await BudgetsPage({ searchParams: Promise.resolve({}) }));
     expect(screen.getByText('Heading for $2,000.00')).toBeTruthy();
+  });
+
+  it('short history late in the month: no check-in, so no sentence explaining one', async () => {
+    // February is the one full month, and it has no 30th: nothing says what the rest of March costs.
+    vi.setSystemTime(new Date('2026-03-30T16:00:00.000Z'));
+    setup({ firstRow: '2026-01-20' });
+    const { default: BudgetsPage } = await import('@/app/(app)/budgets/page');
+    const { container } = render(await BudgetsPage({ searchParams: Promise.resolve({}) }));
+    expect(container.textContent).not.toContain('Heading for');
+    expect(container.textContent).not.toContain('Where each budget is heading');
   });
 });

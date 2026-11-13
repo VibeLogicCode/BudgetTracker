@@ -42,8 +42,13 @@ export const BULK_UNDO_MAX_ROWS = 2000;
 
 export type BulkUndoKind = 'categorize' | 'transfer' | 'person' | 'recurring' | 'transfer_pair';
 
-/** One wording, one place: no record, or one older than the window. */
+/** One wording, one place: a record older than the window. */
 export const BULK_UNDO_EXPIRED_ERROR = 'That change is more than 15 minutes old, so it can no longer be undone.';
+/**
+ * One wording, one place: no record at all -- already undone (a second click, another tab), replaced
+ * by nothing, or never made. Not the 15-minute sentence: nothing here is old, there is just nothing.
+ */
+export const BULK_UNDO_NOTHING_ERROR = 'Nothing to undo.';
 /** One wording, one place: something the change wrote has moved since. */
 export const BULK_UNDO_STALE_ERROR = 'Something in that change was edited since, so it cannot be undone. Nothing was changed.';
 
@@ -407,8 +412,8 @@ function auditDetail(label: string, removed: number, restored: number): string {
 
 /**
  * Takes back the viewer's own last bulk change. Refuses, with nothing written, when there is no
- * record or it is over 15 minutes old; when a self-scoped viewer would restore a row that is no
- * longer theirs; and when anything the change wrote has been edited since (a row's tracked
+ * record ("Nothing to undo.") or it is over 15 minutes old; when a self-scoped viewer would
+ * restore a row that is no longer theirs; and when anything the change wrote has been edited since (a row's tracked
  * columns, a rule it created, removed or rewrote, a loan link it added). Otherwise restores all of
  * it in one transaction -- rows, Bayes training, rules, loan links -- deletes the record and writes
  * one audit row. A constraint failure partway rolls everything back and reads as the stale refusal.
@@ -420,7 +425,8 @@ function auditDetail(label: string, removed: number, restored: number): string {
 export function undoLastBulkAction(input: { viewer: Viewer; now: Date }): BulkUndoResult {
   const userId = input.viewer.id;
   const record = readRecord(userId);
-  if (record === null || expired(record, input.now)) return { ok: false, error: BULK_UNDO_EXPIRED_ERROR };
+  if (record === null) return { ok: false, error: BULK_UNDO_NOTHING_ERROR };
+  if (expired(record, input.now)) return { ok: false, error: BULK_UNDO_EXPIRED_ERROR };
 
   const ids = restoredIds(record);
   const scope = ownerScope(input.viewer);

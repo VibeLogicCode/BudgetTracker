@@ -58,10 +58,11 @@ function setup(opts: { firstRow?: string } = {}) {
     billingAmountCents?: number | null;
     category?: string | null;
     balanceCents?: number | null;
+    vendor?: string | null;
   }) =>
     db.get<{ id: number }>(sql`
-      insert into warranty_items (name, purchase_date, is_lifetime, owner_user_id, type_id, billing_cycle, billing_amount_cents, budget_category_id, current_balance_cents, balance_updated_at, created_at, updated_at)
-      values (${over.name}, ${over.purchaseDate ?? '2025-01-20'}, 0, ${over.owner}, ${over.typeId}, ${over.billingCycle ?? null},
+      insert into warranty_items (name, vendor, purchase_date, is_lifetime, owner_user_id, type_id, billing_cycle, billing_amount_cents, budget_category_id, current_balance_cents, balance_updated_at, created_at, updated_at)
+      values (${over.name}, ${over.vendor ?? null}, ${over.purchaseDate ?? '2025-01-20'}, 0, ${over.owner}, ${over.typeId}, ${over.billingCycle ?? null},
               ${over.billingAmountCents ?? null}, ${over.category ? cat(over.category) : null}, ${over.balanceCents ?? null},
               ${over.balanceCents === undefined || over.balanceCents === null ? null : nowIso()}, ${nowIso()}, ${nowIso()})
       returning id`).id;
@@ -205,6 +206,52 @@ describe('v1.62.0: the month check-in through the database', () => {
     });
   });
 
+  it('a bill claims only the charges inside its amount band: a 60.00 membership leaves the groceries alone', () => {
+    const { alex, cat, row, itemType, item, installment, limit, read } = setup();
+    const membership = item({
+      name: 'Warehouse membership',
+      vendor: 'MAPLE GROCER',
+      typeId: itemType('Membership bill', 'bill'),
+      owner: alex,
+      category: 'Groceries',
+    });
+    installment(membership, '2026-03-20', 6000);
+    for (const month of ['2025-12', '2026-01', '2026-02']) {
+      row({ date: `${month}-12`, cents: -40000, category: 'Groceries', merchant: 'MAPLE GROCER WHOLESALE' });
+      // Last months' memberships, paid but never linked: inside the 60.00 band, so they are that bill.
+      row({ date: `${month}-20`, cents: -6000, category: 'Groceries', merchant: 'MAPLE GROCER WHOLESALE' });
+    }
+    limit('Groceries', 50000);
+    const checkIn = read();
+    // 400.00 a month after the 7th is the usual rest of the month; the 60.00 is counted once, as due.
+    expect(checkIn.total).toEqual({ spentCents: 0, dueCents: 6000, everydayCents: 40000, projectedCents: 46000 });
+    expect(checkIn.byCategory.get(cat('Groceries'))?.projectedCents).toBe(46000);
+  });
+
+  it('a marked mortgage paid on the 2nd that posts on the 1st this month is counted once, not twice', () => {
+    const { alex, row, mark, limit, read } = setup();
+    for (const date of ['2025-12-02', '2026-01-02', '2026-02-02', '2026-03-01']) {
+      row({ date, cents: -240000, category: 'Rent/Mortgage', merchant: 'CEDAR MORTGAGE' });
+    }
+    mark('CEDAR MORTGAGE');
+    limit('Rent/Mortgage', 250000);
+    const checkIn = read({ today: '2026-03-01', spentTotalCents: 240000 });
+    // Already in the spent figure; its 2nd-of-the-month rows in earlier months are not projected again.
+    expect(checkIn.total).toEqual({ spentCents: 240000, dueCents: 0, everydayCents: 0, projectedCents: 240000 });
+    expect(checkIn.dueCount).toBe(0);
+    expect(recurringCountLine({ checkIn, today: '2026-03-01', ownerUserId: null, viewer: household(alex) })?.counted).toBe(1);
+  });
+
+  it('the usual case: the same mortgage not posted yet on the 1st is due once, and its history stays out', () => {
+    const { row, mark, limit, read } = setup();
+    for (const date of ['2025-12-02', '2026-01-02', '2026-02-02']) {
+      row({ date, cents: -240000, category: 'Rent/Mortgage', merchant: 'CEDAR MORTGAGE' });
+    }
+    mark('CEDAR MORTGAGE');
+    limit('Rent/Mortgage', 250000);
+    expect(read({ today: '2026-03-01' }).total).toEqual({ spentCents: 0, dueCents: 240000, everydayCents: 0, projectedCents: 240000 });
+  });
+
   it('a merchant only a loan rule covers stays in the history, since the due side cannot count it', () => {
     const { alex, cat, row, itemType, item, limit, read } = setup();
     const loanId = item({ name: 'Mortgage', typeId: itemType('Home loan', 'loan'), owner: alex, balanceCents: 30_000_000 });
@@ -240,6 +287,8 @@ describe('v1.62.0: the month check-in through the database', () => {
   it('the bills part equals safeToSpend.billsDueCents for the same viewer', () => {
     const { alex, sam, row, itemType, item, installment, read } = setup();
     row({ date: '2026-01-10', cents: -1000, category: 'Groceries' });
+    // Sam's own history (a personal check-in reads from the person's own first month).
+    row({ date: '2026-01-10', cents: -1000, category: 'Groceries', person: sam });
     const typeId = itemType('Streaming plan', 'subscription');
     item({ name: 'Alex streaming', typeId, owner: alex, purchaseDate: '2026-01-20', billingCycle: 'monthly', billingAmountCents: 1500 });
     item({ name: 'Next month', typeId, owner: alex, purchaseDate: '2026-01-05', billingCycle: 'monthly', billingAmountCents: 777 });
@@ -256,7 +305,7 @@ describe('v1.62.0: the month check-in through the database', () => {
   it('gives no check-in before one complete month of history', () => {
     const { row, read } = setup({ firstRow: '2026-02-10' });
     row({ date: '2026-03-02', cents: -5000, category: 'Groceries' });
-    expect(read()).toEqual({ total: null, byCategory: new Map(), monthsUsed: 0, dueCount: 0 });
+    expect(read()).toEqual({ total: null, byCategory: new Map(), monthsUsed: 0, dueCount: 0, recurringCount: 0 });
   });
 
   it('gives nothing at all for a month that is not the current one', () => {
@@ -296,7 +345,11 @@ describe('v1.62.0 (plan item E4): Counting N recurring charges · M more look re
     }
     const checkIn = read();
     expect(checkIn.dueCount).toBe(2);
-    expect(recurringCountLine({ checkIn, today: TODAY, ownerUserId: null, viewer: household(alex) })).toEqual({ counted: 2, looks: 1 });
+    expect(recurringCountLine({ checkIn, today: TODAY, ownerUserId: null, viewer: household(alex) })).toEqual({
+      counted: 2,
+      looks: 1,
+      href: '/insights#sharper',
+    });
   });
 
   it('is hidden when there is nothing to count and nothing looks recurring, or no check-in', () => {
@@ -315,6 +368,30 @@ describe('v1.62.0 (plan item E4): Counting N recurring charges · M more look re
     expect(recurringCountLine({ checkIn: read({ viewer }), today: TODAY, ownerUserId: sam, viewer })).toBeNull();
     expect(
       recurringCountLine({ checkIn: read({ scope: 'personal', userId: alex }), today: TODAY, ownerUserId: alex, viewer: household(alex) }),
-    ).toEqual({ counted: 0, looks: 1 });
+    ).toEqual({ counted: 0, looks: 1, href: `/insights?person=${alex}#sharper` });
+  });
+
+  it('counts a marked charge that already came this month as well as the ones still due', () => {
+    const { alex, row, mark, read } = setup();
+    for (const date of ['2025-12-02', '2026-01-02', '2026-02-02', '2026-03-02']) {
+      row({ date, cents: -1699, category: 'Subscriptions', merchant: 'STREAMBOX' });
+    }
+    for (const date of ['2025-12-15', '2026-01-15', '2026-02-15']) {
+      row({ date, cents: -6200, category: 'Utilities', merchant: 'CEDAR PHONE CO' });
+    }
+    mark('STREAMBOX');
+    mark('CEDAR PHONE CO');
+    const checkIn = read();
+    expect(checkIn.dueCount).toBe(1);
+    expect(recurringCountLine({ checkIn, today: TODAY, ownerUserId: null, viewer: household(alex) })?.counted).toBe(2);
+  });
+
+  it("a self viewer's link carries no person: their own scope wins on Insights", () => {
+    const { sam, row, read } = setup();
+    for (const date of ['2025-12-10', '2026-01-10', '2026-02-10']) {
+      row({ date, cents: -4500, category: 'Fitness', merchant: 'RIVERSIDE GYM', person: sam });
+    }
+    const viewer = selfOnly(sam);
+    expect(recurringCountLine({ checkIn: read({ viewer }), today: TODAY, ownerUserId: sam, viewer })?.href).toBe('/insights#sharper');
   });
 });

@@ -4,7 +4,7 @@ import { accounts, billInstallments, loanAnchors,
   loanPostings,
   loanRateHistory, loanMatcherRules, loanPayments, transactions, users, warrantyItemTypes, warrantyItems } from '@/db/schema';
 import { canActOnOwner, ownerScope, HOUSEHOLD_VIEWER, NOT_YOURS_ERROR, type Viewer } from '@/lib/auth/viewer';
-import { amountWithinBounds } from '@/lib/categorize/amount-bounds';
+import { withinRecordedAmountBand } from '@/lib/categorize/amount-bounds';
 import { nowIso } from '@/lib/clock';
 // v1.31.0 R-03 / ruling R24: which display_description writer outranks which, defined once.
 import { displaySourceMayWrite } from '@/lib/display-source';
@@ -249,8 +249,6 @@ export function ruleLinkedPayments(days: number, now: Date = new Date()): RuleLi
     .all();
 }
 
-const AMOUNT_BAND = { low: 0.5, high: 2 };
-
 /**
  * v1.58.1: the item owner's own id when that owner is self-scoped (what ownerScope returns for the
  * same user), otherwise null. A rule on such an item only considers transactions attributed to that
@@ -288,9 +286,7 @@ export function loanRuleReach(input: { itemId: number; merchantContains: string;
 
   const billing = item?.billingAmountCents ?? null;
   if (billing === null || billing <= 0) return rows.length;
-  return rows.filter((row) =>
-    amountWithinBounds(row.amountCents, Math.round(billing * AMOUNT_BAND.low), Math.round(billing * AMOUNT_BAND.high)),
-  ).length;
+  return rows.filter((row) => withinRecordedAmountBand(row.amountCents, billing)).length;
 }
 
 export function deleteLoanRule(id: number): boolean {
@@ -389,17 +385,14 @@ interface ActiveRule {
  * too loose for somebody, the follow-up is a per-rule tolerance column, which is R27a's own open
  * storage question and needs a migration this does not.
  *
- * Compared through `amountWithinBounds` (src/lib/categorize/amount-bounds.ts) rather than a `>=`
+ * Compared through `withinRecordedAmountBand` (src/lib/categorize/amount-bounds.ts, which reads
+ * `amountWithinBounds`) rather than a `>=`
  * pair written here: that is the ONE amount predicate, and tests/ops/amount-bounds.test.ts refuses
  * a second copy of it anywhere under src/.
  */
 function amountPlausibleFor(rule: ActiveRule, amountCents: number): boolean {
   if (rule.billingAmountCents === null || rule.billingAmountCents <= 0) return true;
-  return amountWithinBounds(
-    amountCents,
-    Math.round(rule.billingAmountCents * AMOUNT_BAND.low),
-    Math.round(rule.billingAmountCents * AMOUNT_BAND.high),
-  );
+  return withinRecordedAmountBand(amountCents, rule.billingAmountCents);
 }
 
 function activeRules(tx: ReturnType<typeof getDb>): ActiveRule[] {

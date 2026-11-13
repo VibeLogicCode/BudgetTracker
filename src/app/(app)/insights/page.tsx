@@ -33,7 +33,7 @@ export default async function InsightsPage({
   // The full list: the Dashboard's card is the capped summary of this one.
   const findings = householdInsights({ today, viewer, limit: null });
   const personName = isSelfScoped(viewer) || person === null ? null : (findUserById(person)?.name ?? null);
-  // A self viewer's suggestions are their own merchants (setupSuggestions scopes by the viewer).
-  const suggestions = setupSuggestions(viewer, today);
+  // The person pill's merchants, the same scope as the summary; a self viewer's own scope wins.
+  const suggestions = setupSuggestions(viewer, today, person);
   return <InsightsClient summary={summary} findings={findings} suggestions={suggestions} person={person} personName={personName} />;
 }

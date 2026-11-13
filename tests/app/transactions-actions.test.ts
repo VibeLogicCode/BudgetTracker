@@ -14,7 +14,7 @@ import { NOT_YOURS_ERROR } from '@/lib/auth/viewer';
 import { commitImport } from '@/lib/import/commit';
 import { computeRowHashes } from '@/lib/import/dedup';
 import { createManualTransaction } from '@/lib/transactions';
-import { BULK_UNDO_EXPIRED_ERROR, BULK_UNDO_MAX_ROWS, BULK_UNDO_STALE_ERROR, lastBulkUndo } from '@/lib/bulk-undo';
+import { BULK_UNDO_EXPIRED_ERROR, BULK_UNDO_MAX_ROWS, BULK_UNDO_NOTHING_ERROR, BULK_UNDO_STALE_ERROR, lastBulkUndo } from '@/lib/bulk-undo';
 
 let currentUser: {
   id: number;
@@ -3533,11 +3533,13 @@ describe('undo around every bulk change (v1.62.0 B4)', () => {
 
     expect(await undoBulkAction({}, formData({}))).toEqual({ message: 'Undone. 3 transactions are back as they were; 1 rule removed.' });
     expect(revalidated()).toEqual(expect.arrayContaining(['/transactions', '/budgets', '/dashboard', '/reports', '/insights']));
+    // A second click, or a stale tab still showing the bar: not the 15-minute sentence.
+    expect(await undoBulkAction({}, formData({}))).toEqual({ error: BULK_UNDO_NOTHING_ERROR });
   });
 
   it('refuses with nothing to undo, past 15 minutes, and once a row was edited since', async () => {
     const s = reviewSetup();
-    expect(await undoBulkAction({}, formData({}))).toEqual({ error: BULK_UNDO_EXPIRED_ERROR });
+    expect(await undoBulkAction({}, formData({}))).toEqual({ error: BULK_UNDO_NOTHING_ERROR });
 
     await bulkCategorizeAction({}, formData({ ids: s.maple.join(','), categoryId: String(s.groceries), createRules: 'on' }));
     vi.setSystemTime(new Date('2026-03-14T15:15:01.000Z'));

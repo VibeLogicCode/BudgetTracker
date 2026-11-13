@@ -517,15 +517,50 @@ describe('v1.62.0: restOfMonthSpend', () => {
       dayOfMonth: 7,
       scope: 'household',
       userId: null,
-      excludeMerchant: (merchant) => merchant === 'STREAMBOX',
+      excludeRow: (merchant) => merchant === 'STREAMBOX',
     });
     expect(rest.byCategory.get(subscriptions)).toEqual([0, 4217, 0]);
     expect(rest.totalByMonth).toEqual([0, 4217, 0]);
   });
 
+  it('hands the caller each row with its whole amount, so a bill can claim only the charges that look like it', () => {
+    const { db, alex, row } = checkInSetup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const clothing = categoryIdByName(db, 'Clothing');
+    row({ date: '2026-01-15', amountCents: -6000, categoryId: groceries, merchant: 'MAPLE GROCER WHOLESALE' });
+    row({ date: '2026-01-16', amountCents: -20000, categoryId: groceries, merchant: 'MAPLE GROCER WHOLESALE' });
+    const split = row({ date: '2026-01-17', amountCents: -6000, categoryId: groceries, merchant: 'MAPLE GROCER WHOLESALE' });
+    setTransactionSplits({
+      txnId: split,
+      parts: [
+        { categoryId: groceries, amountCents: -3500 },
+        { categoryId: clothing, amountCents: -2500 },
+      ],
+      userId: alex,
+    });
+    const seen: number[] = [];
+    const rest = restOfMonthSpend({
+      targetMonth: '2026-03',
+      dayOfMonth: 7,
+      scope: 'household',
+      userId: null,
+      excludeRow: (_merchant, amountCents) => {
+        seen.push(amountCents);
+        return amountCents === -6000;
+      },
+    });
+    // Both 60.00 rows go, the split one whole (both of its parts); the 200.00 row stays.
+    expect(rest.totalByMonth).toEqual([0, 20000, 0]);
+    expect(rest.byCategory.get(clothing)).toEqual([0, 0, 0]);
+    expect(seen.sort((a, b) => a - b)).toEqual([-20000, -6000, -6000, -6000]);
+  });
+
   it('applies the personal scope', () => {
     const { db, alex, sam, row } = checkInSetup();
     const groceries = categoryIdByName(db, 'Groceries');
+    // Each person's own partial first month, so both windows read December to February too.
+    row({ date: '2025-11-21', amountCents: -100, categoryId: groceries, person: alex });
+    row({ date: '2025-11-21', amountCents: -100, categoryId: groceries, person: sam });
     row({ date: '2026-01-15', amountCents: -4217, categoryId: groceries, person: alex });
     row({ date: '2026-01-16', amountCents: -1805, categoryId: groceries, person: sam });
     const mine = restOfMonthSpend({ targetMonth: '2026-03', dayOfMonth: 7, scope: 'personal', userId: alex });
@@ -533,6 +568,22 @@ describe('v1.62.0: restOfMonthSpend', () => {
     expect(mine.totalByMonth).toEqual([0, 4217, 0]);
     const household = restOfMonthSpend({ targetMonth: '2026-03', dayOfMonth: 7, scope: 'household', userId: null });
     expect(household.totalByMonth).toEqual([0, 6022, 0]);
+  });
+
+  it("a personal window starts from that person's own first month, not the household's", () => {
+    const { db, alex, sam, row } = checkInSetup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    row({ date: '2025-11-21', amountCents: -100, categoryId: groceries, person: alex });
+    // Sam's rows start in a partial January: only February is a full month of Sam's.
+    row({ date: '2026-01-16', amountCents: -1805, categoryId: groceries, person: sam });
+    row({ date: '2026-02-16', amountCents: -2400, categoryId: groceries, person: sam });
+    expect(checkInHistoryMonths('2026-03')).toEqual(['2025-12', '2026-01', '2026-02']);
+    expect(checkInHistoryMonths('2026-03', alex)).toEqual(['2025-12', '2026-01', '2026-02']);
+    expect(checkInHistoryMonths('2026-03', sam)).toEqual(['2026-02']);
+    const sams = restOfMonthSpend({ targetMonth: '2026-03', dayOfMonth: 7, scope: 'personal', userId: sam });
+    expect(sams.months).toEqual(['2026-02']);
+    expect(sams.totalByMonth).toEqual([2400]);
+    expect(firstDataMonth(sam)).toBe('2026-01');
   });
 
   it('counts a split row at its parts', () => {

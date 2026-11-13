@@ -153,6 +153,8 @@ describe('MUST-9.35: household rows reach every enabled user, personal rows only
     // Above the $260 spent so far, so MUST-9.6 condition 3 does not stand the personal row
     // down; heading for $660 (with Sam's own July) still clears 110 percent of $300.
     upsertBudget({ scope: 'personal', userId: sam, categoryId: groceries, month: '2026-08', amountCents: 30000 });
+    // Sam's own partial first month (a personal check-in reads from the person's own first month).
+    spend(categoryIdByName(t.db, 'Bank Fees'), 100, sam, '2026-06-20');
     history(groceries, 40000, sam);
     spend(groceries, 26000, sam);
 
@@ -301,6 +303,8 @@ describe('S-18 fix (v1.13.0 ruling R2): a self-scoped recipient never receives a
 
     // self's OWN personal budget, self's own spend -- self must still see this.
     upsertBudget({ scope: 'personal', userId: self, categoryId: gas, month: '2026-08', amountCents: 60000 });
+    // self's own partial first month (a personal check-in reads from the person's own first month).
+    spend(categoryIdByName(t.db, 'Bank Fees'), 100, self, '2026-06-20');
     history(gas, 40000, self);
     spend(gas, 26000, self); // the identical figure, personal scope
 

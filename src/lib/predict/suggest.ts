@@ -132,12 +132,18 @@ export interface BudgetPredictions {
    */
   checkInMonths: number;
   /**
+   * v1.62.0: the section on screen has a check-in. False with months read but no figure (short
+   * history late in a month: February cannot say what the 30th to the 31st usually costs), and
+   * then the page prints no sentence about figures it does not show.
+   */
+  checkInShown: boolean;
+  /**
    * v1.62.0 (plan item E4): "Counting N recurring charges · M more look recurring" for the grid on
    * screen (the household, the selected person, or a self viewer's own), or null when there is
    * nothing to say. Shape of RecurringCountLine in src/lib/month-checkin.ts, kept here so the
    * client never imports that server module.
    */
-  recurringLine: { counted: number; looks: number } | null;
+  recurringLine: { counted: number; looks: number; href: string } | null;
   household: SectionPredictions;
   personal: { userId: number; predictions: SectionPredictions }[];
 }

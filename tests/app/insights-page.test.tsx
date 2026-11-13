@@ -132,6 +132,16 @@ describe('InsightsPage', () => {
     expect(screen.queryByRole('button', { name: 'Mark recurring: MAPLE STREAMING' })).toBeNull();
   });
 
+  it('a household viewer on a person pill is offered only that person’s merchants', async () => {
+    const s = await seed();
+    s.monthly('MAPLE STREAMING', s.adult);
+    s.monthly('CEDAR PHONE CO', s.child);
+    currentUser.value = { id: s.adult, name: 'Alex', username: 'alex', role: 'admin', visibility: 'household' };
+    await renderPage({ person: String(s.child) });
+    expect(screen.getByRole('button', { name: 'Mark recurring: CEDAR PHONE CO' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Mark recurring: MAPLE STREAMING' })).toBeNull();
+  });
+
   /** Review Focus 4. */
   it('a self viewer’s summary counts only their own charges, whatever ?person= says', async () => {
     const s = await seed();

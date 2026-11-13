@@ -1,14 +1,15 @@
 import { eq, inArray } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { transactions, transactionSplits, warrantyItems } from '@/db/schema';
-import { ownerScope, type Viewer } from '@/lib/auth/viewer';
+import { isSelfScoped, ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { billsDueThisMonth } from '@/lib/bills';
 import { flattenBudgetRows, type BudgetRow, type BudgetScope } from '@/lib/budgets';
 import { listCategories } from '@/lib/categories';
 import { daysBetweenIso, monthEnd, monthOf, monthStart } from '@/lib/dates';
+import { insightsHref } from '@/lib/insights-links';
 import { checkInHistoryMonths, restOfMonthSpend } from '@/lib/predict/history';
 import { checkInMonthEnd, everydayCents, type HistoryStretch } from '@/lib/predict/pace';
-import { dueElsewhereMatcher, expectedRecurringCharges, recurringCharges } from '@/lib/recurring';
+import { dueElsewhereMatcher, recurringCharges, recurringThisMonth } from '@/lib/recurring';
 import { EFFECTIVE_CATEGORY } from '@/lib/splits';
 
 /**
@@ -25,13 +26,15 @@ import { EFFECTIVE_CATEGORY } from '@/lib/splits';
  * alert and the weekly digest's pace list, so no two of them can disagree about the same budget.
  *
  * Nothing is counted twice:
- *   - the history leaves out exactly the merchants the due side counts (dueElsewhereMatcher, built
- *     from the due bills and expected charges below), and every row that paid a bill installment;
+ *   - the history leaves out exactly the rows the check-in counts elsewhere (dueElsewhereMatcher):
+ *     every row of a marked merchant that is due or has already charged this month, the rows of a
+ *     due bill's merchant inside that bill's amount band, and every row that paid a bill installment;
  *   - an expected recurring charge a bill row already stands for is left out of the due part
- *     (expectedRecurringCharges, handed the same bills);
+ *     (recurringThisMonth, handed the same bills);
  *   - a marked merchant that has already charged this month is not due again, whatever its next
  *     expected date says (a charge on the 1st of each month has a 30-day median gap, which puts
- *     the next one on the 31st of a 31-day month).
+ *     the next one on the 31st of a 31-day month), and its earlier months' rows are not projected
+ *     again either (a mortgage paid on the 2nd that posts on the 1st this month).
  *
  * Rows held as possible duplicates (set_aside_rows, v1.61.0) are not transactions, so neither the
  * spent figures callers pass nor the history read here can count them.
@@ -57,14 +60,21 @@ export interface MonthCheckIn {
   monthsUsed: number;
   /** How many bills and marked recurring charges the due part counts (0 when `total` is null). */
   dueCount: number;
+  /**
+   * The recurring charges this month's figure accounts for: the due part's bills and marked
+   * charges, plus the marked merchants that already charged this month (0 when `total` is null).
+   */
+  recurringCount: number;
 }
 
 /** v1.62.0 (plan item E4): the quiet line under the check-in. */
 export interface RecurringCountLine {
-  /** The bills and marked recurring charges the check-in counts as still due this month. */
+  /** The bills and marked recurring charges the check-in counts this month, charged or still due. */
   counted: number;
   /** Merchants with a detected rhythm nobody has marked either way (recurringCharges' Looks tier). */
   looks: number;
+  /** Where "M more look recurring" links: the Insights card, for the same person as the count. */
+  href: string;
 }
 
 /**
@@ -82,9 +92,12 @@ export function recurringCountLine(input: {
   if (input.checkIn === null || input.checkIn.total === null) return null;
   const looks = recurringCharges({ today: input.today, ownerUserId: input.ownerUserId, viewer: input.viewer, accountId: null }).looks
     .length;
-  const counted = input.checkIn.dueCount;
+  const counted = input.checkIn.recurringCount;
   if (counted === 0 && looks === 0) return null;
-  return { counted, looks };
+  // The person pill rides along, so the Insights card lists the same merchants the count read. A
+  // self viewer's own scope wins on Insights whatever the link says, so their link carries none.
+  const person = isSelfScoped(input.viewer) ? null : input.ownerUserId;
+  return { counted, looks, href: `${insightsHref({ person, account: null })}#sharper` };
 }
 
 interface DueItem {
@@ -157,8 +170,9 @@ export function monthCheckIn(input: {
 
   // Owner decision (2026-11-12): nothing before one complete month of history, and no fallback.
   // Checked first, so a new household pays for none of the reads below.
-  const empty: MonthCheckIn = { total: null, byCategory: new Map(), monthsUsed: 0, dueCount: 0 };
-  if (checkInHistoryMonths(input.month).length === 0) return empty;
+  const empty: MonthCheckIn = { total: null, byCategory: new Map(), monthsUsed: 0, dueCount: 0, recurringCount: 0 };
+  // A personal check-in's window starts from that person's own first data month.
+  if (checkInHistoryMonths(input.month, ownerUserId).length === 0) return empty;
 
   // MUST-8.2: the day comes from the household date, and the month's length from monthEnd.
   const dayOfMonth = Number(input.today.slice(8, 10));
@@ -169,22 +183,29 @@ export function monthCheckIn(input: {
   // Due: the bills safeToSpend reads (to month end, overdue left out), then the marked merchants'
   // next charges inside this month that no bill row stands for and that have not charged yet.
   const bills = billsDueThisMonth({ month: input.month, today: input.today, ownerUserId, viewer: input.viewer });
-  const inMonth = expectedRecurringCharges({
+  const marked = recurringThisMonth({
     today: input.today,
     days: daysBetweenIso(input.today, last),
     ownerUserId,
     viewer: input.viewer,
     bills,
-  }).filter((charge) => charge.expectedDate >= first && charge.expectedDate <= last);
-  const newest = newestCharges(inMonth.map((charge) => charge.newestTransactionId));
-  const expected = inMonth.filter((charge) => (newest.get(charge.newestTransactionId)?.date ?? '') < first);
+    since: first,
+  });
+  const charged = new Set(marked.charged);
+  const expected = marked.expected.filter(
+    (charge) => charge.expectedDate >= first && charge.expectedDate <= last && !charged.has(charge.merchant),
+  );
+  const newest = newestCharges(expected.map((charge) => charge.newestTransactionId));
 
+  // The history leaves out every marked merchant counted this month, due OR already charged: a
+  // mortgage paid on the 2nd that posts on the 1st is in the spent figure, and its earlier months'
+  // 2nd-of-the-month rows must not be projected again for the rest of this one.
   const rest = restOfMonthSpend({
     targetMonth: input.month,
     dayOfMonth,
     scope,
     userId,
-    excludeMerchant: dueElsewhereMatcher({ bills, expected }),
+    excludeRow: dueElsewhereMatcher({ bills, marked: [...expected.map((charge) => charge.merchant), ...marked.charged] }),
   });
   const stretches = (perMonth: readonly number[] | undefined): HistoryStretch[] =>
     rest.months.map((_month, index) => ({ cents: perMonth?.[index] ?? 0, days: rest.daysAfter[index] }));
@@ -233,5 +254,6 @@ export function monthCheckIn(input: {
     byCategory,
     monthsUsed: rest.months.length,
     dueCount: due.length,
+    recurringCount: due.length + marked.charged.length,
   };
 }

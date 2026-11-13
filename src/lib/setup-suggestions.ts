@@ -47,11 +47,12 @@ function ordinal(day: number): string {
 
 /**
  * The Looks recurring merchants (not Known, not Forming, not marked not_recurring: recurringCharges
- * already sorts those out), largest monthly amount first. A self-scoped member is scoped to their
- * own merchants by `ownerScope`; recurringCharges applies the viewer's visibility on top.
+ * already sorts those out), largest monthly amount first. `ownerUserId` is the Insights person pill
+ * (null for the household); a self-scoped member is scoped to their own merchants by `ownerScope`
+ * whatever the pill says, and recurringCharges applies the viewer's visibility on top.
  */
-export function setupSuggestions(viewer: Viewer, today: string): SetupSuggestion[] {
-  const result = recurringCharges({ today, ownerUserId: ownerScope(viewer), viewer, accountId: null });
+export function setupSuggestions(viewer: Viewer, today: string, ownerUserId: number | null = null): SetupSuggestion[] {
+  const result = recurringCharges({ today, ownerUserId: ownerScope(viewer) ?? ownerUserId, viewer, accountId: null });
   return result.looks
     .map((row): SetupSuggestion => {
       const typicalCents = Math.abs(row.typicalCents ?? row.lastAmountCents);

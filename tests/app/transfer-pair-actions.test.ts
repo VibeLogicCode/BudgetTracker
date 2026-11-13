@@ -75,6 +75,15 @@ describe('confirmTransferPairAction', () => {
     expect(paths).toEqual(['/transactions', '/dashboard', '/budgets', '/reports']);
   });
 
+  it('counts only the row it changed when one side is already a transfer', async () => {
+    const { t, alex, inc, form, flags } = setup();
+    t.sqlite.prepare('update transactions set is_transfer = 1 where id = ?').run(inc);
+    const result = await confirmTransferPairAction({}, form());
+    expect(result).toEqual({ message: 'Marked 1 transaction as a transfer; the other side already was one.' });
+    expect(flags().map((row) => row.v)).toEqual([1, 1]);
+    expect(lastBulkUndo(alex, new Date())).toMatchObject({ rows: 1, label: 'Marked 1 transaction as a transfer; the other side already was one.' });
+  });
+
   it('checks the origin before anything else', async () => {
     const { form, flags } = setup();
     sameOrigin.value = false;

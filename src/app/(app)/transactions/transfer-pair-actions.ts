@@ -34,9 +34,14 @@ export async function confirmTransferPairAction(_prev: ActionState, formData: Fo
   const before = captureBulkBefore({ ids: [parsed.data.outId, parsed.data.inId] });
   const result = confirmTransferPair({ ...parsed.data, viewer: user, at });
   if (!result.ok) return { error: result.error };
-  recordBulkUndo({ userId: user.id, kind: 'transfer_pair', label: 'Marked 2 transactions as a transfer pair.', before, at });
+  // Counts only the rows this changed: one side of a pair may already have been a transfer.
+  const label =
+    result.marked === 2
+      ? 'Marked 2 transactions as a transfer pair.'
+      : 'Marked 1 transaction as a transfer; the other side already was one.';
+  recordBulkUndo({ userId: user.id, kind: 'transfer_pair', label, before, at });
   revalidateMoney();
-  return { message: 'Marked 2 transactions as a transfer pair.' };
+  return { message: label };
 }
 
 export async function dismissTransferPairAction(_prev: ActionState, formData: FormData): Promise<ActionState> {

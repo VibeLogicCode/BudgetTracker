@@ -122,3 +122,23 @@ export function defaultBoundsAround(amountCents: number): { minCents: number; ma
   const maxCents = Math.ceil((magnitude + halfWidth) / CENTS_PER_DOLLAR) * CENTS_PER_DOLLAR;
   return { minCents, maxCents };
 }
+
+/**
+ * R27a's band (docs/PENDING-FIXES.md): a payment plausibly belongs to a recorded bill or loan
+ * amount when it is between half and double that amount. Deliberately loose -- a repayment rounded
+ * up, a bill that rose at renewal, an extra month paid at once all stay inside -- while a $60
+ * dinner split never matches a $400 repayment. The loan and bill payment matcher (src/lib/loans.ts)
+ * and the month check-in's history exclusion (src/lib/recurring.ts, dueElsewhereMatcher) both read
+ * it here, so the two can never disagree about which charges are "that bill".
+ */
+const RECORDED_AMOUNT_BAND = { low: 0.5, high: 2 };
+
+/** Does a charge plausibly pay a recorded amount? A recorded amount of zero or less has no band and allows anything. */
+export function withinRecordedAmountBand(amountCents: number, recordedCents: number): boolean {
+  if (recordedCents <= 0) return true;
+  return amountWithinBounds(
+    amountCents,
+    Math.round(recordedCents * RECORDED_AMOUNT_BAND.low),
+    Math.round(recordedCents * RECORDED_AMOUNT_BAND.high),
+  );
+}

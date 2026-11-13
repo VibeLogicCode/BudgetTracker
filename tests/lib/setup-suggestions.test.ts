@@ -81,4 +81,13 @@ describe('setupSuggestions', () => {
     expect(setupSuggestions(s.self, TODAY).map((row) => row.merchant)).toEqual(['STREAMBOX']);
     expect(setupSuggestions(s.household, TODAY).map((row) => row.merchant)).toEqual(['MAPLE MORTGAGE', 'STREAMBOX']);
   });
+
+  it("follows the Insights person pill, and a self viewer's own scope still wins over it", async () => {
+    const s = await seed();
+    s.monthly('MAPLE MORTGAGE', 240000, s.alex);
+    s.monthly('STREAMBOX', 1349, s.sam);
+    expect(setupSuggestions(s.household, TODAY, s.sam).map((row) => row.merchant)).toEqual(['STREAMBOX']);
+    expect(setupSuggestions(s.household, TODAY, s.alex).map((row) => row.merchant)).toEqual(['MAPLE MORTGAGE']);
+    expect(setupSuggestions(s.self, TODAY, s.alex).map((row) => row.merchant)).toEqual(['STREAMBOX']);
+  });
 });

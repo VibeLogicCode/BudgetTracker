@@ -215,12 +215,14 @@ function SavingsTargetControl({ month, progress }: { month: string; progress: Sa
 /**
  * v1.62.0. The one visible sentence that says what each card's "Heading for" counts, and the quiet
  * line under it (plan item E4). The window is the check-in's own (1 to 3 complete months), named
- * as it is, so a household two months in is not told it is three.
+ * as it is, so a household two months in is not told it is three. Nothing at all when months were
+ * read but no check-in came of them (`shown` false): no sentence explaining figures not on screen.
  */
-function CheckInSentence({ months, line }: { months: number; line: BudgetPredictions['recurringLine'] }) {
+function CheckInSentence({ months, shown, line }: { months: number; shown: boolean; line: BudgetPredictions['recurringLine'] }) {
   if (months === 0) {
     return <p className="text-sm text-muted">Where each budget is heading appears once there is a full month of history.</p>;
   }
+  if (!shown) return null;
   const window = months === 1 ? 'the last full month' : `the last ${months} full months`;
   return (
     <div className="flex flex-col gap-1">
@@ -234,7 +236,7 @@ function CheckInSentence({ months, line }: { months: number; line: BudgetPredict
 }
 
 /** "Counting N recurring charges · M more look recurring". The second half links to Insights only when M > 0. */
-function RecurringCountText({ line }: { line: { counted: number; looks: number } }) {
+function RecurringCountText({ line }: { line: { counted: number; looks: number; href: string } }) {
   const counted =
     line.counted === 0
       ? 'Counting no recurring charges'
@@ -245,7 +247,7 @@ function RecurringCountText({ line }: { line: { counted: number; looks: number }
       {line.looks > 0 ? (
         <>
           {' · '}
-          <Link href="/insights#sharper" className="underline hover:text-ink">
+          <Link href={line.href} className="underline hover:text-ink">
             {line.looks} more {line.looks === 1 ? 'looks' : 'look'} recurring
           </Link>
         </>
@@ -2185,7 +2187,9 @@ export function BudgetsClient({
         ) : null}
       </PageGuide>
 
-      {predictions !== null ? <CheckInSentence months={predictions.checkInMonths} line={predictions.recurringLine} /> : null}
+      {predictions !== null ? (
+        <CheckInSentence months={predictions.checkInMonths} shown={predictions.checkInShown} line={predictions.recurringLine} />
+      ) : null}
 
       <FormError message={banner.error} />
       {banner.message ? <Notice tone="success">{banner.message}</Notice> : null}

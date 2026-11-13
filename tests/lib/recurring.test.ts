@@ -14,7 +14,6 @@ import {
   expectedRecurringCharges,
   recurringCharges,
   recurringLoad,
-  type ExpectedCharge,
   type RecurringCharges,
 } from '@/lib/recurring';
 import { createManualTransaction } from '@/lib/transactions';
@@ -1050,21 +1049,38 @@ describe('v1.62.0: expectedRecurringCharges takes a person, and the month check-
         overdue: false,
       },
     ];
-    const due: ExpectedCharge = {
-      merchant: 'CEDAR PHONE CO',
-      expectedDate: addDaysIso(TODAY, 2),
-      typicalCents: 6200,
-      late: false,
-      accountName: 'Chequing',
-      newestTransactionId: 1,
-    };
-    const matcher = dueElsewhereMatcher({ bills, expected: [due] });
-    expect(matcher('CEDAR PHONE CO')).toBe(true); // a marked charge counted as due
-    expect(matcher('MAPLE STREAMING')).toBe(true); // covered by a due bill row's item
-    expect(matcher('CAR LOAN CO')).toBe(false); // a loan rule covers it, but nothing counts it as due
-    expect(matcher('ASPEN BAKERY')).toBe(false); // unmarked, uncovered
-    // A marked merchant the due side did not count (already charged, or not due this month) stays in.
-    expect(dueElsewhereMatcher({ bills: [], expected: [] })('CEDAR PHONE CO')).toBe(false);
+    const matcher = dueElsewhereMatcher({ bills, marked: ['CEDAR PHONE CO'] });
+    expect(matcher('CEDAR PHONE CO', -6200)).toBe(true); // a marked charge counted this month
+    expect(matcher('CEDAR PHONE CO', -99900)).toBe(true); // every row of a marked merchant, whatever the amount
+    expect(matcher('MAPLE STREAMING', -1349)).toBe(true); // covered by a due bill row's item, inside its band
+    expect(matcher('CAR LOAN CO', -50000)).toBe(false); // a loan rule covers it, but nothing counts it as due
+    expect(matcher('ASPEN BAKERY', -1349)).toBe(false); // unmarked, uncovered
+    // A marked merchant the check-in did not count this month stays in.
+    expect(dueElsewhereMatcher({ bills: [], marked: [] })('CEDAR PHONE CO', -6200)).toBe(false);
+  });
+
+  it('dueElsewhereMatcher: a bill claims a covered merchant only inside its amount band', async () => {
+    const ctx = await setup();
+    const typeId = ctx.itemType('Membership', 'bill');
+    const membership = ctx.item({ name: 'Warehouse membership', typeId, vendor: 'MAPLE GROCER' });
+    const bills: UpcomingBill[] = [
+      {
+        itemId: membership,
+        name: 'Warehouse membership',
+        kind: 'bill',
+        dueDate: addDaysIso(TODAY, 3),
+        amountCents: 6000,
+        installmentId: null,
+        overdue: false,
+      },
+    ];
+    const matcher = dueElsewhereMatcher({ bills, marked: [] });
+    // Half to double the bill: 30.00 to 120.00, the band the loan and bill payment matcher uses.
+    expect(matcher('MAPLE GROCER WHOLESALE', -6000)).toBe(true);
+    expect(matcher('MAPLE GROCER WHOLESALE', -3000)).toBe(true);
+    expect(matcher('MAPLE GROCER WHOLESALE', -12000)).toBe(true);
+    expect(matcher('MAPLE GROCER WHOLESALE', -2999)).toBe(false);
+    expect(matcher('MAPLE GROCER WHOLESALE', -40000)).toBe(false); // the groceries
   });
 });
 

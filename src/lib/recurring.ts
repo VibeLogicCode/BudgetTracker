@@ -3,6 +3,7 @@ import { getDb } from '@/db/client';
 import { accounts, loanMatcherRules, transactions, warrantyItemTypes, warrantyItems } from '@/db/schema';
 import { ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { upcomingBills, withinComingUpBound, type UpcomingBill } from '@/lib/bills';
+import { withinRecordedAmountBand } from '@/lib/categorize/amount-bounds';
 import { addDaysIso, daysBetweenIso } from '@/lib/dates';
 import { listRecurringMarkRules, recurringMarkFor, type MerchantRuleRecord } from '@/lib/categorize/rules';
 import {
@@ -567,8 +568,47 @@ export function expectedRecurringCharges(input: {
   viewer: Viewer;
   bills?: readonly UpcomingBill[];
 }): ExpectedCharge[] {
+  return markedRecurring(input).expected;
+}
+
+/** v1.62.0, the month check-in's read of the marked merchants (recurringThisMonth). */
+export interface RecurringThisMonth {
+  /** expectedRecurringCharges' rows, from the same read. */
+  expected: ExpectedCharge[];
+  /**
+   * Marked merchants with a rhythm (monthly or yearly) whose newest charge is dated from `since` to
+   * today and that no bill row stands for. A monthly or yearly charge does not come twice in a
+   * month, so this month's charge is already in the spent figure and nothing more is due.
+   */
+  charged: string[];
+}
+
+/**
+ * v1.62.0, the month check-in. expectedRecurringCharges plus the marked merchants that already
+ * charged since `since` (the first of the month), in ONE candidate read.
+ */
+export function recurringThisMonth(input: {
+  today: string;
+  days: number;
+  ownerUserId: number | null;
+  viewer: Viewer;
+  bills: readonly UpcomingBill[];
+  since: string;
+}): RecurringThisMonth {
+  return markedRecurring(input);
+}
+
+function markedRecurring(input: {
+  today: string;
+  days: number;
+  ownerUserId?: number | null;
+  viewer: Viewer;
+  bills?: readonly UpcomingBill[];
+  since?: string;
+}): RecurringThisMonth {
   const windowEnd = addDaysIso(input.today, input.days);
   const out: ExpectedCharge[] = [];
+  const charged: string[] = [];
   const ownerUserId = input.ownerUserId ?? null;
   // Only the rows the card actually shows can stand for a charge (M-1): one overdue past its bound is dropped there.
   const bills = (
@@ -593,6 +633,9 @@ export function expectedRecurringCharges(input: {
     const standsFor =
       (tracked !== null && billItemIds.includes(tracked.itemId)) || billNeedleList.some((needle) => covers(needle, row.merchant));
     if (standsFor) continue;
+    if (input.since !== undefined && row.cadence !== null && row.lastDate >= input.since && row.lastDate <= input.today) {
+      charged.push(row.merchant);
+    }
     if (row.nextExpected === null || row.typicalCents === null || row.nextExpected > windowEnd) continue;
     out.push({
       merchant: row.merchant,
@@ -603,31 +646,39 @@ export function expectedRecurringCharges(input: {
       newestTransactionId: row.transactionId,
     });
   }
-  return out.sort((a, b) =>
+  const expected = out.sort((a, b) =>
     a.expectedDate < b.expectedDate ? -1 : a.expectedDate > b.expectedDate ? 1 : a.merchant < b.merchant ? -1 : a.merchant > b.merchant ? 1 : 0,
   );
+  return { expected, charged: charged.sort() };
 }
 
 /**
- * v1.62.0, the month check-in. True for a merchant whose charges the check-in counts as DUE this
- * month, so restOfMonthSpend (src/lib/predict/history.ts) leaves its past charges out and nothing
- * is projected twice. Built from EXACTLY what the due side counts, and nothing wider:
+ * v1.62.0, the month check-in. True for a history ROW the check-in already counts elsewhere, so
+ * restOfMonthSpend (src/lib/predict/history.ts) leaves it out and nothing is projected twice. Built
+ * from exactly what the check-in counts, and nothing wider:
  *
- *   - `expected`: the marked merchants whose next charge is counted as due (their own merchant);
+ *   - `marked`: marked merchants whose charge this month is counted -- due (on the due side) or
+ *     already charged (in the spent figure). Matched by their own merchant, every row: a monthly or
+ *     yearly charge comes once a month at most, so a mortgage that posts on the 1st instead of the
+ *     2nd is not projected again from the 2nd-of-the-month rows of earlier months.
  *   - `bills`: the items whose bill rows are counted as due, matched by name or vendor
- *     (itemNeedles / covers, the cover rule the Recurring card already uses).
+ *     (itemNeedles / covers, the cover rule the Recurring card already uses) AND by amount: a row
+ *     is that bill only when its whole amount is inside the bill amount's band
+ *     (withinRecordedAmountBand, the band the loan and bill payment matcher already uses). A
+ *     name match alone is a resemblance: a 60.00 membership whose vendor is MAPLE GROCER does not
+ *     claim 400.00 of MAPLE GROCER WHOLESALE groceries.
  *
  * Deliberately NOT needles(): that also returns loans and loan payment rules, which have no bill
  * row. A loan-tracked mortgage would then leave the history while nothing on the due side counted
  * it, and drop out of the figure entirely until it posted. A bill-kind item's linked payments are
- * already out of the history (restOfMonthSpend leaves every installment-paid row out); its name
- * also covers a payment nobody linked. Both inputs arrive already scoped to the viewer and person,
- * so this reads only the bill items' names (one read).
+ * already out of the history (restOfMonthSpend leaves every installment-paid row out, whatever
+ * its amount); the band only decides the payments nobody linked. Both inputs arrive already scoped
+ * to the viewer and person, so this reads only the bill items' names (one read).
  */
 export function dueElsewhereMatcher(input: {
   bills: readonly UpcomingBill[];
-  expected: readonly ExpectedCharge[];
-}): (merchant: string) => boolean {
+  marked: readonly string[];
+}): (merchant: string, amountCents: number) => boolean {
   const itemIds = [...new Set(input.bills.map((bill) => bill.itemId))];
   const items =
     itemIds.length === 0
@@ -638,16 +689,21 @@ export function dueElsewhereMatcher(input: {
           .where(inArray(warrantyItems.id, itemIds))
           .all();
   const covering = itemNeedles(items);
-  const marked = new Set(input.expected.map((charge) => charge.merchant));
-  // A merchant comes back once per (month, category) cell, so each is decided once.
-  const decided = new Map<string, boolean>();
-  return (merchant) => {
-    let due = decided.get(merchant);
-    if (due === undefined) {
-      due = marked.has(merchant) || covering.some((needle) => covers(needle, merchant));
-      decided.set(merchant, due);
+  const amountsOf = new Map<number, number[]>();
+  for (const bill of input.bills) amountsOf.set(bill.itemId, [...(amountsOf.get(bill.itemId) ?? []), bill.amountCents]);
+  const marked = new Set(input.marked);
+  // A merchant comes back once per row, so each merchant's bill amounts are found once.
+  const billAmounts = new Map<string, number[]>();
+  return (merchant, amountCents) => {
+    if (marked.has(merchant)) return true;
+    let amounts = billAmounts.get(merchant);
+    if (amounts === undefined) {
+      const coveredBy = new Set(covering.filter((needle) => covers(needle, merchant)).map((needle) => needle.itemId));
+      amounts = [...coveredBy].flatMap((itemId) => amountsOf.get(itemId) ?? []);
+      billAmounts.set(merchant, amounts);
     }
-    return due;
+    // A bill row with no amount has no band, and claims nothing.
+    return amounts.some((billCents) => billCents > 0 && withinRecordedAmountBand(amountCents, billCents));
   };
 }
 

@@ -2357,7 +2357,7 @@ describe('DashboardPage — v1.62.0: where the month is heading, and what it kee
     vi.setSystemTime(new Date('2026-03-18T16:00:00.000Z'));
   });
 
-  async function setup(opts: { firstRow?: string; marchPay?: number } = {}) {
+  async function setup(opts: { firstRow?: string; marchPay?: number; marchMoneyIn?: number } = {}) {
     vi.setSystemTime(new Date('2026-03-07T16:00:00.000Z'));
     t = createTestDb();
     const alex = await createUser({ name: 'Alex', username: 'alex', password: 'correct horse battery', role: 'admin' });
@@ -2386,6 +2386,7 @@ describe('DashboardPage — v1.62.0: where the month is heading, and what it kee
     add('2026-03-01', 'CEDAR PROPERTY MGMT', -200000, rent, alex.id);
     add('2026-03-03', 'MAPLE GROCER', -10000, groceries, sam.id);
     if (opts.marchPay !== undefined) add('2026-03-03', 'PAYROLL', opts.marchPay, pay, alex.id);
+    if (opts.marchMoneyIn !== undefined) add('2026-03-05', 'E-TRANSFER 4417', opts.marchMoneyIn, null, alex.id);
     const typeId = t.db.get<{ id: number }>(sql`
       insert into warranty_item_types (name, kind, is_subscription, created_at)
       values ('Streaming plan', 'subscription', 1, ${nowIso()}) returning id`).id;
@@ -2433,13 +2434,31 @@ describe('DashboardPage — v1.62.0: where the month is heading, and what it kee
     expect(screen.getByText('Net this month').closest('div')?.textContent).not.toContain('Kept, after everything went out');
   });
 
+  it('on the last day the keep line is Net: no more pay is expected, and "Spending outran income" stays', async () => {
+    // No March pay yet: it lands next month. $500.00 came in with no category, which Net counts.
+    const { alexId } = await setup({ marchMoneyIn: 50000 });
+    vi.setSystemTime(new Date('2026-03-31T16:00:00.000Z'));
+    const { container } = await renderAs({ id: alexId, name: 'Alex', role: 'admin', visibility: 'household' });
+    // Spent $2,100.00, nothing due, no days left: heading for what was spent.
+    expect(text(container, '[data-check-in]')).toBe('Heading for $2,100.00 by Mar 31.');
+    // $0.00 + $500.00 - $2,100.00 = -$1,600.00, the same as Net -- not typical income's $2,900.00.
+    expect(text(container, '[data-keep-line]')).toBe(
+      'On track to spend about $1,600.00 more than comes in. Typical income $5,000.00, $0.00 in so far.',
+    );
+    const netTile = screen.getByText('Net this month').closest('div');
+    expect(netTile?.textContent).toContain('-$1,600.00');
+    expect(netTile?.textContent).toContain('Spending outran income');
+  });
+
   it("Sam's pill reads Sam's own spend and history, and keeps the outran sentence when the keep line is negative", async () => {
     const { alexId, samId } = await setup();
     const { container } = await renderAs({ id: alexId, name: 'Alex', role: 'admin', visibility: 'household' }, { person: String(samId) });
-    // $100.00 spent + nothing due (the subscription is Alex's) + Sam's usual $300.00.
-    expect(text(container, '[data-check-in]')).toBe('Heading for $400.00 by Mar 31.');
+    // $100.00 spent + nothing due (the subscription is Alex's) + Sam's usual rest of the month.
+    // Sam's own rows start on December 20th, so Sam's window is January and February: $300.00 and
+    // $300.00 over 21 days scaled to 24 ($342.86), a median of $321.43.
+    expect(text(container, '[data-check-in]')).toBe('Heading for $421.43 by Mar 31.');
     expect(text(container, '[data-keep-line]')).toBe(
-      'On track to spend about $400.00 more than comes in. Typical income $0.00, $0.00 in so far.',
+      'On track to spend about $421.43 more than comes in. Typical income $0.00, $0.00 in so far.',
     );
     expect(screen.getByText('Net this month').closest('div')?.textContent).toContain('Spending outran income');
   });
@@ -2447,7 +2466,7 @@ describe('DashboardPage — v1.62.0: where the month is heading, and what it kee
   it("a self viewer reads only their own bills and history, whatever the URL asks for", async () => {
     const { alexId, samId } = await setup();
     const { container } = await renderAs({ id: samId, name: 'Sam', role: 'member', visibility: 'self' }, { person: String(alexId) });
-    expect(text(container, '[data-check-in]')).toBe('Heading for $400.00 by Mar 31.');
+    expect(text(container, '[data-check-in]')).toBe('Heading for $421.43 by Mar 31.');
     expect(container.textContent).not.toContain('$2,415.00');
   });
 
@@ -2476,5 +2495,13 @@ describe('DashboardPage — v1.62.0: where the month is heading, and what it kee
     const line = container.querySelector('[data-recurring-count]');
     expect(line?.textContent).toBe('Counting 1 recurring charge · 1 more looks recurring');
     expect(line?.querySelector('a')?.getAttribute('href')).toBe('/insights#sharper');
+  });
+
+  it("plan item E4: a person pill's link carries the pill, so Insights lists the merchants it counted", async () => {
+    const { alexId } = await setup();
+    const { container } = await renderAs({ id: alexId, name: 'Alex', role: 'admin', visibility: 'household' }, { person: String(alexId) });
+    const line = container.querySelector('[data-recurring-count]');
+    expect(line?.textContent).toBe('Counting 1 recurring charge · 1 more looks recurring');
+    expect(line?.querySelector('a')?.getAttribute('href')).toBe(`/insights?person=${alexId}#sharper`);
   });
 });

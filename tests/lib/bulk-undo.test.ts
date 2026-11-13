@@ -5,6 +5,7 @@ import { NOT_YOURS_ERROR, type Viewer } from '@/lib/auth/viewer';
 import {
   BULK_UNDO_EXPIRED_ERROR,
   BULK_UNDO_MAX_ROWS,
+  BULK_UNDO_NOTHING_ERROR,
   BULK_UNDO_STALE_ERROR,
   captureBulkBefore,
   lastBulkUndo,
@@ -417,7 +418,8 @@ describe('bulk undo: one record per person', () => {
     expect(undoLastBulkAction({ viewer: household(alex), now: SOON }).ok).toBe(true);
     expect(row(fuel).isTransfer).toBe(0);
     expect(row(maple)).toMatchObject({ categoryId: groceries, source: 'manual' });
-    expect(undoLastBulkAction({ viewer: household(alex), now: SOON })).toEqual({ ok: false, error: BULK_UNDO_EXPIRED_ERROR });
+    // A second click (or a second tab still showing the bar): nothing is old, there is just nothing.
+    expect(undoLastBulkAction({ viewer: household(alex), now: SOON })).toEqual({ ok: false, error: BULK_UNDO_NOTHING_ERROR });
   });
 
   it("Sam's action leaves Alex's record alone, and Sam cannot undo Alex's change", () => {
@@ -427,7 +429,7 @@ describe('bulk undo: one record per person', () => {
     recorded(alex, 'categorize', 'Categorized 1 transaction as Groceries.', [maple], () => categorize([maple], groceries, alex));
     const samViewer: Viewer = { id: sam, role: 'member', visibility: 'household' };
 
-    expect(undoLastBulkAction({ viewer: samViewer, now: SOON })).toEqual({ ok: false, error: BULK_UNDO_EXPIRED_ERROR });
+    expect(undoLastBulkAction({ viewer: samViewer, now: SOON })).toEqual({ ok: false, error: BULK_UNDO_NOTHING_ERROR });
     expect(row(maple)).toMatchObject({ categoryId: groceries, source: 'manual' });
 
     recorded(sam, 'person', 'Set Sam on 1 transaction.', [fuel], () => bulkSetAttribution([fuel], sam));
