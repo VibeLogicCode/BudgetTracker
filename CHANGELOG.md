@@ -21,6 +21,25 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.63.0] - 2026-11-13
+
+Migration 0032. Existing split parts follow their transaction's person, as before.
+
+### Added
+
+- Year-end pack: on Reports, pick a year and download a detail CSV of every transaction in
+  tax-relevant categories, or a zip with that CSV and the linked receipts. A Year in review card
+  sums up income, spending, the top categories, tax-relevant totals and the largest purchases.
+  Members who see only their own money get the same downloads for their own rows.
+- Split a charge between people: each part of a split can belong to a person or the household, so
+  a shared bill counts toward each person's spending, budgets and Who spent it.
+- Restore by upload: Settings, Backups can restore a backup file uploaded from this computer, for
+  moving to a new machine. It goes through the same checks as restoring a listed backup.
+
+### Fixed
+
+- Restoring a backup larger than 2 GB no longer fails.
+
 ## [1.62.0] - 2026-11-12
 
 ### Added
