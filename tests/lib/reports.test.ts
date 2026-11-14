@@ -22,6 +22,7 @@ import { upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { assignTransactionToLoan } from '@/lib/loans';
 import { setTransactionSplits } from '@/lib/splits';
 import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
+import { buildSplitPersonFixture } from '../helpers/split-person-fixture';
 
 // v1.13.0 ruling R2: every aggregate under test here now takes a viewer as its last argument.
 // A household viewer's ownerScope() is always null, so passing this constant reproduces the
@@ -971,6 +972,52 @@ describe('transactionsCsv — splits (v1.7.0 Task 4)', () => {
     expect(lines[1]).not.toContain(',=SUM(1)');
     // The guard didn't accidentally eat the rest of the row.
     expect(lines[1]).toContain('-60.00');
+  });
+});
+
+/** v1.63.0 (plan 2026-11-12, Lane A, A6). A part row names the part's own person. */
+describe('transactionsCsv: a split part person (v1.63.0)', () => {
+  const HEADER = 'Date,Account,Description,Merchant,Amount,Category,Person,Transfer,Source,Notes';
+
+  it('writes each part under its own person, and the unsplit row as before', () => {
+    const fx = buildSplitPersonFixture();
+    current = fx.t;
+    expect(transactionsCsv({ from: '2026-03-01', to: '2026-03-31' }, fx.admin).trim().split('\r\n')).toEqual([
+      HEADER,
+      '2026-03-12,Joint chequing,FUEL STOP 12,FUEL STOP 12,-61.30,Transport,Sam,no,manual,',
+      '2026-03-09,Joint chequing,MAPLE GROCER (split 1/3),MAPLE GROCER,-80.00,Food > Groceries,Alex,no,manual,',
+      '2026-03-09,Joint chequing,MAPLE GROCER (split 2/3),MAPLE GROCER,-40.00,Dining,Sam,no,manual,',
+      `2026-03-09,Joint chequing,MAPLE GROCER (split 3/3),MAPLE GROCER,-30.00,Household supplies,${UNATTRIBUTED_LABEL},no,manual,`,
+    ]);
+  });
+
+  it('under a person filter writes only that person own parts', () => {
+    const fx = buildSplitPersonFixture();
+    current = fx.t;
+    expect(transactionsCsv({ from: '2026-03-01', to: '2026-03-31', attributedUserId: fx.sam }, fx.admin).trim().split('\r\n')).toEqual([
+      HEADER,
+      '2026-03-12,Joint chequing,FUEL STOP 12,FUEL STOP 12,-61.30,Transport,Sam,no,manual,',
+      '2026-03-09,Joint chequing,MAPLE GROCER (split 2/3),MAPLE GROCER,-40.00,Dining,Sam,no,manual,',
+    ]);
+    expect(
+      transactionsCsv({ from: '2026-03-01', to: '2026-03-31', attributedUserId: 'unattributed' }, fx.admin).trim().split('\r\n'),
+    ).toEqual([
+      HEADER,
+      `2026-03-09,Joint chequing,MAPLE GROCER (split 3/3),MAPLE GROCER,-30.00,Household supplies,${UNATTRIBUTED_LABEL},no,manual,`,
+    ]);
+  });
+
+  it('a self viewer gets their own parts only, numbered among themselves, and no other name', () => {
+    const fx = buildSplitPersonFixture();
+    current = fx.t;
+    const csv = transactionsCsv({ from: '2026-03-01', to: '2026-03-31' }, fx.self(fx.sam));
+    expect(csv.trim().split('\r\n')).toEqual([
+      HEADER,
+      '2026-03-12,Joint chequing,FUEL STOP 12,FUEL STOP 12,-61.30,Transport,Sam,no,manual,',
+      '2026-03-09,Joint chequing,MAPLE GROCER (split 1/1),MAPLE GROCER,-40.00,Dining,Sam,no,manual,',
+    ]);
+    expect(csv).not.toContain('Alex');
+    expect(csv).not.toContain('-150.00');
   });
 });
 

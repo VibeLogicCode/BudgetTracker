@@ -1,4 +1,4 @@
-import { and, eq, gte, isNull, lte, sql, type SQL } from 'drizzle-orm';
+import { and, eq, gte, lte, sql, type SQL } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { categories, transactions, transactionSplits, users } from '@/db/schema';
 import { ownerScope, type Viewer } from '@/lib/auth/viewer';
@@ -8,7 +8,8 @@ import { listRules } from '@/lib/categorize/rules';
 import { addMonths, monthEnd, monthOf, monthRange, monthStart, todayIso } from '@/lib/dates';
 import { netSpentCents } from '@/lib/money';
 import { savingsRate, type SavingsRate } from '@/lib/savings-rate';
-import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY, splitsForTransactions } from '@/lib/splits';
+import { effectivePartPerson } from '@/lib/split-person';
+import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY, EFFECTIVE_PERSON, partPersonClause, splitsForTransactions } from '@/lib/splits';
 import { SPEND_ROW_WHERE } from '@/lib/spend-where';
 import { listTransactions, type TransactionFilter } from '@/lib/transactions';
 
@@ -21,10 +22,16 @@ export const UNATTRIBUTED_LABEL = 'Household/unattributed';
 
 type PersonScope = number | 'unattributed' | null | undefined;
 
+/**
+ * v1.63.0 (plan 2026-11-12, A3): every reader below joins transaction_splits, so a person's figure
+ * is their PARTS -- partPersonClause filters on each joined row's EFFECTIVE_PERSON (a part set to
+ * someone else counts for them, a following part for the transaction's person). The per-person
+ * figures therefore still partition the household's, as the digest's lines need: `= id` per person
+ * and `IS NULL` for Household are exhaustive and disjoint over EFFECTIVE_PERSON too.
+ */
 function personClause(scope: PersonScope): SQL | null {
   if (scope === undefined || scope === null) return null;
-  if (scope === 'unattributed') return isNull(transactions.attributedUserId);
-  return eq(transactions.attributedUserId, scope);
+  return partPersonClause(scope);
 }
 
 /**
@@ -505,19 +512,19 @@ export interface PersonSplitRow {
  * this function total for any caller.
  */
 export function personSpendSplit(input: DateRange, viewer: Viewer): PersonSplitRow[] {
-  // Split-aware (Task 3): grouped by transactions.attributedUserId (attribution stays
-  // whole-transaction, design ruling 1 -- a split has no owner of its own), but the income
-  // exclusion join keys off EFFECTIVE_CATEGORY and the summed amount is EFFECTIVE_AMOUNT, so
-  // BOTH of a split's parts land on the parent's person, each correctly included/excluded by
-  // its OWN category rather than the parent's. v1.60.0 item 2: uncategorized money in is left out,
-  // as cashflow Spent leaves it out, so the people's rows add up to that figure.
+  // Split-aware (Task 3, and v1.63.0 A3): grouped by EFFECTIVE_PERSON, so each part of a split
+  // lands on its own person -- the transaction's, unless the part was set to someone else or to
+  // Household -- and the income exclusion join keys off EFFECTIVE_CATEGORY with the summed amount
+  // EFFECTIVE_AMOUNT, so each part is included or excluded by its OWN category. v1.60.0 item 2:
+  // uncategorized money in is left out, as cashflow Spent leaves it out, so the people's rows add
+  // up to that figure.
   const rows = getDb()
-    .select({ userId: transactions.attributedUserId, total: sql<number>`sum(${EFFECTIVE_AMOUNT})` })
+    .select({ userId: EFFECTIVE_PERSON, total: sql<number>`sum(${EFFECTIVE_AMOUNT})` })
     .from(transactions)
     .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
     .leftJoin(categories, eq(categories.id, EFFECTIVE_CATEGORY))
     .where(and(...rangeClauses(input, undefined), sql`coalesce(${categories.isIncome}, 0) = 0`, NOT_UNCATEGORIZED_IN))
-    .groupBy(transactions.attributedUserId)
+    .groupBy(EFFECTIVE_PERSON)
     .all();
 
   const people = getDb().select({ id: users.id, name: users.name }).from(users).all();
@@ -691,6 +698,15 @@ export function transactionsCsv(filter: TransactionFilter, viewer: Viewer): stri
     return parent ? `${parent.name} > ${category.name}` : category.name;
   };
 
+  // v1.63.0 (A6): a part row names its own person, so the names are read once per export, not
+  // once per row. Under a person scope -- a self viewer, or a person filter -- only that person's
+  // parts are written; listTransactions already holds the scope to the rows with one of them.
+  const nameById = new Map(getDb().select({ id: users.id, name: users.name }).from(users).all().map((user) => [user.id, user.name]));
+  const own = ownerScope(viewer);
+  const scope: number | 'unattributed' | null =
+    own ?? (typeof filter.attributedUserId === 'number' || filter.attributedUserId === 'unattributed' ? filter.attributedUserId : null);
+  const scopePerson = scope === 'unattributed' ? null : scope;
+
   const page = listTransactions({ ...filter, page: 1, pageSize: 200 }, viewer);
   const rows: Record<string, unknown>[] = [];
 
@@ -721,18 +737,24 @@ export function transactionsCsv(filter: TransactionFilter, viewer: Viewer): stri
         continue;
       }
 
-      // One row per part: amount, category and note are the part's own. Date, account,
-      // merchant, person, transfer and source stay the parent's -- attribution and every
-      // other parent-level fact are whole-transaction (design ruling 1, spec 2026-08-22).
-      parts.forEach((part, index) => {
+      // One row per part: amount, category, note and (v1.63.0) person are the part's own. Date,
+      // account, merchant, transfer and source stay the parent's. The part's person is
+      // effectivePartPerson's answer: the transaction's unless the part was set.
+      const numbered = parts.map((part, index) => ({ part, index, person: effectivePartPerson(part, row.attributedUserId) }));
+      const written = scope === null ? numbered : numbered.filter((entry) => entry.person === scopePerson);
+      // A self viewer's parts are numbered among themselves: "2/3" would tell them how many parts
+      // other people hold. A household viewer keeps the charge's own numbering.
+      const selfNumbering = own !== null;
+      written.forEach(({ part, index, person }, writtenIndex) => {
+        const label = selfNumbering ? `${writtenIndex + 1}/${written.length}` : `${index + 1}/${parts.length}`;
         rows.push({
           Date: row.date,
           Account: row.accountName,
-          Description: `${row.rawDescription} (split ${index + 1}/${parts.length})`,
+          Description: `${row.rawDescription} (split ${label})`,
           Merchant: row.normalizedMerchant,
           Amount: (part.amountCents / 100).toFixed(2),
           Category: categoryPath(part.categoryId),
-          Person: row.attributedUserName ?? UNATTRIBUTED_LABEL,
+          Person: person === null ? UNATTRIBUTED_LABEL : (nameById.get(person) ?? UNATTRIBUTED_LABEL),
           Transfer: row.isTransfer ? 'yes' : 'no',
           Source: row.source,
           Notes: part.note ?? '',

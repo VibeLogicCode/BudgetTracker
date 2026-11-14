@@ -19,6 +19,7 @@ import {
 import { CREEP_BASELINE_DAYS, RECURRING_LATE_GRACE_DAYS, RECURRING_LOOKBACK_DAYS, RECURRING_MIN_CHARGES } from '@/lib/predict/constants';
 import { divRound, medianCents } from '@/lib/predict/stats';
 import { SPEND_ROW_WHERE } from '@/lib/spend-where';
+import { soleOwnerClause } from '@/lib/splits';
 import { billingAllowedForKind, ITEM_KINDS, type ItemKind } from '@/lib/warranty/constants';
 import { notEnded } from '@/lib/warranty/expiry-sql';
 
@@ -171,9 +172,14 @@ interface ChargeRow extends SpendRow {
   accountId: number;
 }
 
+/**
+ * v1.63.0 (plan 2026-11-12, S3): a recurring charge is a whole charge, so a personal read (a self
+ * viewer, or the `ownerUserId` a person pill or personal Budgets passes) keeps one only when it is
+ * the person's and no part of it is set to anyone else. A shared charge stays in household reads.
+ */
 function chargeClauses(sliceStart: string, scope: number | null): SQL[] {
   const clauses = [gte(transactions.date, sliceStart), ...SPEND_ROW_WHERE, lt(transactions.amountCents, 0)];
-  if (scope !== null) clauses.push(eq(transactions.attributedUserId, scope));
+  if (scope !== null) clauses.push(soleOwnerClause(scope));
   return clauses;
 }
 

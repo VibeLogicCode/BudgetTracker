@@ -17,6 +17,8 @@ import {
   type RecurringCharges,
 } from '@/lib/recurring';
 import { createManualTransaction } from '@/lib/transactions';
+import { createCategory } from '@/lib/categories';
+import { setTransactionSplits } from '@/lib/splits';
 import { addInstallment } from '@/lib/warranty/installments';
 import { createTestDb, type TestDb } from '../helpers/db';
 import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
@@ -1142,5 +1144,46 @@ describe('recurringLoad: the figure on the header line and the dashboard tile', 
       annualCents: 0,
       itemCount: 0,
     });
+  });
+});
+
+/**
+ * v1.63.0 (plan 2026-11-12, Lane A, A5). A recurring charge is a whole charge: a person's read keeps
+ * it only when it is theirs and no part of it is set to someone else. A shared charge stays in the
+ * household read, whole.
+ */
+describe('recurringCharges: a charge with a part set to someone else (v1.63.0)', () => {
+  async function sharedCadence(partToChild: boolean) {
+    const ctx = await setup();
+    const groceries = createCategory({ name: 'Groceries', parentId: null });
+    const dining = createCategory({ name: 'Dining', parentId: null });
+    for (const id of ctx.cadence({ merchant: 'MAPLE GROCER', person: ctx.adultId, cents: 15000 })) {
+      setTransactionSplits({
+        txnId: id,
+        userId: ctx.adultId,
+        parts: [
+          { categoryId: groceries, amountCents: -11000 },
+          { categoryId: dining, amountCents: -4000, person: partToChild ? ctx.childId : 'follow' },
+        ],
+      });
+    }
+    ctx.cadence({ merchant: 'FUEL STOP 12', person: ctx.adultId, cents: 6130 });
+    return ctx;
+  }
+  const merchants = (result: RecurringCharges) => rowsOf(result).map((row) => row.merchant).sort();
+
+  it('the household read keeps the shared charge; Alex personal read and own view leave it out', async () => {
+    const ctx = await sharedCadence(true);
+    expect(merchants(read(ctx))).toEqual(['FUEL STOP 12', 'MAPLE GROCER']);
+    expect(merchants(read(ctx, { ownerUserId: ctx.adultId }))).toEqual(['FUEL STOP 12']);
+    expect(merchants(read(ctx, { viewer: selfOnly(ctx.adultId) }))).toEqual(['FUEL STOP 12']);
+    // Splitting a baseline per person is not in this release: the child is not handed the charge either.
+    expect(merchants(read(ctx, { viewer: selfOnly(ctx.childId) }))).toEqual([]);
+  });
+
+  it('with every part following, the personal read is exactly what v1.62.0 gave', async () => {
+    const ctx = await sharedCadence(false);
+    expect(merchants(read(ctx, { ownerUserId: ctx.adultId }))).toEqual(['FUEL STOP 12', 'MAPLE GROCER']);
+    expect(merchants(read(ctx, { viewer: selfOnly(ctx.adultId) }))).toEqual(['FUEL STOP 12', 'MAPLE GROCER']);
   });
 });

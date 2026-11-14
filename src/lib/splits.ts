@@ -1,9 +1,12 @@
-import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import { getDb } from '@/db/client';
-import { categories, transactions, transactionSplits } from '@/db/schema';
+import { categories, transactions, transactionSplits, users } from '@/db/schema';
 import { runEngine } from '@/lib/categorize/engine';
 import { nowIso } from '@/lib/clock';
 import { formatCents, sumCents } from '@/lib/money';
+import type { SplitPerson } from '@/lib/split-person';
+
+export type { SplitPerson } from '@/lib/split-person';
 
 /**
  * Transaction splits (spec 2026-08-22, v1.7.0, Task 2). A split divides one transaction's
@@ -11,8 +14,11 @@ import { formatCents, sumCents } from '@/lib/money';
  * src/db/schema.ts for the storage shape and why the sum-of-parts invariant is enforced
  * here rather than by a CHECK (SQLite cannot express a cross-row sum constraint).
  *
- * Design ruling 1 (spec): a split carries category + amount + note only. Attribution stays
- * whole-transaction -- there is no per-part owner.
+ * Design ruling 1 (spec), as amended by v1.63.0 (plan 2026-11-12, S1): a part carries a category,
+ * an amount, a note and a person. The person FOLLOWS the transaction unless someone set it
+ * (person_set = 1), so Set person, the attribution rules and bulk undo still write only the
+ * transaction: the following parts move with it and a deliberately set part stays. Who may act on
+ * the transaction (transactionOwners, canActOnOwner) is still the transaction's own person.
  *
  * Design ruling 2 (spec): splits do NOT train the categorizer. Nothing here calls
  * confirmCategory, teaches a Bayes token or writes a merchant rule -- a split is a fact
@@ -27,12 +33,24 @@ export interface SplitPart {
   categoryId: number;
   amountCents: number;
   note?: string | null;
+  /** v1.63.0. Omitted is 'follow', so every caller from before 0032 writes what it always did. */
+  person?: SplitPerson;
 }
 
 export interface SplitRow extends SplitPart {
   id: number;
   txnId: number;
+  /**
+   * v1.63.0. The stored pair (see effectivePartPerson, src/lib/split-person.ts). Optional in the
+   * type so fixtures built before 0032 still compile; getSplits/splitsForTransactions always fill
+   * both.
+   */
+  personSet?: boolean;
+  attributedUserId?: number | null;
 }
+
+/** v1.63.0. setTransactionSplits' refusal for a part set to an id with no users row. */
+export const UNKNOWN_SPLIT_PERSON_ERROR = 'That person is not in this household.';
 
 /** Same chunking convention as loanLinksForTransactions (src/lib/loans.ts) / dedup.ts. */
 const ID_CHUNK = 400;
@@ -43,6 +61,8 @@ const SPLIT_SELECTION = {
   categoryId: transactionSplits.categoryId,
   amountCents: transactionSplits.amountCents,
   note: transactionSplits.note,
+  personSet: transactionSplits.personSet,
+  attributedUserId: transactionSplits.attributedUserId,
 } as const;
 
 /**
@@ -59,6 +79,100 @@ const SPLIT_SELECTION = {
  */
 export const EFFECTIVE_CATEGORY = sql<number | null>`coalesce(${transactionSplits.categoryId}, ${transactions.categoryId})`;
 export const EFFECTIVE_AMOUNT = sql<number>`coalesce(${transactionSplits.amountCents}, ${transactions.amountCents})`;
+
+/**
+ * v1.63.0 (plan 2026-11-12, S2). The person a joined row's money belongs to: a set part's own
+ * person, otherwise the transaction's. THE one definition of a part's person in SQL; every reader
+ * that splits money by person filters and groups on this, never on transactions.attributed_user_id
+ * (tests/ops/split-person.test.ts).
+ *
+ * An unsplit row has no joined part, so person_set is NULL and the transaction's person wins. Not
+ * `coalesce`: a set part's NULL is a real answer (Household), not a missing one.
+ *
+ * Inside a correlated subquery over transaction_splits (the clause builders below), the same
+ * fragment reads that subquery's part: SQLite resolves a qualified column against the innermost
+ * FROM first, and the transactions reference reaches out to the enclosing row.
+ */
+export const EFFECTIVE_PERSON = sql<number | null>`(case when ${transactionSplits.personSet} = 1 then ${transactionSplits.attributedUserId} else ${transactions.attributedUserId} end)`;
+
+/**
+ * A person scope: a user id, or 'unattributed' for Household (the shape reports.ts and the
+ * Transactions filter already use for a person filter).
+ */
+export type SplitPersonScope = number | 'unattributed';
+
+/** EFFECTIVE_PERSON is this person. NULL-safe for Household; never matches NULL for an id. */
+export function effectivePersonIs(person: SplitPersonScope): SQL {
+  return person === 'unattributed' ? sql`(${EFFECTIVE_PERSON} is null)` : sql`(${EFFECTIVE_PERSON} = ${person})`;
+}
+
+/** EFFECTIVE_PERSON is anyone but this person, Household included. */
+function effectivePersonIsNot(person: SplitPersonScope): SQL {
+  return person === 'unattributed' ? sql`(${EFFECTIVE_PERSON} is not null)` : sql`(${EFFECTIVE_PERSON} is not ${person})`;
+}
+
+/**
+ * v1.63.0 (S3, one row per transaction). A transaction is in `person`'s scope when it is theirs and
+ * not wholly given away (it is unsplit, or at least one part follows it), or when any part is set
+ * to them. A charge whose every part is set to someone else is no longer its own person's.
+ *
+ * Two arms, each with an index: the first is the transaction's person (transactions_attributed_
+ * date_idx) plus one lookup on transaction_splits_txn_idx -- min(person_set) is NULL with no parts,
+ * 0 with a following part and 1 when every part is set -- and the second is the partial
+ * transaction_splits_person_idx (0032).
+ */
+export function personRowClause(person: SplitPersonScope): SQL {
+  const own =
+    person === 'unattributed' ? sql`${transactions.attributedUserId} is null` : sql`${transactions.attributedUserId} = ${person}`;
+  const setTo =
+    person === 'unattributed' ? sql`${transactionSplits.attributedUserId} is null` : sql`${transactionSplits.attributedUserId} = ${person}`;
+  return sql`((${own} and coalesce((select min(${transactionSplits.personSet}) from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id}), 0) = 0) or ${transactions.id} in (select ${transactionSplits.txnId} from ${transactionSplits} where ${transactionSplits.personSet} = 1 and ${setTo}))`;
+}
+
+/**
+ * v1.63.0 (S3, split-joined aggregates). Over `LEFT JOIN transaction_splits`: the joined rows whose
+ * money is `person`'s. The row clause adds nothing to the result (a row holding the person's part is
+ * always in their row scope); it is there so the read keeps its index access instead of evaluating
+ * the CASE over every joined row.
+ */
+export function partPersonClause(person: SplitPersonScope): SQL {
+  return sql`(${personRowClause(person)} and ${effectivePersonIs(person)})`;
+}
+
+/**
+ * v1.63.0 (S3, whole-charge reads: insights, recurring charges). The transaction is `person`'s and
+ * no part of it is set to anybody else, so the whole charge -- its merchant, its amount, its cadence
+ * -- is theirs alone. A shared charge stays in household reads only; a part set to the person
+ * themselves does not make it shared.
+ */
+export function soleOwnerClause(person: number): SQL {
+  return sql`(${transactions.attributedUserId} = ${person} and not exists (select 1 from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id} and ${transactionSplits.personSet} = 1 and ${transactionSplits.attributedUserId} is not ${person}))`;
+}
+
+/**
+ * v1.63.0 (S3). A row's amount for `person`: the whole amount when it is unsplit, else the sum of
+ * the parts whose effective person is theirs (0 when none is). Over transactions WITHOUT the split
+ * join; the parts are read in correlated subqueries.
+ *
+ * The columns sit inside a nested fragment on purpose: drizzle strips the table name from a column
+ * at the TOP level of a select-list fragment when the query reads one table (see
+ * transactionHasSplits below), and an unqualified `id` inside the subquery would resolve to
+ * transaction_splits.id.
+ */
+export function scopedAmountSql(person: SplitPersonScope): SQL<number> {
+  const share = sql`(case when exists (select 1 from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id}) then coalesce((select sum(${transactionSplits.amountCents}) from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id} and ${effectivePersonIs(person)}), 0) else ${transactions.amountCents} end)`;
+  return sql<number>`${share}`;
+}
+
+/**
+ * v1.63.0 (S3). True when the row is split and some part belongs to someone other than `person`:
+ * what a person scope shows of this row is only part of the charge. Over transactions without the
+ * split join, nested for the reason scopedAmountSql gives.
+ */
+export function hasPartOutsideSql(person: SplitPersonScope): SQL<boolean> {
+  const outside = sql`exists (select 1 from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id} and ${effectivePersonIsNot(person)})`;
+  return sql<boolean>`${outside}`.mapWith((value: unknown) => Number(value) === 1);
+}
 
 /**
  * Does this transaction have splits?
@@ -122,7 +236,20 @@ function normalizeNote(note: string | null | undefined): string | null {
   return trimmed.length === 0 ? null : trimmed;
 }
 
-/** Replaces all splits for a txn in ONE db transaction. Empty array clears splits. */
+/** The stored pair for an editor choice: follow is (0, NULL), household (1, NULL), a person (1, id). */
+function storedPerson(person: SplitPerson | undefined): { personSet: boolean; attributedUserId: number | null } {
+  if (person === undefined || person === 'follow') return { personSet: false, attributedUserId: null };
+  if (person === 'household') return { personSet: true, attributedUserId: null };
+  return { personSet: true, attributedUserId: person };
+}
+
+/**
+ * Replaces all splits for a txn in ONE db transaction. Empty array clears splits.
+ *
+ * v1.63.0: each part's `person` is stored as storedPerson says. An id with no users row is refused
+ * (UNKNOWN_SPLIT_PERSON_ERROR) before anything is written. Who may set which person (plan S4) is
+ * the calling action's decision, not this function's.
+ */
 export function setTransactionSplits(input: { txnId: number; parts: SplitPart[]; userId: number }): void {
   const { txnId, parts } = input;
 
@@ -207,10 +334,33 @@ export function setTransactionSplits(input: { txnId: number; parts: SplitPart[];
       if (category.isArchived) throw new Error(`Category "${category.name}" is archived and cannot be used in a split.`);
     }
 
+    // One query for every distinct person named, the same shape as the category check above.
+    const personIds = [...new Set(parts.map((part) => part.person).filter((person): person is number => typeof person === 'number'))];
+    if (personIds.length > 0) {
+      const known = new Set(
+        tx
+          .select({ id: users.id })
+          .from(users)
+          .where(inArray(users.id, personIds))
+          .all()
+          .map((row) => row.id),
+      );
+      if (personIds.some((id) => !known.has(id))) throw new Error(UNKNOWN_SPLIT_PERSON_ERROR);
+    }
+
     tx.delete(transactionSplits).where(eq(transactionSplits.txnId, txnId)).run();
     for (const part of parts) {
+      const { personSet, attributedUserId } = storedPerson(part.person);
       tx.insert(transactionSplits)
-        .values({ txnId, categoryId: part.categoryId, amountCents: part.amountCents, note: normalizeNote(part.note), createdAt: at })
+        .values({
+          txnId,
+          categoryId: part.categoryId,
+          amountCents: part.amountCents,
+          note: normalizeNote(part.note),
+          personSet,
+          attributedUserId,
+          createdAt: at,
+        })
         .run();
     }
 

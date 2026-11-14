@@ -1,12 +1,23 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
-import { budgetProgress, budgetTotals, categorySpend } from '@/lib/budgets';
+import { budgetProgress, budgetTotals, categorySpend, flattenBudgetRows } from '@/lib/budgets';
 import type { Viewer } from '@/lib/auth/viewer';
-import { cashflowTrend, categoryBreakdown, categoryMonthOverMonth, personSpendSplit } from '@/lib/reports';
+import { listUsers } from '@/lib/auth/users';
+import {
+  cashflowTrend,
+  categoryBreakdown,
+  categoryMonthOverMonth,
+  categoryYearOverYear,
+  personSpendSplit,
+  topMerchants,
+  UNATTRIBUTED_LABEL,
+} from '@/lib/reports';
 import { categorySeries } from '@/lib/predict/history';
 import { setTransactionSplits } from '@/lib/splits';
+import { taxYearReport } from '@/lib/tax';
 import { nowIso } from '@/lib/clock';
+import { buildSplitPersonFixture, type SplitPersonFixture } from '../helpers/split-person-fixture';
 
 // v1.13.0 ruling R2 (Task 6 fix round 1): every reports.ts aggregate below now takes a viewer as
 // its last argument. A household viewer's ownerScope() is always null, so passing this constant
@@ -311,5 +322,141 @@ describe('predict history (src/lib/predict/history.ts) is split-aware', () => {
     // Rollup mirrors budgetProgress (MUST-3.2): each parent reflects only its own part.
     expect(pick(food)?.monthlyCents).toEqual([7000]);
     expect(pick(transport)?.monthlyCents).toEqual([3000]);
+  });
+});
+
+/**
+ * v1.63.0 (plan 2026-11-12, Lane A, A3). The split-joined aggregates read each part's own person
+ * (EFFECTIVE_PERSON, src/lib/splits.ts), so a person's line holds exactly their parts and the
+ * people's lines still add up to the household's.
+ */
+describe('v1.63.0: every split-joined aggregate counts a part for its own person', () => {
+  const MARCH = { from: '2026-03-01', to: '2026-03-31' };
+  const byCategory = (rows: { categoryId: number | null; spentCents: number }[]) =>
+    Object.fromEntries(rows.filter((row) => row.spentCents !== 0).map((row) => [String(row.categoryId), row.spentCents]));
+  const people = (fx: SplitPersonFixture) => personSpendSplit(MARCH, fx.admin).map((row) => [row.label, row.spentCents]);
+  const spendOf = (fx: SplitPersonFixture, person: number | 'unattributed') =>
+    cashflowTrend(1, { endMonth: MONTH, attributedUserId: person }, fx.admin)[0].spendCents;
+
+  /** Every household figure this file covers, for one fixture, in a comparable shape. */
+  function householdFigures(fx: SplitPersonFixture) {
+    const flag = fx.t.sqlite.prepare('update categories set tax_relevant = 1 where id = ?');
+    flag.run(fx.dining);
+    flag.run(fx.groceries);
+    return {
+      breakdown: categoryBreakdown(MARCH, fx.admin),
+      rolled: categoryBreakdown({ ...MARCH, rollup: true }, fx.admin),
+      cashflow: cashflowTrend(1, { endMonth: MONTH }, fx.admin),
+      monthOverMonth: categoryMonthOverMonth({ fromMonth: MONTH, toMonth: MONTH }, fx.admin),
+      yearOverYear: categoryYearOverYear({ month: MONTH }, fx.admin),
+      merchants: topMerchants(MARCH, fx.admin),
+      spend: [...categorySpend(MONTH, { scope: 'household' })].sort(([a], [b]) => a - b),
+      progress: flattenBudgetRows(budgetProgress(MONTH, 'household', null)).map((row) => [row.categoryId, row.spentCents]),
+      series: categorySeries({ months: [MONTH], scope: 'household', userId: null }).map((row) => [row.categoryId, row.monthlyCents]),
+      tax: taxYearReport(2026).map((row) => [row.categoryName, row.totalCents]),
+      peopleTotal: personSpendSplit(MARCH, fx.admin).reduce((sum, row) => sum + row.spentCents, 0),
+    };
+  }
+
+  it('with every part following, every person figure is exactly what v1.62.0 gave', () => {
+    const fx = buildSplitPersonFixture({ allFollow: true });
+    current = fx.t;
+    expect(people(fx)).toEqual([
+      ['Alex', 15000],
+      ['Sam', 6130],
+      [UNATTRIBUTED_LABEL, 0],
+    ]);
+    expect(byCategory(categoryBreakdown({ ...MARCH, attributedUserId: fx.alex }, fx.admin))).toEqual({
+      [fx.groceries]: 8000,
+      [fx.dining]: 4000,
+      [fx.supplies]: 3000,
+    });
+    expect(byCategory(categoryBreakdown({ ...MARCH, attributedUserId: fx.sam }, fx.admin))).toEqual({ [fx.transport]: 6130 });
+    expect(spendOf(fx, fx.alex)).toBe(15000);
+    expect(spendOf(fx, 'unattributed')).toBe(0);
+    expect([...categorySpend(MONTH, { scope: 'personal', attributedUserId: fx.sam })]).toEqual([[fx.transport, 6130]]);
+    const alexSeries = categorySeries({ months: [MONTH], scope: 'personal', userId: fx.alex });
+    expect(alexSeries.find((row) => row.categoryId === fx.dining)?.monthlyCents).toEqual([4000]);
+    expect(topMerchants({ ...MARCH, attributedUserId: fx.alex }, fx.admin).map((row) => [row.normalizedMerchant, row.spentCents])).toEqual([
+      ['MAPLE GROCER', 15000],
+    ]);
+  });
+
+  it('a part set to Sam counts for Sam, a part set to Household for nobody, the rest for Alex', () => {
+    const fx = buildSplitPersonFixture();
+    current = fx.t;
+    expect(people(fx)).toEqual([
+      ['Sam', 10130],
+      ['Alex', 8000],
+      [UNATTRIBUTED_LABEL, 3000],
+    ]);
+    expect(byCategory(categoryBreakdown({ ...MARCH, attributedUserId: fx.sam }, fx.admin))).toEqual({
+      [fx.dining]: 4000,
+      [fx.transport]: 6130,
+    });
+    expect(byCategory(categoryBreakdown({ ...MARCH, attributedUserId: 'unattributed' }, fx.admin))).toEqual({ [fx.supplies]: 3000 });
+    expect(spendOf(fx, fx.alex)).toBe(8000);
+    expect(spendOf(fx, 'unattributed')).toBe(3000);
+    expect(new Map(categorySpend(MONTH, { scope: 'personal', attributedUserId: fx.sam }))).toEqual(
+      new Map([
+        [fx.dining, 4000],
+        [fx.transport, 6130],
+      ]),
+    );
+    const samProgress = flattenBudgetRows(budgetProgress(MONTH, 'personal', fx.sam));
+    expect(samProgress.find((row) => row.categoryId === fx.dining)?.spentCents).toBe(4000);
+    expect(samProgress.find((row) => row.categoryId === fx.groceries)?.spentCents).toBe(0);
+    const samSeries = categorySeries({ months: [MONTH], scope: 'personal', userId: fx.sam });
+    expect(samSeries.find((row) => row.categoryId === fx.dining)?.monthlyCents).toEqual([4000]);
+    expect(samSeries.find((row) => row.categoryId === fx.groceries)?.monthlyCents).toEqual([0]);
+    const samTrend = categoryMonthOverMonth({ fromMonth: MONTH, toMonth: MONTH, attributedUserId: fx.sam }, fx.admin);
+    expect(samTrend.rows.map((row) => [row.categoryId, row.totalCents])).toEqual([
+      [fx.transport, 6130],
+      [fx.dining, 4000],
+    ]);
+    expect(categoryYearOverYear({ month: MONTH, attributedUserId: fx.sam }, fx.admin).map((row) => [row.categoryId, row.thisMonthCents])).toEqual([
+      [fx.transport, 6130],
+      [fx.dining, 4000],
+    ]);
+    // A merchant still groups by the charge; Sam's line there is his part of it.
+    expect(topMerchants({ ...MARCH, attributedUserId: fx.sam }, fx.admin).map((row) => [row.normalizedMerchant, row.spentCents, row.count])).toEqual([
+      ['FUEL STOP 12', 6130, 1],
+      ['MAPLE GROCER', 4000, 1],
+    ]);
+  });
+
+  it('the people add up to the household: personSpendSplit and the household digest lines', () => {
+    const fx = buildSplitPersonFixture();
+    current = fx.t;
+    const household = categoryBreakdown(MARCH, fx.admin).reduce((sum, row) => sum + row.spentCents, 0);
+    expect(household).toBe(21130);
+    expect(personSpendSplit(MARCH, fx.admin).reduce((sum, row) => sum + row.spentCents, 0)).toBe(household);
+    // buildHouseholdDigest (src/lib/notify/evaluate/digest.ts) composes its lines from exactly these
+    // calls: one categoryBreakdown per user, one for the unattributed pile, one for the household.
+    const lines = listUsers().map((user) => categoryBreakdown({ ...MARCH, attributedUserId: user.id }, fx.admin));
+    lines.push(categoryBreakdown({ ...MARCH, attributedUserId: 'unattributed' }, fx.admin));
+    expect(lines.flat().reduce((sum, row) => sum + row.spentCents, 0)).toBe(household);
+  });
+
+  it('setting a part to someone else leaves every household figure exactly as it was', () => {
+    const fx = buildSplitPersonFixture({ allFollow: true });
+    current = fx.t;
+    const before = householdFigures(fx);
+    setTransactionSplits({
+      txnId: fx.maple,
+      parts: [
+        { categoryId: fx.groceries, amountCents: -8000, person: 'follow' },
+        { categoryId: fx.dining, amountCents: -4000, person: fx.sam },
+        { categoryId: fx.supplies, amountCents: -3000, person: 'household' },
+      ],
+      userId: fx.alex,
+    });
+    // The person lines did move, so this is not comparing two identical databases.
+    expect(people(fx)).toEqual([
+      ['Sam', 10130],
+      ['Alex', 8000],
+      [UNATTRIBUTED_LABEL, 3000],
+    ]);
+    expect(householdFigures(fx)).toEqual(before);
   });
 });

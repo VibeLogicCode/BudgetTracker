@@ -8,6 +8,7 @@ import { categorySeries, checkInHistoryMonths, firstDataMonth, isAllNoSpend, res
 import { cashflowForRange } from '@/lib/reports';
 import { monthEnd, monthStart } from '@/lib/dates';
 import { setTransactionSplits } from '@/lib/splits';
+import { buildSplitPersonFixture } from '../../helpers/split-person-fixture';
 import type { SuggestionResult } from '@/lib/predict/suggest';
 import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
@@ -617,5 +618,67 @@ describe('v1.62.0: restOfMonthSpend', () => {
     expect(checkInHistoryMonths('2026-03')).toEqual(['2026-01', '2026-02']);
     expect(checkInHistoryMonths('2026-01')).toEqual([]);
     expect(restOfMonthSpend({ targetMonth: '2026-01', dayOfMonth: 7, scope: 'household', userId: null }).months).toEqual([]);
+  });
+});
+
+/**
+ * v1.63.0 (plan 2026-11-12, Lane A, A3). A personal history reads the person's own parts: the
+ * budget suggestions' cells and the month check-in's rest of the month and its window.
+ */
+describe('v1.63.0: a personal history counts a part for its own person', () => {
+  it('categorySeries and restOfMonthSpend give Sam his Dining part, not Alex', () => {
+    const fx = buildSplitPersonFixture();
+    current = fx.t;
+    // Both people's own oldest rows sit in a partial December, so both windows are January to March.
+    fx.add({ date: '2025-12-20', description: 'CORNER CAFE', amountCents: -500, categoryId: null, person: fx.sam });
+    fx.add({ date: '2025-12-20', description: 'CORNER CAFE', amountCents: -500, categoryId: null, person: fx.alex });
+    const sam = restOfMonthSpend({ targetMonth: '2026-04', dayOfMonth: 0, scope: 'personal', userId: fx.sam });
+    expect(sam.months).toEqual(['2026-01', '2026-02', '2026-03']);
+    expect(sam.totalByMonth).toEqual([0, 0, 10130]);
+    expect(sam.byCategory.get(fx.dining)).toEqual([0, 0, 4000]);
+    const alex = restOfMonthSpend({ targetMonth: '2026-04', dayOfMonth: 0, scope: 'personal', userId: fx.alex });
+    expect(alex.totalByMonth).toEqual([0, 0, 8000]);
+    expect(alex.byCategory.get(fx.dining)).toEqual([0, 0, 0]);
+    // The household read is untouched.
+    const household = restOfMonthSpend({ targetMonth: '2026-04', dayOfMonth: 0, scope: 'household', userId: null });
+    expect(household.totalByMonth).toEqual([0, 0, 21130]);
+  });
+
+  it('firstDataMonth counts a month in which the person holds only a part of someone else charge', () => {
+    const fx = buildSplitPersonFixture();
+    current = fx.t;
+    const january = fx.add({ date: '2026-01-15', description: 'MAPLE GROCER', amountCents: -5000, categoryId: fx.groceries, person: fx.alex });
+    setTransactionSplits({
+      txnId: january,
+      userId: fx.alex,
+      parts: [
+        { categoryId: fx.groceries, amountCents: -3000 },
+        { categoryId: fx.dining, amountCents: -2000, person: fx.sam },
+      ],
+    });
+    expect(firstDataMonth(fx.sam)).toBe('2026-01');
+    expect(firstDataMonth(fx.alex)).toBe('2026-01');
+    // A charge whose every part went elsewhere is not its owner's first month.
+    const december = fx.add({ date: '2025-12-15', description: 'MAPLE GROCER', amountCents: -5000, categoryId: fx.groceries, person: fx.alex });
+    setTransactionSplits({
+      txnId: december,
+      userId: fx.alex,
+      parts: [
+        { categoryId: fx.groceries, amountCents: -3000, person: fx.sam },
+        { categoryId: fx.dining, amountCents: -2000, person: 'household' },
+      ],
+    });
+    expect(firstDataMonth(fx.alex)).toBe('2026-01');
+    expect(firstDataMonth(fx.sam)).toBe('2025-12');
+  });
+
+  it('with every part following, the personal history is exactly what v1.62.0 gave', () => {
+    const fx = buildSplitPersonFixture({ allFollow: true });
+    current = fx.t;
+    fx.add({ date: '2025-12-20', description: 'CORNER CAFE', amountCents: -500, categoryId: null, person: fx.sam });
+    fx.add({ date: '2025-12-20', description: 'CORNER CAFE', amountCents: -500, categoryId: null, person: fx.alex });
+    expect(restOfMonthSpend({ targetMonth: '2026-04', dayOfMonth: 0, scope: 'personal', userId: fx.sam }).totalByMonth).toEqual([0, 0, 6130]);
+    expect(restOfMonthSpend({ targetMonth: '2026-04', dayOfMonth: 0, scope: 'personal', userId: fx.alex }).totalByMonth).toEqual([0, 0, 15000]);
+    expect(firstDataMonth(fx.sam)).toBe('2025-12');
   });
 });

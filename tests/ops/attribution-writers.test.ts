@@ -65,6 +65,8 @@ const WRITERS: Record<string, string> = {
     'Keep both on a held possible duplicate (v1.61.0): inserts the row commitImport set aside, with the person commitImport chose for it then',
   'src/lib/bulk-undo.ts#undoLastBulkAction':
     'Undo for the last bulk change (v1.62.0): writes back the person each row had before that one person\'s own bulk change, minutes earlier',
+  'src/lib/splits.ts#setTransactionSplits':
+    'the split editor (v1.63.0): writes the person somebody picked for each part, or follow, which stores no person of its own',
 };
 
 /**
@@ -102,6 +104,11 @@ const WRITERS_NOT_CONSULTING: Record<string, string> = {
     'when nothing has touched the row since. Asking resolveAttribution again would move rows nobody ' +
     'asked about: a rule written in between, or the account owner, would decide a row the person ' +
     'only meant to put back.',
+  'src/lib/splits.ts#setTransactionSplits':
+    'it writes the person somebody picked for a part in the split editor: the hand edit the order ' +
+    'defers to, exactly as bulkSetAttribution is. A part left to follow stores no person and moves ' +
+    'with its transaction, so the import order still decides it through the transaction; asking the ' +
+    'resolver about a part somebody set by hand would let a rule overrule the person who pressed Save.',
 };
 
 const EXPORTS = ['resolveAttribution', 'AttributionSource'];
@@ -120,7 +127,12 @@ const COLUMN_KEYS = ['attributedUserId'];
  * spelling this file scans for. That write decides what a RULE says, not who a TRANSACTION belongs
  * to, so counting it here would demand an exemption for a function that has nothing to do with the
  * order, and would leave the guard unable to say what it is actually guarding.
+ *
+ * v1.63.0: transaction_splits counts as well. A part's person decides whose spending that part of a
+ * charge is, the same question the transaction's own person answers for the rest of it.
  */
+const PERSON_TABLES = ['transactions', 'transactionSplits'];
+
 function writtenTable(source: string, offset: number): string | null {
   const before = source.slice(Math.max(0, offset - 400), offset);
   const chain = /\.(?:update|insert)\s*\(\s*([A-Za-z_$][\w$]*)/g;
@@ -163,7 +175,7 @@ function writeOffsets(source: string): number[] {
     if (
       args !== null &&
       COLUMN_KEYS.some((key) => new RegExp(`\\b${key}\\s*[,:}]`).test(args.text)) &&
-      writtenTable(source, match.index) === 'transactions'
+      PERSON_TABLES.includes(writtenTable(source, match.index) ?? '')
     ) {
       offsets.push(match.index);
     }
@@ -253,5 +265,8 @@ describe('every writer of attributed_user_id is accounted for (P17)', () => {
     expect(writeOffsets('where(eq(transactions.attributedUserId, userId))')).toEqual([]);
     // And the identically-named column on merchant_rules is a different question entirely.
     expect(writeOffsets('db.update(merchantRules).set({ attributedUserId: 4 }).run();')).toEqual([]);
+    // v1.63.0: a split part carries a person too, and decides whose that part of the charge is.
+    expect(writeOffsets('tx.insert(transactionSplits).values({ txnId, personSet, attributedUserId, createdAt }).run();')).not.toEqual([]);
+    expect(writeOffsets('db.update(transactionSplits).set({ attributedUserId: 4 }).run();')).not.toEqual([]);
   });
 });

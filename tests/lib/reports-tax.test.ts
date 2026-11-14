@@ -8,6 +8,7 @@ import { taxYearCsv, taxYearReport, taxYears } from '@/lib/tax';
 import { setTransactionSplits } from '@/lib/splits';
 import { nowIso } from '@/lib/clock';
 import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
+import { buildSplitPersonFixture } from '../helpers/split-person-fixture';
 
 /**
  * Task 15a (spec 2026-08-22, v1.7.0): the tax-relevant data layer. src/lib/tax.ts is a new
@@ -325,5 +326,42 @@ describe('taxYearCsv', () => {
     const row = lines.find((line) => line.includes('10.00'))!;
     expect(row).toContain(`'=EVIL()`);
     expect(row).not.toContain(`,=EVIL()`);
+  });
+});
+
+/** v1.63.0 (plan 2026-11-12, Lane A, A3). A flagged part counts under its own person. */
+describe('taxYearReport: a split part person (v1.63.0)', () => {
+  it('puts a flagged part under the person it was set to, and the rest of the charge under its own', () => {
+    const fx = buildSplitPersonFixture();
+    current = fx.t;
+    const flag = fx.t.sqlite.prepare('update categories set tax_relevant = 1 where id = ?');
+    flag.run(fx.dining);
+    flag.run(fx.supplies);
+    flag.run(fx.groceries);
+    const byName = Object.fromEntries(
+      taxYearReport(2026).map((row) => [row.categoryName, row.byUser.filter((line) => line.cents !== 0).map((line) => [line.label, line.cents])]),
+    );
+    expect(byName).toEqual({
+      Groceries: [['Alex', 8000]],
+      Dining: [['Sam', 4000]],
+      'Household supplies': [[UNATTRIBUTED_LABEL, 3000]],
+    });
+  });
+
+  it('with every part following, the flagged part stays with the transaction person, as before', () => {
+    const fx = buildSplitPersonFixture({ allFollow: true });
+    current = fx.t;
+    fx.t.sqlite.prepare('update categories set tax_relevant = 1 where id = ?').run(fx.dining);
+    expect(taxYearReport(2026)).toEqual([
+      {
+        categoryId: fx.dining,
+        categoryName: 'Dining',
+        totalCents: 4000,
+        byUser: [
+          { userId: fx.alex, label: 'Alex', cents: 4000 },
+          { userId: null, label: UNATTRIBUTED_LABEL, cents: 0 },
+        ],
+      },
+    ]);
   });
 });

@@ -2,9 +2,10 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { createAccount } from '@/lib/accounts';
 import { createUser } from '@/lib/auth/users';
 import type { Viewer } from '@/lib/auth/viewer';
-import { cashflowTrend, personSpendSplit, topMerchants, transactionsCsv } from '@/lib/reports';
+import { cashflowTrend, categoryBreakdown, personSpendSplit, topMerchants, transactionsCsv } from '@/lib/reports';
 import { createManualTransaction } from '@/lib/transactions';
 import { createTestDb, type TestDb } from '../../helpers/db';
+import { buildSplitPersonFixture } from '../../helpers/split-person-fixture';
 
 describe('ruling R2: reports aggregates take a viewer', () => {
   let current: TestDb | null = null;
@@ -79,5 +80,44 @@ describe('ruling R2: reports aggregates take a viewer', () => {
     const csv = transactionsCsv({ from: range.from, to: range.to }, child());
     expect(csv).toContain('CORNER SHOP');
     expect(csv).not.toContain('GROCERY STORE');
+  });
+});
+
+/**
+ * v1.63.0 (plan 2026-11-12, Lane A, A3). A self viewer's figures hold their own parts of a shared
+ * charge, and nothing of anyone else's.
+ */
+describe('v1.63.0: a self viewer report counts their own split parts', () => {
+  let current: TestDb | null = null;
+  afterEach(() => {
+    current?.cleanup();
+    current = null;
+  });
+  const MARCH = { from: '2026-03-01', to: '2026-03-31' };
+
+  it('Sam reads his Dining part and his own fuel, and nothing of the rest of the charge', () => {
+    const fx = buildSplitPersonFixture();
+    current = fx.t;
+    const sam = fx.self(fx.sam);
+    expect(cashflowTrend(1, { endMonth: '2026-03' }, sam)[0]?.spendCents).toBe(10130);
+    expect(personSpendSplit(MARCH, sam)).toEqual([{ userId: fx.sam, label: 'Sam', spentCents: 10130 }]);
+    expect(
+      categoryBreakdown({ ...MARCH, rollup: true }, sam).map((row) => [row.categoryName, row.spentCents]),
+    ).toEqual([
+      ['Transport', 6130],
+      ['Dining', 4000],
+    ]);
+    expect(topMerchants(MARCH, sam).map((row) => [row.normalizedMerchant, row.spentCents])).toEqual([
+      ['FUEL STOP 12', 6130],
+      ['MAPLE GROCER', 4000],
+    ]);
+  });
+
+  it('Alex reads his following part only, whatever the URL asks for', () => {
+    const fx = buildSplitPersonFixture();
+    current = fx.t;
+    const alex = fx.self(fx.alex);
+    expect(cashflowTrend(1, { endMonth: '2026-03', attributedUserId: fx.sam }, alex)[0]?.spendCents).toBe(8000);
+    expect(categoryBreakdown({ ...MARCH, rollup: true }, alex).map((row) => [row.categoryName, row.spentCents])).toEqual([['Food', 8000]]);
   });
 });

@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, lt, sql } from 'drizzle-orm';
+import { and, asc, gte, lt, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { transactions } from '@/db/schema';
 import { ownerScope, type Viewer } from '@/lib/auth/viewer';
@@ -15,7 +15,7 @@ import {
 } from '@/lib/predict/anomalies';
 import { DUPLICATE_LOOKBACK_DAYS, DUPLICATE_WINDOW_DAYS, UNUSUAL_BASELINE_DAYS, UNUSUAL_LOOKBACK_DAYS } from '@/lib/predict/constants';
 import { SPEND_ROW_WHERE } from '@/lib/spend-where';
-import { splitsForTransactions } from '@/lib/splits';
+import { soleOwnerClause, splitsForTransactions } from '@/lib/splits';
 
 /**
  * v1.13.0 ruling R6 (item AJ / PROD-2). The maths already existed and was tested; it was
@@ -60,10 +60,15 @@ export const INSIGHTS_MAX_ROWS = 8;
  * before this fix, surfaced here as "Needs a look: $4,500 unusual charge" while Budgets and
  * Reports both correctly said $0 -- the same disagreement this task exists to remove, on a
  * third surface.
+ *
+ * v1.63.0 (plan 2026-11-12, S3): a finding is about a whole charge -- its merchant baseline, its
+ * duplicate, its price -- so a personal read keeps a charge only when it is the person's and no part
+ * of it is set to anyone else (soleOwnerClause). A shared charge stays in household reads, whole;
+ * splitting its baseline per person is not built.
  */
 function readSlice(sliceStart: string, scope: number | null): SpendRow[] {
   const clauses = [gte(transactions.date, sliceStart), ...SPEND_ROW_WHERE, lt(transactions.amountCents, 0)];
-  if (scope !== null) clauses.push(eq(transactions.attributedUserId, scope));
+  if (scope !== null) clauses.push(soleOwnerClause(scope));
   const rows = getDb()
     .select({
       id: transactions.id,
@@ -87,7 +92,7 @@ function earliestDate(scope: number | null): string | null {
   const row = getDb()
     .select({ first: sql<string | null>`min(${transactions.date})` })
     .from(transactions)
-    .where(scope === null ? undefined : eq(transactions.attributedUserId, scope))
+    .where(scope === null ? undefined : soleOwnerClause(scope))
     .get();
   return row?.first ?? null;
 }

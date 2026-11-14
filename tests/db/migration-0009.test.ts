@@ -90,7 +90,9 @@ describe('fresh database shape', () => {
       notnull: number;
       pk: number;
     }[];
-    expect(cols.map((c) => c.name)).toEqual(['id', 'txn_id', 'category_id', 'amount_cents', 'note', 'created_at']);
+    // 0009's six columns, in order; drizzle/0032_split_person.sql appends person_set and
+    // attributed_user_id after them (tests/db/migration-0032.test.ts, tests/db/schema.test.ts).
+    expect(cols.map((c) => c.name).slice(0, 6)).toEqual(['id', 'txn_id', 'category_id', 'amount_cents', 'note', 'created_at']);
     const byName = new Map(cols.map((c) => [c.name, c]));
     expect(byName.get('id')!.pk).toBe(1);
     expect(byName.get('txn_id')!.type.toLowerCase()).toBe('integer');

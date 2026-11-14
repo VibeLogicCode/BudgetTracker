@@ -27,6 +27,7 @@ import { listRules, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { setTransactionDisplayName, upsertRenameRule } from '@/lib/categorize/engine';
 import { nowIso } from '@/lib/clock';
 import { setTransactionSplits } from '@/lib/splits';
+import { buildSplitPersonFixture } from '../helpers/split-person-fixture';
 import { assignTransactionToLoan, loanLinksForTransactions } from '@/lib/loans';
 import { createWarrantyItem } from '@/lib/warranty/items';
 import { createItemType } from '@/lib/warranty/types';
@@ -1786,5 +1787,72 @@ describe('groupTransactionsByMerchant (v1.62.0)', () => {
     add({ description: 'MAPLE GROCER', amountCents: 5000, isTransfer: true });
 
     expect(merchantRowIds('MAPLE GROCER').sort((a, b) => a - b)).toEqual([...maple, filed]);
+  });
+});
+
+/**
+ * v1.63.0 (plan 2026-11-12, Lane A, A4). One row per transaction under a person scope: a row is in
+ * when it is the person's and not wholly given away, or a part is theirs; its amount is their share.
+ */
+describe('v1.63.0: a person filter and a split part set to someone else', () => {
+  it('a household viewer filtering Sam sees his share of the shared charge, the whole amount beside it', () => {
+    const fx = buildSplitPersonFixture();
+    current = fx.t;
+    const page = listTransactions({ attributedUserId: fx.sam }, fx.admin);
+    expect(page.rows.map((row) => [row.rawDescription, row.amountCents, row.parentAmountCents, row.partial])).toEqual([
+      ['FUEL STOP 12', -6130, -6130, false],
+      ['MAPLE GROCER', -4000, -15000, true],
+    ]);
+    expect(page.outCents).toBe(-10130);
+    // Household reads the whole charge, untouched.
+    const all = listTransactions({}, fx.admin);
+    expect(all.rows.map((row) => [row.rawDescription, row.amountCents, row.partial])).toEqual([
+      ['FUEL STOP 12', -6130, false],
+      ['MAPLE GROCER', -15000, false],
+    ]);
+    expect(all.outCents).toBe(-21130);
+    expect(listTransactions({ attributedUserId: 'unattributed' }, fx.admin).rows.map((row) => [row.rawDescription, row.amountCents])).toEqual([
+      ['MAPLE GROCER', -3000],
+    ]);
+  });
+
+  it('the category grouping under Sam filter sums only his parts', () => {
+    const fx = buildSplitPersonFixture();
+    current = fx.t;
+    const grouped = groupTransactionsByCategory({ attributedUserId: fx.sam }, fx.admin);
+    expect(grouped.groups.map((group) => [group.categoryId, group.totalCents, group.count])).toEqual([
+      [fx.transport, -6130, 1],
+      [fx.dining, -4000, 1],
+    ]);
+    expect(grouped.groups.find((group) => group.categoryId === fx.dining)?.preview.map((row) => row.amountCents)).toEqual([-4000]);
+    expect(grouped.outCents).toBe(-10130);
+    expect(grouped.totalCount).toBe(2);
+    // A self viewer is held to their own parts the same way.
+    const own = groupTransactionsByCategory({}, fx.self(fx.alex));
+    expect(own.groups.map((group) => [group.categoryId, group.totalCents])).toEqual([[fx.groceries, -8000]]);
+  });
+
+  it('a category filter under a person keeps only the rows whose part in that category is theirs', () => {
+    const fx = buildSplitPersonFixture();
+    current = fx.t;
+    expect(listTransactions({ categoryId: fx.groceries, attributedUserId: fx.sam }, fx.admin).rows).toEqual([]);
+    expect(listTransactions({ categoryId: fx.dining, attributedUserId: fx.sam }, fx.admin).rows.map((row) => row.id)).toEqual([fx.maple]);
+    expect(listTransactions({ categoryId: fx.groceries, attributedUserId: fx.alex }, fx.admin).rows.map((row) => row.id)).toEqual([fx.maple]);
+  });
+
+  it('with every part following, the person filter reads exactly what v1.62.0 gave', () => {
+    const fx = buildSplitPersonFixture({ allFollow: true });
+    current = fx.t;
+    const alex = listTransactions({ attributedUserId: fx.alex }, fx.admin);
+    expect(alex.rows.map((row) => [row.id, row.amountCents])).toEqual([[fx.maple, -15000]]);
+    expect(alex.outCents).toBe(-15000);
+    expect(listTransactions({ attributedUserId: fx.sam }, fx.admin).rows.map((row) => [row.id, row.amountCents])).toEqual([[fx.fuel, -6130]]);
+    expect(
+      groupTransactionsByCategory({ attributedUserId: fx.alex }, fx.admin).groups.map((group) => [group.categoryId, group.totalCents]),
+    ).toEqual([
+      [fx.groceries, -8000],
+      [fx.dining, -4000],
+      [fx.supplies, -3000],
+    ]);
   });
 });

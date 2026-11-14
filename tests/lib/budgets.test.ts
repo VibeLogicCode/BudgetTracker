@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
-import { budgetProgress, budgetTotals, categorySpend, categoryTransactions, uncategorizedSpend, clearBudget, copyBudgetsFromPreviousMonth, effectiveBudget, flattenBudgetRows, resolveBudget, setRollover, upsertBudget } from '@/lib/budgets';
+import { budgetProgress, budgetTotals, categorySpend, categorySpendWithRollupSeries, categoryTransactions, uncategorizedSpend, clearBudget, copyBudgetsFromPreviousMonth, effectiveBudget, flattenBudgetRows, resolveBudget, setRollover, upsertBudget } from '@/lib/budgets';
 import { archiveCategory } from '@/lib/categories';
 import { nowIso } from '@/lib/clock';
 import { assignTransactionToLoan } from '@/lib/loans';
@@ -14,6 +14,7 @@ import { listTransactions } from '@/lib/transactions';
 // (immediately below) already is -- one test proves it by actually splitting a transaction,
 // rather than trusting that reusing EFFECTIVE_CATEGORY/EFFECTIVE_AMOUNT was enough.
 import { setTransactionSplits } from '@/lib/splits';
+import { buildSplitPersonFixture } from '../helpers/split-person-fixture';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -1085,5 +1086,63 @@ describe('C3: budgetProgress reads in batches, not per category', () => {
       carryCents: 70_000,
       effectiveCents: 120_000,
     });
+  });
+});
+
+/** v1.63.0 (plan 2026-11-12, Lane A, A3). A personal budget counts the parts that are the person's own. */
+describe('budgets: a split part person (v1.63.0)', () => {
+  it('categorySpend and the rollover series count a part for the person it was set to', () => {
+    const fx = buildSplitPersonFixture();
+    current = fx.t;
+    expect(categorySpend('2026-03', { scope: 'personal', attributedUserId: fx.sam }).get(fx.dining)).toBe(4000);
+    expect(categorySpend('2026-03', { scope: 'personal', attributedUserId: fx.alex }).get(fx.dining)).toBeUndefined();
+    expect(categorySpend('2026-03', { scope: 'personal', attributedUserId: fx.alex }).get(fx.groceries)).toBe(8000);
+    expect([...categorySpendWithRollupSeries('personal', fx.sam, fx.dining, ['2026-02', '2026-03'])]).toEqual([
+      ['2026-02', 0],
+      ['2026-03', 4000],
+    ]);
+    expect([...categorySpendWithRollupSeries('personal', fx.alex, fx.dining, ['2026-03'])]).toEqual([['2026-03', 0]]);
+  });
+
+  it('categoryTransactions lists the person own part, carrying its splitId', () => {
+    const fx = buildSplitPersonFixture();
+    current = fx.t;
+    expect(categoryTransactions('2026-03', fx.dining, { scope: 'personal', attributedUserId: fx.sam }, fx.admin)).toEqual([
+      expect.objectContaining({ id: fx.maple, amountCents: -4000, splitId: fx.parts.dining, parentAmountCents: -15000 }),
+    ]);
+    expect(categoryTransactions('2026-03', fx.dining, { scope: 'personal', attributedUserId: fx.alex }, fx.admin)).toEqual([]);
+    // The household card still holds every part.
+    expect(categoryTransactions('2026-03', fx.dining, { scope: 'household' }, fx.admin)).toHaveLength(1);
+  });
+
+  it('a self viewer reads only their own parts, and never the whole charge', () => {
+    const fx = buildSplitPersonFixture();
+    current = fx.t;
+    // Alex asking for Sam's card gets nothing, not a rewrite to his own rows.
+    expect(categoryTransactions('2026-03', fx.dining, { scope: 'personal', attributedUserId: fx.sam }, fx.self(fx.alex))).toEqual([]);
+    const own = categoryTransactions('2026-03', fx.dining, { scope: 'personal', attributedUserId: fx.sam }, fx.self(fx.sam));
+    expect(own).toEqual([expect.objectContaining({ id: fx.maple, amountCents: -4000, splitId: fx.parts.dining })]);
+    expect(JSON.stringify(own)).not.toContain('-15000');
+    // Alex's own Groceries part: his share of the charge, not the -150.00 it was split from.
+    const alexGroceries = categoryTransactions('2026-03', fx.groceries, { scope: 'personal', attributedUserId: fx.alex }, fx.self(fx.alex));
+    expect(alexGroceries).toEqual([expect.objectContaining({ amountCents: -8000, parentAmountCents: -8000 })]);
+  });
+
+  it('with every part following, the personal figures are exactly what v1.62.0 gave', () => {
+    const fx = buildSplitPersonFixture({ allFollow: true });
+    current = fx.t;
+    expect(new Map(categorySpend('2026-03', { scope: 'personal', attributedUserId: fx.alex }))).toEqual(
+      new Map([
+        [fx.groceries, 8000],
+        [fx.dining, 4000],
+        [fx.supplies, 3000],
+      ]),
+    );
+    expect(categoryTransactions('2026-03', fx.dining, { scope: 'personal', attributedUserId: fx.alex }, fx.admin)).toEqual([
+      expect.objectContaining({ amountCents: -4000, parentAmountCents: -15000 }),
+    ]);
+    expect(categoryTransactions('2026-03', fx.dining, { scope: 'personal', attributedUserId: fx.alex }, fx.self(fx.alex))).toEqual([
+      expect.objectContaining({ amountCents: -4000, parentAmountCents: -15000 }),
+    ]);
   });
 });

@@ -79,6 +79,7 @@ const EXPECTED_INDEXES = [
   'set_aside_rows_waiting_idx',
   'set_aside_rows_candidate_idx',
   'set_aside_rows_import_idx',
+  'transaction_splits_person_idx',
 ];
 
 describe('database schema', () => {
@@ -333,6 +334,27 @@ describe('database schema', () => {
         )
         .run(),
     ).toThrowError(/FOREIGN KEY constraint failed/);
+  });
+
+  it('gives transaction_splits a person per part, declared last (v1.63.0, drizzle/0032_split_person.sql)', () => {
+    current = createTestDb();
+    const columns = current.sqlite.prepare('pragma table_info(transaction_splits)').all() as {
+      name: string;
+      notnull: number;
+      dflt_value: string | null;
+    }[];
+    expect(columns.map((column) => column.name)).toEqual([
+      'id',
+      'txn_id',
+      'category_id',
+      'amount_cents',
+      'note',
+      'created_at',
+      'person_set',
+      'attributed_user_id',
+    ]);
+    expect(columns.find((column) => column.name === 'person_set')).toMatchObject({ notnull: 1, dflt_value: '0' });
+    expect(columns.find((column) => column.name === 'attributed_user_id')).toMatchObject({ notnull: 0, dflt_value: null });
   });
 
   it('is safe to migrate twice (idempotent boot)', () => {

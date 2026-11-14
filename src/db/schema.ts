@@ -310,13 +310,18 @@ export const transactionImports = sqliteTable(
 /**
  * Transaction splits (spec 2026-08-22, v1.7.0, Task 1). Mirrors
  * drizzle/0009_finish_line.sql. Lets one transaction's amount be divided across more than
- * one category; a split's parts always sum exactly to the parent's amountCents, and
- * ownership/attribution stays whole-transaction (a split carries only category, amount and
- * note). transactions.amountCents is immutable after insert (see the comment on that
- * column), so a split ADDS rows here rather than ever rewriting the parent.
+ * one category; a split's parts always sum exactly to the parent's amountCents, and each
+ * part carries a category, an amount and a note. transactions.amountCents is immutable after
+ * insert (see the comment on that column), so a split ADDS rows here rather than ever
+ * rewriting the parent.
+ *
+ * v1.63.0 (drizzle/0032_split_person.sql) adds a person per part: personSet false means the
+ * part follows its transaction's person; true means it belongs to attributedUserId, NULL being
+ * Household. EFFECTIVE_PERSON (src/lib/splits.ts) is the one reader of the pair.
  *
  * NOT represented here; SQL only:
  *   - CHECK (amount_cents <> 0)
+ *   - CHECK (person_set IN (0, 1))
  *
  * The sum-of-parts == parent amountCents invariant is enforced in the app layer
  * (src/lib/splits.ts, the single writer), not by a CHECK: SQLite cannot express a
@@ -335,10 +340,13 @@ export const transactionSplits = sqliteTable(
     amountCents: integer('amount_cents').notNull(),
     note: text('note'),
     createdAt: text('created_at').notNull(),
+    personSet: integer('person_set', { mode: 'boolean' }).notNull().default(false),
+    attributedUserId: integer('attributed_user_id').references(() => users.id),
   },
   (t) => [
     index('transaction_splits_txn_idx').on(t.txnId),
     index('transaction_splits_category_idx').on(t.categoryId),
+    index('transaction_splits_person_idx').on(t.attributedUserId).where(sql`person_set = 1`),
   ],
 );
 

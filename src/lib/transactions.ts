@@ -32,7 +32,16 @@ import { transactionImports } from '@/db/schema';
 // F-07 (v1.31.0). See buildWhere's search clause below for why this is the ONLY new import the
 // feature needs -- the split editor already proved this parser handles a person's typed amount.
 import { parseAmountToCents } from '@/lib/money';
-import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY, transactionHasSplits } from '@/lib/splits';
+import {
+  EFFECTIVE_AMOUNT,
+  EFFECTIVE_CATEGORY,
+  effectivePersonIs,
+  hasPartOutsideSql,
+  personRowClause,
+  scopedAmountSql,
+  transactionHasSplits,
+  type SplitPersonScope,
+} from '@/lib/splits';
 import { SPEND_ROW_WHERE, SPENDING_OUT_WHERE } from '@/lib/spend-where';
 
 /**
@@ -244,13 +253,30 @@ export interface TransactionRow {
   displayDescription: string | null;
   displaySource: 'manual' | 'rename' | 'loan' | null;
   normalizedMerchant: string;
+  /**
+   * v1.63.0 (plan 2026-11-12, S3): under a person scope (a person filter, or a self viewer) this is
+   * that person's share of the row (scopedAmountSql: the whole amount when unsplit, else the sum of
+   * the parts that are theirs). Otherwise the whole amount, as always.
+   */
   amountCents: number;
+  /**
+   * v1.63.0. The whole charge for a household viewer, null for a self viewer (who never receives
+   * the whole of a charge shared with someone else). Optional so rows built elsewhere still type.
+   */
+  parentAmountCents?: number | null;
+  /** v1.63.0. True when the row is split and a part of it is outside the person scope it was read under. */
+  partial?: boolean;
   categoryId: number | null;
   categoryName: string | null;
   source: 'rule' | 'bayes' | 'manual' | 'none';
   confidence: number | null;
   isTransfer: boolean;
+  /** The TRANSACTION's person, which still decides who may act on it (transactionOwners). */
   attributedUserId: number | null;
+  /**
+   * v1.63.0: null for a self viewer when the transaction is someone else's (the row is in their
+   * scope through a part of theirs), so another person's name never reaches them.
+   */
   attributedUserName: string | null;
   notes: string | null;
   importId: number | null;
@@ -277,11 +303,13 @@ export interface TransactionPage {
    * and reports, a question this filtered view deliberately does not ask -- a `transfers=all`
    * reader wants to see every row the list shows summed, not a curated subset of them.
    *
-   * NOT split-aware -- the parent row's own `amountCents`, the same column the flat list itself
-   * displays and the same one `total`'s `where` already runs over. `groupTransactionsByCategory`'s
+   * NOT split-aware -- the row's own `amountCents`, the same figure the flat list itself displays
+   * and the same rows `total`'s `where` already runs over. `groupTransactionsByCategory`'s
    * `outCents`/`inCents` are the split-aware pair for the surface that decomposes a transaction
    * across categories; this is the flat list's own total, on purpose (see that function's doc
-   * comment for the fuller reasoning it already carries about the two surfaces).
+   * comment for the fuller reasoning it already carries about the two surfaces). v1.63.0: under a
+   * person scope the row's amount is that person's share (TransactionRow.amountCents), so these
+   * sum the shares, exactly what the rows above them show.
    */
   outCents: number;
   inCents: number;
@@ -302,34 +330,70 @@ export function displayNameOf(row: Pick<TransactionRow, 'rawDescription' | 'disp
   return row.displayDescription !== null && row.displayDescription.length > 0 ? row.displayDescription : row.rawDescription;
 }
 
-const SELECTION = {
-  id: transactions.id,
-  date: transactions.date,
-  accountId: transactions.accountId,
-  accountName: accounts.name,
-  rawDescription: transactions.rawDescription,
-  displayDescription: transactions.displayDescription,
-  displaySource: transactions.displaySource,
-  normalizedMerchant: transactions.normalizedMerchant,
-  amountCents: transactions.amountCents,
-  categoryId: transactions.categoryId,
-  categoryName: categories.name,
-  source: transactions.categorizationSource,
-  confidence: transactions.confidence,
-  isTransfer: transactions.isTransfer,
-  attributedUserId: transactions.attributedUserId,
-  attributedUserName: users.name,
-  notes: transactions.notes,
-  importId: transactions.importId,
-} as const;
+/** No part outside the scope: the value `partial` takes for a read with no person scope. */
+const NO_PART_OUTSIDE = sql<boolean>`0`.mapWith((value: unknown) => Number(value) === 1);
 
-function baseQuery() {
+/**
+ * v1.63.0 (plan 2026-11-12, S3). The row read model, for one person scope.
+ *
+ * `person` is whose share the row is read at (sharePerson: a self viewer's own id, else the person
+ * filter, else null for the whole charge). `ownView` is the self viewer's own id, or null for a
+ * household viewer: a self viewer gets no whole amount and no other person's name.
+ */
+function selectionFor(person: SplitPersonScope | null, ownView: number | null) {
+  return {
+    id: transactions.id,
+    date: transactions.date,
+    accountId: transactions.accountId,
+    accountName: accounts.name,
+    rawDescription: transactions.rawDescription,
+    displayDescription: transactions.displayDescription,
+    displaySource: transactions.displaySource,
+    normalizedMerchant: transactions.normalizedMerchant,
+    amountCents: person === null ? sql<number>`${transactions.amountCents}` : scopedAmountSql(person),
+    parentAmountCents: ownView === null ? sql<number | null>`${transactions.amountCents}` : sql<number | null>`null`,
+    partial: person === null ? NO_PART_OUTSIDE : hasPartOutsideSql(person),
+    categoryId: transactions.categoryId,
+    categoryName: categories.name,
+    source: transactions.categorizationSource,
+    confidence: transactions.confidence,
+    isTransfer: transactions.isTransfer,
+    attributedUserId: transactions.attributedUserId,
+    attributedUserName:
+      ownView === null
+        ? sql<string | null>`${users.name}`
+        : sql<string | null>`${sql`(case when ${transactions.attributedUserId} = ${ownView} then ${users.name} else null end)`}`,
+    notes: transactions.notes,
+    importId: transactions.importId,
+  };
+}
+
+function baseQuery(selection: ReturnType<typeof selectionFor> = selectionFor(null, null)) {
   return getDb()
-    .select(SELECTION)
+    .select(selection)
     .from(transactions)
     .innerJoin(accounts, eq(accounts.id, transactions.accountId))
     .leftJoin(categories, eq(categories.id, transactions.categoryId))
     .leftJoin(users, eq(users.id, transactions.attributedUserId));
+}
+
+/**
+ * v1.63.0. The people a filter and a viewer scope the rows to: the person filter, then the self
+ * viewer's own id, each once. Two different people is a self viewer asking for somebody else.
+ */
+function rowPersons(filter: Pick<TransactionFilter, 'attributedUserId'>, viewer: Viewer): SplitPersonScope[] {
+  const out: SplitPersonScope[] = [];
+  if (filter.attributedUserId === 'unattributed' || typeof filter.attributedUserId === 'number') out.push(filter.attributedUserId);
+  const own = ownerScope(viewer);
+  if (own !== null && !out.includes(own)) out.push(own);
+  return out;
+}
+
+/** v1.63.0. Whose share a row is read at: the self viewer's own, else the person filter, else none. */
+function sharePerson(filter: Pick<TransactionFilter, 'attributedUserId'>, viewer: Viewer): SplitPersonScope | null {
+  const own = ownerScope(viewer);
+  if (own !== null) return own;
+  return filter.attributedUserId === 'unattributed' || typeof filter.attributedUserId === 'number' ? filter.attributedUserId : null;
 }
 
 /**
@@ -383,11 +447,17 @@ function descendantCategoryIds(categoryId: number): number[] {
  * (categorySpend, categoryBreakdown) but wrong here -- listTransactions returns one row per
  * TRANSACTION, and a join would silently duplicate a split row's parent across the page and
  * inflate `total`/pageCount along with it.
+ *
+ * v1.63.0: under a person scope the split arm asks for a part in the category that is ALSO that
+ * person's (effectivePersonIs inside the subquery reads the subquery's own part), so Sam's
+ * Groceries does not list a charge whose Groceries part is Alex's just because Sam holds its Dining
+ * part. The unsplit arm needs nothing: personRowClause already holds an unsplit row to its person.
  */
-function categoryMatchClause(categoryId: number, exact: boolean): SQL {
+function categoryMatchClause(categoryId: number, exact: boolean, person: SplitPersonScope | null): SQL {
   const ids = exact ? [categoryId] : descendantCategoryIds(categoryId);
+  const partPerson = person === null ? sql`` : sql` and ${effectivePersonIs(person)}`;
   return sql`(
-    exists (select 1 from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id} and ${inArray(transactionSplits.categoryId, ids)})
+    exists (select 1 from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id} and ${inArray(transactionSplits.categoryId, ids)}${partPerson})
     or (
       not exists (select 1 from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id})
       and ${inArray(transactions.categoryId, ids)}
@@ -399,20 +469,23 @@ function buildWhere(filter: TransactionFilter, viewer: Viewer): SQL | undefined 
   const clauses: SQL[] = [];
   if (typeof filter.accountId === 'number') clauses.push(eq(transactions.accountId, filter.accountId));
 
+  // v1.63.0 (plan 2026-11-12, S3): a row is in a person's scope when it is theirs and not wholly
+  // given away, or a part of it is theirs (personRowClause). The person filter comes first, then
+  // ruling R2's own scope for a self viewer.
+  const persons = rowPersons(filter, viewer);
+
   // A fully split row is not uncategorized: its categories are its parts (UNCATEGORIZED_WHERE).
   if (filter.categoryId === 'uncategorized') clauses.push(UNCATEGORIZED_WHERE);
   else if (typeof filter.categoryId === 'number')
-    clauses.push(categoryMatchClause(filter.categoryId, filter.categoryExact === true));
+    clauses.push(categoryMatchClause(filter.categoryId, filter.categoryExact === true, persons[0] ?? null));
 
-  if (filter.attributedUserId === 'unattributed') clauses.push(isNull(transactions.attributedUserId));
-  else if (typeof filter.attributedUserId === 'number') clauses.push(eq(transactions.attributedUserId, filter.attributedUserId));
-
-  // v1.13.0 ruling R2. Appended AFTER the caller's own person clause, never instead of it: a self
-  // viewer who asks for somebody else must get an unsatisfiable AND (zero rows), not a filter
+  // v1.13.0 ruling R2. The viewer's own scope is appended AFTER the caller's own person clause,
+  // never instead of it: a self viewer who asks for somebody else must get zero rows, not a filter
   // silently rewritten to themselves. A rewrite would show them their own spending under another
-  // person's name, which is a worse answer than an empty page.
-  const scope = ownerScope(viewer);
-  if (scope !== null) clauses.push(eq(transactions.attributedUserId, scope));
+  // person's name, which is a worse answer than an empty page. v1.63.0: two row clauses no longer
+  // contradict each other on a charge the two people share, so that case is refused outright.
+  for (const person of persons) clauses.push(personRowClause(person));
+  if (persons.length > 1) clauses.push(sql`0 = 1`);
 
   if (filter.from) clauses.push(gte(transactions.date, filter.from));
   if (filter.to) clauses.push(lte(transactions.date, filter.to));
@@ -547,6 +620,10 @@ export function listTransactions(filter: TransactionFilter, viewer: Viewer): Tra
   const pageSize = Math.min(200, Math.max(1, filter.pageSize && filter.pageSize > 0 ? filter.pageSize : 50));
   const page = Math.max(1, filter.page ?? 1);
   const where = buildWhere(filter, viewer);
+  // v1.63.0: under a person scope each row is read at that person's share, and the footer sums the
+  // same expression, so it adds up exactly what the rows show.
+  const person = sharePerson(filter, viewer);
+  const amount = person === null ? transactions.amountCents : scopedAmountSql(person);
 
   // F-02 (v1.31.0): the count and the two filtered sums ride the SAME query as `where` -- one more
   // pass over an already-scanned set of rows, not a second query, and (the point of doing it here
@@ -555,8 +632,8 @@ export function listTransactions(filter: TransactionFilter, viewer: Viewer): Tra
   const totalRow = getDb()
     .select({
       c: sql<number>`count(*)`,
-      outCents: sql<number>`coalesce(sum(case when ${transactions.amountCents} < 0 then ${transactions.amountCents} else 0 end), 0)`,
-      inCents: sql<number>`coalesce(sum(case when ${transactions.amountCents} > 0 then ${transactions.amountCents} else 0 end), 0)`,
+      outCents: sql<number>`coalesce(sum(case when ${amount} < 0 then ${amount} else 0 end), 0)`,
+      inCents: sql<number>`coalesce(sum(case when ${amount} > 0 then ${amount} else 0 end), 0)`,
     })
     .from(transactions)
     .where(where)
@@ -565,7 +642,7 @@ export function listTransactions(filter: TransactionFilter, viewer: Viewer): Tra
   const outCents = totalRow?.outCents ?? 0;
   const inCents = totalRow?.inCents ?? 0;
 
-  const query = baseQuery();
+  const query = baseQuery(selectionFor(person, ownerScope(viewer)));
   // v1.26.0 Lane 2 item 1: the order moved into orderByFor (above), which returns the identical
   // default -- ruling R1's oldest-first while working the queue, newest-first otherwise -- when no
   // `sort` is asked for. See that function for why every ordering ends in `id`.
@@ -843,6 +920,11 @@ export function groupTransactionsByCategory(
   const pageSize = Math.min(200, Math.max(1, paging?.pageSize && paging.pageSize > 0 ? paging.pageSize : 25));
   const page = Math.max(1, paging?.page ?? 1);
   const where = buildWhere(filter, viewer);
+  // v1.63.0 (plan 2026-11-12, A4): the three split-joined reads below (clusters, previews, sign
+  // totals) also hold each joined PART to the scope's person, so under Sam's filter, or for a self
+  // viewer, a cluster never sums or previews another person's part of a shared charge. The count
+  // read has no split join and keeps `where` alone.
+  const partWhere = and(where, ...rowPersons(filter, viewer).map((person) => effectivePersonIs(person)));
 
   const rows = getDb()
     .select({
@@ -859,7 +941,7 @@ export function groupTransactionsByCategory(
     // to name the money already filed under it, the same archived-inclusive choice
     // descendantCategoryIds and foldRollup (src/lib/budgets.ts) already make.
     .leftJoin(categories, eq(categories.id, EFFECTIVE_CATEGORY))
-    .where(where)
+    .where(partWhere)
     // Grouped by id AND name so two categories that happen to share a name stay two clusters.
     .groupBy(EFFECTIVE_CATEGORY, categories.name)
     .all();
@@ -884,7 +966,7 @@ export function groupTransactionsByCategory(
     })
     .from(transactions)
     .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
-    .where(where)
+    .where(partWhere)
     .get();
 
   // v1.21.0 item 2's label, carried here for the same reason reports.ts carries it: a cluster keyed
@@ -939,7 +1021,7 @@ export function groupTransactionsByCategory(
   const pageGroups = groups.slice((page - 1) * pageSize, page * pageSize);
 
   return {
-    groups: attachPreviews(pageGroups, where),
+    groups: attachPreviews(pageGroups, partWhere),
     page,
     pageSize,
     pageCount: Math.max(1, Math.ceil(groupCount / pageSize)),
@@ -1003,6 +1085,11 @@ export interface MerchantGroupPage {
  * merchant whole, through baseQuery, which the Create a rule dialog opens from.
  *
  * `viewer` is REQUIRED for the reason listTransactions gives (v1.13.0 ruling R2).
+ *
+ * v1.63.0: the Needs review queue is household-only and never holds a split row, but `?group=merchant`
+ * reaches this outside the queue too, so under a person scope the money is each row's share
+ * (scopedAmountSql), read the way listTransactions reads it: a self viewer never receives the whole
+ * of a charge shared with someone else.
  */
 export function groupTransactionsByMerchant(
   filter: TransactionFilter,
@@ -1012,12 +1099,14 @@ export function groupTransactionsByMerchant(
   const pageSize = Math.min(200, Math.max(1, paging?.pageSize && paging.pageSize > 0 ? paging.pageSize : 25));
   const page = Math.max(1, paging?.page ?? 1);
   const where = buildWhere(filter, viewer);
+  const person = sharePerson(filter, viewer);
+  const amount = person === null ? transactions.amountCents : scopedAmountSql(person);
 
   const rows = getDb()
     .select({
       merchant: transactions.normalizedMerchant,
       count: sql<number>`count(*)`,
-      totalCents: sql<number>`coalesce(sum(${transactions.amountCents}), 0)`,
+      totalCents: sql<number>`coalesce(sum(${amount}), 0)`,
       firstDate: sql<string>`min(${transactions.date})`,
       lastDate: sql<string>`max(${transactions.date})`,
     })
@@ -1069,7 +1158,7 @@ export function groupTransactionsByMerchant(
         id: transactions.id,
         date: transactions.date,
         description: sql<string>`coalesce(${transactions.displayDescription}, ${transactions.rawDescription})`.as('merchant_preview_description'),
-        amountCents: transactions.amountCents,
+        amountCents: sql<number>`${amount}`.as('merchant_preview_amount'),
         rank: sql<number>`row_number() over (partition by ${transactions.normalizedMerchant} order by ${transactions.date} desc, ${transactions.id} desc)`.as('merchant_preview_rank'),
       })
       .from(transactions)
@@ -1092,7 +1181,8 @@ export function groupTransactionsByMerchant(
     for (const bucket of previews.values()) bucket.sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
 
     if (newestIds.length > 0) {
-      for (const row of baseQuery().where(inArray(transactions.id, newestIds)).all()) newest.set(row.normalizedMerchant, row);
+      const selection = selectionFor(person, ownerScope(viewer));
+      for (const row of baseQuery(selection).where(inArray(transactions.id, newestIds)).all()) newest.set(row.normalizedMerchant, row);
     }
   }
 
@@ -1141,13 +1231,34 @@ export function merchantRowIds(normalizedMerchant: string): number[] {
  * (src/app/(app)/warranties/[id]/page.tsx), and it already renders "no link" for a transaction that
  * no longer exists; a foreign transaction takes the same path with no extra branch, and the caller
  * cannot tell the two apart, which is the point.
+ *
+ * THIS IS THE MAY-ACT GATE, and v1.63.0 keeps it on the transaction's own person on purpose. The
+ * single-row actions (category, note, rename, split, loan and bill links in
+ * src/app/(app)/transactions/actions.ts) and src/lib/loans.ts's visibleToViewer refuse a self viewer
+ * exactly when this returns null, and the transaction's own person still decides who may act on it
+ * (plan 2026-11-12, A4: transactionOwners is unchanged). Reaching a row through a part set to the
+ * viewer would let them rename, annotate or link somebody else's charge. What a self viewer may
+ * READ of such a row is getTransactionShare's answer below.
+ *
+ * v1.63.0: a self viewer reads their own row at their share (a part of it may be set to someone
+ * else), with `partial` saying so and no whole amount.
  */
 export function getTransaction(id: number, viewer: Viewer): TransactionRow | null {
   const scope = ownerScope(viewer);
-  const where = scope === null
-    ? eq(transactions.id, id)
-    : and(eq(transactions.id, id), eq(transactions.attributedUserId, scope));
-  return baseQuery().where(where).get() ?? null;
+  const where = scope === null ? eq(transactions.id, id) : and(eq(transactions.id, id), eq(transactions.attributedUserId, scope));
+  return baseQuery(selectionFor(scope, scope)).where(where).get() ?? null;
+}
+
+/**
+ * v1.63.0 (plan 2026-11-12, A4). One row by id, read the way listTransactions reads it: a self
+ * viewer reaches it through personRowClause -- their own and not wholly given away, or holding a
+ * part of theirs -- at their share, with no whole amount and no other person's name. A read, never
+ * a permission: a caller about to WRITE the row gates on getTransaction.
+ */
+export function getTransactionShare(id: number, viewer: Viewer): TransactionRow | null {
+  const scope = ownerScope(viewer);
+  const where = scope === null ? eq(transactions.id, id) : and(eq(transactions.id, id), personRowClause(scope));
+  return baseQuery(selectionFor(scope, scope)).where(where).get() ?? null;
 }
 
 /**

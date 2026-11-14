@@ -7,7 +7,7 @@ import { netSpentCents } from '@/lib/money';
 import { CHECKIN_HISTORY_MONTHS } from '@/lib/predict/constants';
 import { historyMonths, seasonalApplies } from '@/lib/predict/window';
 import { seasonalFactor, suggestBudget, type SuggestionResult } from '@/lib/predict/suggest';
-import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY } from '@/lib/splits';
+import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY, partPersonClause, personRowClause } from '@/lib/splits';
 import { SPEND_ROW_WHERE } from '@/lib/spend-where';
 
 /**
@@ -46,9 +46,9 @@ export interface SeasonalSeries {
  *
  * Split-aware (spec 2026-08-22, v1.7.0, Task 3): LEFT JOIN transaction_splits and read
  * EFFECTIVE_CATEGORY/EFFECTIVE_AMOUNT (src/lib/splits.ts) instead of the transaction's own
- * columns, so a split transaction is counted once, at its parts -- the date/transfer/
- * attribution predicates keep reading the parent's own columns, since a split has no date or
- * owner of its own.
+ * columns, so a split transaction is counted once, at its parts -- the date and transfer
+ * predicates keep reading the parent's own columns, since a split has no date of its own. A
+ * personal series counts the PART's person (v1.63.0, partPersonClause), as budgets.ts does.
  *
  * C-02 fix: `SPEND_ROW_WHERE` (src/lib/spend-where.ts) replaces a bare transfer-only filter here
  * -- MUST-3.1/3.2 at the top of this file promise this module's spend agrees with budgets.ts,
@@ -72,7 +72,7 @@ function cells(
   ];
   if (scope === 'personal') {
     if (userId === null) throw new Error('Personal series requires a user');
-    clauses.push(eq(transactions.attributedUserId, userId));
+    clauses.push(partPersonClause(userId));
   }
 
   const month = sql<string>`substr(${transactions.date}, 1, 7)`;
@@ -218,7 +218,9 @@ export function categorySeries(input: {
 /**
  * MUST-4.3: the month of the oldest non-transfer row, or null on a household with none.
  * v1.62.0: with `userId`, the oldest row attributed to that person (the month check-in's personal
- * window starts from the person's own first month, not the household's).
+ * window starts from the person's own first month, not the household's). v1.63.0: "that person's
+ * row" is personRowClause's, so a month in which they hold only a part of someone else's charge
+ * counts, and a charge of theirs whose every part went to someone else does not.
  */
 export function firstDataMonth(userId: number | null = null): string | null {
   const row = getDb()
@@ -227,7 +229,7 @@ export function firstDataMonth(userId: number | null = null): string | null {
     .where(
       userId === null
         ? eq(transactions.isTransfer, false)
-        : and(eq(transactions.isTransfer, false), eq(transactions.attributedUserId, userId)),
+        : and(eq(transactions.isTransfer, false), personRowClause(userId)),
     )
     .get();
   return row?.first ? monthOf(row.first) : null;
@@ -286,8 +288,9 @@ const NOT_INSTALLMENT_PAYMENT: SQL = sql`not exists (select 1 from ${billInstall
  *
  * One grouped read, served by transactions_date_idx: rows after the day by the stored date text
  * (no Date, no zone -- the stored date is already the household's), SPEND_ROW_WHERE, no
- * installment payment, the scope, grouped by (month, effective category, merchant, row) through
- * the split join cells() uses. Then, in memory: drop the rows `excludeRow` names (what the
+ * installment payment, the scope (a personal read counts the PART's person, v1.63.0), grouped by
+ * (month, effective category, merchant, row) through the split join cells() uses. Then, in
+ * memory: drop the rows `excludeRow` names (what the
  * check-in counts as due; it sees the merchant and the row's whole amount, so a bill can claim
  * only the charges that look like it), netSpentCents per (month, category) cell (MUST-4.9), the
  * same rollup categorySeries uses, and each month's total by cashflow's spend rule (income
@@ -320,7 +323,7 @@ export function restOfMonthSpend(input: {
     NOT_INSTALLMENT_PAYMENT,
     SPEND_ARM,
   ];
-  if (input.scope === 'personal') clauses.push(eq(transactions.attributedUserId, input.userId as number));
+  if (input.scope === 'personal') clauses.push(partPersonClause(input.userId as number));
 
   const rows = getDb()
     .select({

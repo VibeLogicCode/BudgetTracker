@@ -7,7 +7,7 @@ import { REVIEW_WHERE, UNCATEGORIZED_WHERE } from '@/lib/categorize/engine';
 import { nowIso } from '@/lib/clock';
 import { addMonths, isMonthKey, monthEnd, monthRange, monthStart } from '@/lib/dates';
 import { netSpentCents, pctOf } from '@/lib/money';
-import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY } from '@/lib/splits';
+import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY, partPersonClause, scopedAmountSql } from '@/lib/splits';
 import { SPEND_ROW_WHERE, SPENDING_OUT_WHERE } from '@/lib/spend-where';
 
 export type BudgetScope = 'household' | 'personal';
@@ -167,8 +167,9 @@ export function clearBudget(input: { scope: BudgetScope; userId: number | null; 
  * Split-aware (spec 2026-08-22, v1.7.0, Task 3): LEFT JOIN transaction_splits and read
  * EFFECTIVE_CATEGORY/EFFECTIVE_AMOUNT (src/lib/splits.ts) instead of the transaction's own
  * columns, so a split transaction is counted once, at its parts, never at its own lump
- * category/amount and never at both. The date/transfer/attribution predicates below
- * deliberately keep reading the PARENT's columns -- a split has no date or owner of its own.
+ * category/amount and never at both. The date and transfer predicates below deliberately keep
+ * reading the PARENT's columns -- a split has no date of its own. The person is the part's
+ * (v1.63.0, partPersonClause): a part set to someone else counts in their personal budget.
  *
  * C-02 fix: `SPEND_ROW_WHERE` (src/lib/spend-where.ts) is both halves of "a row that counts as
  * spend" -- transfers AND loan-principal movements (lending out, being repaid on a loan we
@@ -193,7 +194,7 @@ export function categorySpend(
     sql`${EFFECTIVE_CATEGORY} is not null`,
   ];
   if (opts.scope !== 'household' && opts.attributedUserId !== undefined && opts.attributedUserId !== null) {
-    clauses.push(eq(transactions.attributedUserId, opts.attributedUserId));
+    clauses.push(partPersonClause(opts.attributedUserId));
   }
 
   const rows = getDb()
@@ -268,7 +269,7 @@ export function categoryTransactions(
     sql`${EFFECTIVE_CATEGORY} = ${categoryId}`,
   ];
   if (opts.scope !== 'household' && opts.attributedUserId !== undefined && opts.attributedUserId !== null) {
-    clauses.push(eq(transactions.attributedUserId, opts.attributedUserId));
+    clauses.push(partPersonClause(opts.attributedUserId));
   }
   // v1.13.0 ruling R2, applied here the same way src/lib/transactions.ts:343-348 applies it to
   // listTransactions. Appended AFTER the caller's own attributedUserId clause above, never instead
@@ -278,8 +279,15 @@ export function categoryTransactions(
   // "household"), which is a worse answer than the true, narrower one. ownerScope returns null for
   // a household-visibility viewer or an admin (micro-ruling M1: admin + self is unrestricted), so
   // neither is affected.
+  //
+  // v1.63.0: both clauses read the PART's person (partPersonClause), so a person's card lists the
+  // parts that are theirs, and a self viewer asking for someone else's card meets two different
+  // EFFECTIVE_PERSON values on every joined row: zero rows, as before. A self viewer's
+  // parentAmountCents is their own share of the charge (the whole amount when every part is
+  // theirs, which is the only case the split editor lets them change), never the whole of a charge
+  // shared with someone else.
   const viewerScope = ownerScope(viewer);
-  if (viewerScope !== null) clauses.push(eq(transactions.attributedUserId, viewerScope));
+  if (viewerScope !== null) clauses.push(partPersonClause(viewerScope));
 
   return getDb()
     .select({
@@ -290,7 +298,7 @@ export function categoryTransactions(
       normalizedMerchant: transactions.normalizedMerchant,
       source: transactions.categorizationSource,
       splitId: transactionSplits.id,
-      parentAmountCents: transactions.amountCents,
+      parentAmountCents: viewerScope === null ? transactions.amountCents : scopedAmountSql(viewerScope),
     })
     .from(transactions)
     .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
@@ -337,6 +345,11 @@ export interface UncategorizedSpend {
  * `opts` answers "whose card is this" and `viewer` answers "who is asking"; the viewer's owner
  * scope is appended after the person clause for the reason categoryTransactions gives. One query
  * over `transactions` alone: a row with no split parts needs no split join.
+ *
+ * v1.63.0: the person clauses stay on transactions.attributed_user_id, deliberately. A split part
+ * is the one place a person can differ from the transaction's, and UNCATEGORIZED_WHERE already
+ * leaves every split row out, so the transaction's own person is exact for every row counted here
+ * (the written exemption in tests/ops/split-person.test.ts).
  */
 export function uncategorizedSpend(
   month: string,
@@ -438,7 +451,7 @@ export function categorySpendWithRollupSeries(
     ...SPEND_ROW_WHERE,
     sql`${EFFECTIVE_CATEGORY} is not null`,
   ];
-  if (scope === 'personal' && userId !== null) clauses.push(eq(transactions.attributedUserId, userId));
+  if (scope === 'personal' && userId !== null) clauses.push(partPersonClause(userId));
 
   const rows = getDb()
     .select({
@@ -666,7 +679,7 @@ function spendSeriesByCategory(
     ...SPEND_ROW_WHERE,
     sql`${EFFECTIVE_CATEGORY} is not null`,
   ];
-  if (scope === 'personal' && userId !== null) clauses.push(eq(transactions.attributedUserId, userId));
+  if (scope === 'personal' && userId !== null) clauses.push(partPersonClause(userId));
 
   const rows = getDb()
     .select({

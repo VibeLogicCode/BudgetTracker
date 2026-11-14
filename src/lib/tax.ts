@@ -4,7 +4,7 @@ import { transactions, transactionSplits, users } from '@/db/schema';
 import { categoryWithDescendants, listCategories } from '@/lib/categories';
 import { netSpentCents } from '@/lib/money';
 import { toCsv, UNATTRIBUTED_LABEL } from '@/lib/reports';
-import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY } from '@/lib/splits';
+import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY, EFFECTIVE_PERSON } from '@/lib/splits';
 import { SPEND_ROW_WHERE } from '@/lib/spend-where';
 
 /**
@@ -72,6 +72,9 @@ export function taxYears(): number[] {
  * this app -- a lend-out filed under a tax-relevant category is not deductible spend any more
  * than it is budget spend.
  *
+ * v1.63.0 (plan 2026-11-12, A3): the person axis is EFFECTIVE_PERSON, so a flagged part set to
+ * someone else (or to Household) counts under that person, not under the transaction's.
+ *
  * A category only appears here when its coverage (itself, plus every child when it is itself a
  * parent) actually has at least one matching transaction this year -- this is what makes "a
  * year with no data returns an empty array" true even for a category that IS flagged: an empty
@@ -92,17 +95,17 @@ export function taxYearReport(year: number): TaxYearRow[] {
   const rows = getDb()
     .select({
       categoryId: EFFECTIVE_CATEGORY,
-      userId: transactions.attributedUserId,
+      userId: EFFECTIVE_PERSON,
       total: sql<number>`sum(${EFFECTIVE_AMOUNT})`,
     })
     .from(transactions)
     .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
     .where(and(gte(transactions.date, from), lte(transactions.date, to), ...SPEND_ROW_WHERE))
-    .groupBy(EFFECTIVE_CATEGORY, transactions.attributedUserId)
+    .groupBy(EFFECTIVE_CATEGORY, EFFECTIVE_PERSON)
     .all();
 
   // Signed sums (not yet netted -- netSpentCents is applied once the per-category coverage is
-  // folded together below, never per raw group row), keyed categoryId -> attributedUserId(or
+  // folded together below, never per raw group row), keyed categoryId -> effective person (or
   // null) -> sum.
   const byCategory = new Map<number, Map<number | null, number>>();
   for (const row of rows) {

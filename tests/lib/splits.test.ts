@@ -1,13 +1,26 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, sql, type SQL } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
+import { buildSplitPersonFixture } from '../helpers/split-person-fixture';
 import { transactions, transactionSplits } from '@/db/schema';
+import { bulkSetAttribution } from '@/lib/transactions';
 import { REVIEW_WHERE } from '@/lib/categorize/engine';
 import { listRules } from '@/lib/categorize/rules';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { archiveCategory } from '@/lib/categories';
 import { formatCents } from '@/lib/money';
-import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY, getSplits, setTransactionSplits, splitsForTransactions } from '@/lib/splits';
+import {
+  EFFECTIVE_AMOUNT,
+  EFFECTIVE_CATEGORY,
+  EFFECTIVE_PERSON,
+  getSplits,
+  partPersonClause,
+  personRowClause,
+  scopedAmountSql,
+  setTransactionSplits,
+  soleOwnerClause,
+  splitsForTransactions,
+} from '@/lib/splits';
 import type { Db } from '@/db/client';
 
 let current: TestDb | null = null;
@@ -471,6 +484,180 @@ describe('EFFECTIVE_CATEGORY / EFFECTIVE_AMOUNT (the split-aware LEFT JOIN)', ()
     // as a 4th row or as a value alongside the three real parts -- coalesce always prefers
     // the split row once one exists for that (txn, category) join.
     expect(rows.reduce((sum, r) => sum + r.amountCents, 0)).toBe(-6000);
+  });
+});
+
+/**
+ * v1.63.0 (plan 2026-11-12, Lane A, A2). A part follows its transaction's person unless set (S1);
+ * EFFECTIVE_PERSON is the one rule (S2); the clause builders give the three reader shapes (S3).
+ */
+describe('v1.63.0: a split part person', () => {
+  const stored = (txnId: number) =>
+    current!.sqlite
+      .prepare('select category_id as categoryId, person_set as personSet, attributed_user_id as attributedUserId from transaction_splits where txn_id = ? order by id')
+      .all(txnId) as { categoryId: number; personSet: number; attributedUserId: number | null }[];
+
+  it('writes follow as (0, NULL), household as (1, NULL) and a person as (1, id), and reads them back', () => {
+    const fx = buildSplitPersonFixture();
+    current = fx.t;
+    expect(stored(fx.maple)).toEqual([
+      { categoryId: fx.groceries, personSet: 0, attributedUserId: null },
+      { categoryId: fx.dining, personSet: 1, attributedUserId: fx.sam },
+      { categoryId: fx.supplies, personSet: 1, attributedUserId: null },
+    ]);
+    expect(getSplits(fx.maple).map((part) => [part.personSet, part.attributedUserId])).toEqual([
+      [false, null],
+      [true, fx.sam],
+      [true, null],
+    ]);
+    expect(splitsForTransactions([fx.maple]).get(fx.maple)?.map((part) => part.personSet)).toEqual([false, true, true]);
+  });
+
+  it('an omitted person is follow, so every caller from before 0032 writes what it always did', () => {
+    const fx = buildSplitPersonFixture({ allFollow: true });
+    current = fx.t;
+    expect(stored(fx.maple).map((row) => [row.personSet, row.attributedUserId])).toEqual([
+      [0, null],
+      [0, null],
+      [0, null],
+    ]);
+  });
+
+  it('refuses a person who is not in the household, and writes nothing', () => {
+    const fx = buildSplitPersonFixture();
+    current = fx.t;
+    const before = stored(fx.maple);
+    expect(() =>
+      setTransactionSplits({
+        txnId: fx.maple,
+        parts: [
+          { categoryId: fx.groceries, amountCents: -10000, person: 9999 },
+          { categoryId: fx.dining, amountCents: -5000 },
+        ],
+        userId: fx.alex,
+      }),
+    ).toThrow('That person is not in this household.');
+    expect(stored(fx.maple)).toEqual(before);
+  });
+
+  it('a following part moves with its transaction; a set part stays where it was set', () => {
+    const fx = buildSplitPersonFixture();
+    current = fx.t;
+    bulkSetAttribution([fx.maple], fx.sam);
+    const people = fx.t.db
+      .select({ partId: transactionSplits.id, person: EFFECTIVE_PERSON })
+      .from(transactions)
+      .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
+      .where(eq(transactions.id, fx.maple))
+      .orderBy(transactionSplits.id)
+      .all();
+    expect(people).toEqual([
+      { partId: fx.parts.groceries, person: fx.sam },
+      { partId: fx.parts.dining, person: fx.sam },
+      { partId: fx.parts.supplies, person: null },
+    ]);
+  });
+
+  it('EFFECTIVE_PERSON gives an unsplit row its own person, and each part its own', () => {
+    const fx = buildSplitPersonFixture();
+    current = fx.t;
+    const rows = fx.t.db
+      .select({ txnId: transactions.id, amountCents: EFFECTIVE_AMOUNT, person: EFFECTIVE_PERSON })
+      .from(transactions)
+      .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
+      .orderBy(transactions.id, transactionSplits.id)
+      .all();
+    expect(rows).toEqual([
+      { txnId: fx.maple, amountCents: -8000, person: fx.alex },
+      { txnId: fx.maple, amountCents: -4000, person: fx.sam },
+      { txnId: fx.maple, amountCents: -3000, person: null },
+      { txnId: fx.fuel, amountCents: -6130, person: fx.sam },
+    ]);
+  });
+
+  describe('the clause builders, against the fixture by direct select', () => {
+    /** Alex's own charge whose every part is set to someone else: in nobody's rows as Alex's. */
+    function withAllPartsElsewhere(fx: ReturnType<typeof buildSplitPersonFixture>) {
+      const gift = fx.add({ date: '2026-03-14', description: 'PHARMACY PLUS', amountCents: -2000, categoryId: fx.groceries, person: fx.alex });
+      setTransactionSplits({
+        txnId: gift,
+        parts: [
+          { categoryId: fx.groceries, amountCents: -1500, person: fx.sam },
+          { categoryId: fx.dining, amountCents: -500, person: 'household' },
+        ],
+        userId: fx.alex,
+      });
+      const mine = fx.add({ date: '2026-03-15', description: 'CITY CLINIC', amountCents: -1200, categoryId: fx.groceries, person: fx.alex });
+      return { gift, mine };
+    }
+    const ids = (where: SQL | undefined) =>
+      current!.db
+        .select({ id: transactions.id })
+        .from(transactions)
+        .where(where)
+        .orderBy(transactions.id)
+        .all()
+        .map((row) => row.id);
+
+    it('personRowClause: a row is in a person scope when it is theirs and not wholly given away, or a part is theirs', () => {
+      const fx = buildSplitPersonFixture();
+      current = fx.t;
+      const { gift, mine } = withAllPartsElsewhere(fx);
+      expect(ids(personRowClause(fx.alex))).toEqual([fx.maple, mine]);
+      expect(ids(personRowClause(fx.sam))).toEqual([fx.maple, fx.fuel, gift]);
+      expect(ids(personRowClause('unattributed'))).toEqual([fx.maple, gift]);
+    });
+
+    it('partPersonClause: over the split join, exactly the person own parts and unsplit rows', () => {
+      const fx = buildSplitPersonFixture();
+      current = fx.t;
+      withAllPartsElsewhere(fx);
+      const parts = (person: number | 'unattributed') =>
+        fx.t.db
+          .select({ txnId: transactions.id, partId: transactionSplits.id, amountCents: EFFECTIVE_AMOUNT })
+          .from(transactions)
+          .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
+          .where(partPersonClause(person))
+          .orderBy(transactions.id, transactionSplits.id)
+          .all()
+          .map((row) => row.amountCents);
+      expect(parts(fx.sam)).toEqual([-4000, -6130, -1500]);
+      expect(parts(fx.alex)).toEqual([-8000, -1200]);
+      expect(parts('unattributed')).toEqual([-3000, -500]);
+    });
+
+    it('soleOwnerClause: a whole charge is a person own only when no part is set to anyone else', () => {
+      const fx = buildSplitPersonFixture();
+      current = fx.t;
+      const { mine } = withAllPartsElsewhere(fx);
+      // A part set to Alex himself does not make the charge shared.
+      const toSelf = fx.add({ date: '2026-03-16', description: 'FUEL STOP 12', amountCents: -3000, categoryId: fx.transport, person: fx.alex });
+      setTransactionSplits({
+        txnId: toSelf,
+        parts: [
+          { categoryId: fx.transport, amountCents: -2000, person: fx.alex },
+          { categoryId: fx.groceries, amountCents: -1000 },
+        ],
+        userId: fx.alex,
+      });
+      expect(ids(soleOwnerClause(fx.alex))).toEqual([mine, toSelf]);
+      expect(ids(soleOwnerClause(fx.sam))).toEqual([fx.fuel]);
+    });
+
+    it('scopedAmountSql: an unsplit row whole, a split row the sum of the person own parts', () => {
+      const fx = buildSplitPersonFixture();
+      current = fx.t;
+      const share = (person: number | 'unattributed') =>
+        fx.t.db
+          .select({ id: transactions.id, cents: scopedAmountSql(person) })
+          .from(transactions)
+          .orderBy(transactions.id)
+          .all()
+          .map((row) => row.cents);
+      expect(share(fx.sam)).toEqual([-4000, -6130]);
+      expect(share(fx.alex)).toEqual([-8000, -6130]);
+      expect(share('unattributed')).toEqual([-3000, -6130]);
+    });
   });
 });
 

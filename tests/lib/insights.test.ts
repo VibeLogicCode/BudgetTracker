@@ -172,3 +172,58 @@ describe('householdInsights (ruling R6)', () => {
     });
   });
 });
+
+/**
+ * v1.63.0 (plan 2026-11-12, Lane A, A5). A whole-charge read keeps a charge for a person only when
+ * it is theirs and no part of it is set to anyone else; a shared charge stays in household reads.
+ */
+describe('householdInsights: a charge with a part set to someone else (v1.63.0)', () => {
+  async function shared(opts: { partToSam: boolean }) {
+    current = createTestDb();
+    const alex = (await createUser({ name: 'Alex', username: 'alex', password: 'correct horse 9', role: 'admin' })).id;
+    const sam = (await createUser({ name: 'Sam', username: 'sam', password: 'correct horse 9', role: 'member' })).id;
+    const account = createAccount({ name: 'Joint chequing', type: 'chequing', ownerUserId: alex });
+    const groceries = createCategory({ name: 'Groceries', parentId: null });
+    const dining = createCategory({ name: 'Dining', parentId: null });
+    const spend = (date: string, cents: number, categoryId: number | null) =>
+      createManualTransaction({
+        accountId: account,
+        date,
+        description: 'MAPLE GROCER',
+        amountCents: -cents,
+        categoryId,
+        attributedUserId: alex,
+        userId: alex,
+        actorRole: 'admin',
+      });
+    for (let month = 8; month <= 19; month += 1) {
+      const year = month > 12 ? 2026 : 2025;
+      spend(`${year}-${String(month > 12 ? month - 12 : month).padStart(2, '0')}-05`, 4217, null);
+    }
+    const outlier = spend('2026-08-20', 92000, groceries);
+    setTransactionSplits({
+      txnId: outlier,
+      userId: alex,
+      parts: [
+        { categoryId: groceries, amountCents: -60000 },
+        { categoryId: dining, amountCents: -32000, person: opts.partToSam ? sam : 'follow' },
+      ],
+    });
+    const unusual = (viewer: Viewer) =>
+      householdInsights({ today: TODAY, viewer })
+        .filter((row) => row.kind === 'unusual')
+        .map((row) => row.transactionId);
+    return { alex, sam, outlier, unusual };
+  }
+
+  it('a household read keeps the shared charge whole; Alex own read leaves it out', async () => {
+    const { alex, outlier, unusual } = await shared({ partToSam: true });
+    expect(unusual({ id: alex, role: 'admin', visibility: 'household' })).toEqual([outlier]);
+    expect(unusual({ id: alex, role: 'member', visibility: 'self' })).toEqual([]);
+  });
+
+  it('with every part following, Alex own read is exactly what v1.62.0 gave', async () => {
+    const { alex, outlier, unusual } = await shared({ partToSam: false });
+    expect(unusual({ id: alex, role: 'member', visibility: 'self' })).toEqual([outlier]);
+  });
+});
