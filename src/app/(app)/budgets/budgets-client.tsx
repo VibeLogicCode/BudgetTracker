@@ -534,6 +534,23 @@ function FixRow({
   const fixes = useContext(RowFixContext);
   const tagId = useId();
   const tag = filedTag(row);
+  // v1.63.0: a part of a split charge says what it is a part of; a self viewer never sees the whole.
+  const partOf =
+    row.splitId === null ? null : row.yours !== false && row.parentAmountCents !== row.amountCents ? `Part of ${formatCents(row.parentAmountCents)}` : 'Your part of a split charge';
+  if (row.yours === false) {
+    return (
+      <li className="flex items-center gap-3 border-b border-line px-3 py-2 last:border-b-0">
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="truncate text-sm font-semibold text-ink">{row.merchant}</span>
+          <span className="truncate text-xs text-subtle">{row.date}</span>
+          {partOf ? <span className="text-xs text-muted">{partOf}</span> : null}
+        </span>
+        <span className="money shrink-0 text-sm font-semibold text-ink">
+          <Money cents={row.amountCents} />
+        </span>
+      </li>
+    );
+  }
   return (
     <li className="border-b border-line last:border-b-0">
       <RowMenu
@@ -544,6 +561,7 @@ function FixRow({
               <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <span className="truncate text-sm font-semibold text-ink">{row.merchant}</span>
                 <span className="truncate text-xs text-subtle">{row.date}</span>
+                {partOf ? <span className="truncate text-xs text-muted">{partOf}</span> : null}
                 {tag ? (
                   <Pill tone="neutral" className="mt-0.5 max-w-full self-start">
                     <span id={tagId} className="min-w-0 truncate">
@@ -586,7 +604,7 @@ function FixRow({
         <RowMenuButton
           onSelect={() =>
             fixes.split(
-              { id: row.id, merchant: row.merchant, date: row.date, amountCents: row.parentAmountCents },
+              { id: row.id, merchant: row.merchant, date: row.date, amountCents: row.parentAmountCents, personName: row.personName ?? null },
               splits[row.id] ?? [],
               owner,
             )
@@ -783,7 +801,7 @@ const RowFixContext = createContext<RowFixes>({ recategorize: () => {}, split: (
  * v1.58.0 (design §2): the panel is the card's Sheet, which CardSheetHost holds just inside this host.
  */
 function RowFixHost({ children }: { children: ReactNode }) {
-  const { categories, canAuthorRules, isAdmin } = useContext(BudgetsPageContext);
+  const { categories, canAuthorRules, isAdmin, people } = useContext(BudgetsPageContext);
   const [recat, setRecat] = useState<{ row: RecategorizeRow; owner: RowFixOwner } | null>(null);
   const [splitting, setSplitting] = useState<{ target: SplitTarget; existing: SplitRow[]; owner: RowFixOwner } | null>(null);
   /** Opened once Always ask was chosen and the category posted. */
@@ -844,6 +862,8 @@ function RowFixHost({ children }: { children: ReactNode }) {
           target={splitting.target}
           existing={splitting.existing}
           categories={categories}
+          people={people}
+          parentPersonName={splitting.target.personName ?? null}
           action={(formData) => {
             splitOwner.current = splitting.owner;
             splitAction(formData);
@@ -1908,11 +1928,14 @@ const BudgetsPageContext = createContext<{
   categories: CategoryLike[];
   canAuthorRules: boolean;
   isAdmin: boolean;
+  /** v1.63.0. Who a split part can be set to; null for a self viewer (no household scope). */
+  people: { id: number; name: string }[] | null;
   rowOf: (scope: BudgetScope, userId: number | null, categoryId: number) => BudgetRow | null;
 }>({
   categories: [],
   canAuthorRules: false,
   isAdmin: false,
+  people: null,
   rowOf: () => null,
 });
 
@@ -2088,7 +2111,13 @@ export function BudgetsClient({
     rowIndex.get(`${scope}:${rowUserId ?? 'h'}:${categoryId}`) ?? null;
 
   return (
-    <BudgetsPageContext.Provider value={{ categories, canAuthorRules: household !== null, isAdmin: currentUserIsAdmin, rowOf }}>
+    <BudgetsPageContext.Provider value={{
+      categories,
+      canAuthorRules: household !== null,
+      isAdmin: currentUserIsAdmin,
+      people: household === null ? null : personal.map((person) => ({ id: person.userId, name: person.name })),
+      rowOf,
+    }}>
     <RowFixHost>
     <CardSheetHost>
     <div className="flex flex-col gap-4 sm:gap-5">

@@ -9,6 +9,10 @@ import { buildContext, categoryRuleThatFiled } from '@/lib/categorize/engine';
 import { alwaysAskRuleFor, listRules, type MatchType } from '@/lib/categorize/rules';
 import { isMonthKey } from '@/lib/dates';
 import { splitsForTransactions, type SplitRow } from '@/lib/splits';
+import { effectivePartPerson } from '@/lib/split-person';
+import { ownerScope } from '@/lib/auth/viewer';
+import { transactionOwners } from '@/lib/transactions';
+import { listAttributablePeople } from '@/lib/auth/users';
 
 /** `bounded`: the rule has an amount window, so a new exact rule would not outrank it. */
 export interface FiledByRule { ruleId: number; pattern: string; matchType: MatchType; bounded: boolean }
@@ -17,6 +21,13 @@ export interface CategoryPanelRow extends CategoryTransactionRow {
   filedBy: FiledByRule | null;
   /** An enabled Always ask rule already covers the merchant (alwaysAskRuleFor). */
   alwaysAsked: boolean;
+  /**
+   * v1.63.0. False for a self viewer's row that belongs to someone else (the viewer holds a part of
+   * it): every change to it is refused server-side, so the card offers none. True otherwise.
+   */
+  yours?: boolean;
+  /** v1.63.0. The transaction's own person, for the split editor; null for Household and for a self viewer. */
+  personName?: string | null;
 }
 export interface CategoryPanelResult { rows: CategoryPanelRow[]; splits: Record<number, SplitRow[]> }
 
@@ -73,17 +84,34 @@ export async function categoryTransactionsAction(input: {
   );
   const ctx = buildContext();
   const askRules = listRules('always_ask');
+  // v1.63.0: the transaction's own person decides who may act on a row and whose parts a self viewer may read.
+  const owners = transactionOwners([...new Set(rows.map((row) => row.id))]);
+  const own = ownerScope(user);
+  const names = new Map(listAttributablePeople().map((person) => [person.id, person.name]));
   const panelRows: CategoryPanelRow[] = rows.map((row) => {
+    const owner = owners.get(row.id) ?? null;
+    const yours = own === null || owner === own;
     const rule = categoryRuleThatFiled(
       { normalizedMerchant: row.normalizedMerchant, amountCents: row.parentAmountCents, categoryId: input.categoryId, source: row.source },
       ctx,
     );
     return {
       ...row,
+      // A self viewer never receives the whole of a charge that is someone else's.
+      parentAmountCents: yours ? row.parentAmountCents : row.amountCents,
+      yours,
+      personName: own === null && owner !== null ? (names.get(owner) ?? null) : null,
       filedBy: rule ? { ruleId: rule.id, pattern: rule.pattern, matchType: rule.matchType, bounded: isBounded(rule) } : null,
       alwaysAsked: alwaysAskRuleFor(row.normalizedMerchant, askRules) !== null,
     };
   });
   const splitIds = [...new Set(rows.filter((row) => row.splitId !== null).map((row) => row.id))];
-  return { rows: panelRows, splits: Object.fromEntries(splitsForTransactions(splitIds)) };
+  const byTxn = splitsForTransactions(splitIds);
+  // v1.63.0 (S4): a self viewer receives only the parts that are theirs.
+  if (own !== null) {
+    for (const [id, parts] of byTxn) {
+      byTxn.set(id, parts.filter((part) => effectivePartPerson(part, owners.get(id) ?? null) === own));
+    }
+  }
+  return { rows: panelRows, splits: Object.fromEntries(byTxn) };
 }

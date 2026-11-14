@@ -884,7 +884,7 @@ describe('Split editor is a modal dialog, not a card at the top of the page (ite
     await waitFor(() => expect(saveSplitsAction).toHaveBeenCalled());
     const sent = (saveSplitsAction as ReturnType<typeof vi.fn>).mock.calls.at(-1)![1] as FormData;
     expect(sent.get('txnId')).toBe('1');
-    expect(JSON.parse(String(sent.get('parts')))).toEqual([{ categoryId: 42, amountCents: -500, note: null }]);
+    expect(JSON.parse(String(sent.get('parts')))).toEqual([{ categoryId: 42, amountCents: -500, note: null, person: 'follow' }]);
   });
 });
 
@@ -5409,5 +5409,91 @@ describe('v1.62.0: review by merchant and the Undo bar', () => {
     fireEvent.change(rowScope().getByLabelText('Person for transaction 1'), { target: { value: '7' } });
     await waitFor(() => expect(spy).toHaveBeenCalled());
     expect((spy.mock.calls.at(-1)![1] as FormData).get('bulk')).toBeNull();
+  });
+});
+
+describe('A split part belongs to a person (v1.63.0)', () => {
+  const categories = [
+    { id: 42, name: 'Groceries', parentId: null, isArchived: false, sortOrder: 0 },
+    { id: 7, name: 'Dining', parentId: null, isArchived: false, sortOrder: 1 },
+  ];
+  const sharedParts: SplitRow[] = [
+    { id: 501, txnId: 1, categoryId: 42, amountCents: -11000, note: null, personSet: false, attributedUserId: null },
+    { id: 502, txnId: 1, categoryId: 7, amountCents: -4000, note: null, personSet: true, attributedUserId: 5 },
+  ];
+  const people = [
+    { id: 4, name: 'Alex' },
+    { id: 5, name: 'Sam' },
+  ];
+  const alexRow = { id: 1, amountCents: -15000, attributedUserId: 4, attributedUserName: 'Alex' };
+
+  it('household view: the badge counts people, each part names its person, the picker notes a set part', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow(alexRow)}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={categories}
+        people={people}
+        today="2026-03-09"
+        splits={{ 1: sharedParts }}
+      />,
+    );
+    const scope = rowScope();
+    expect(scope.getByText('Split · 2 parts · 2 people')).toBeTruthy();
+    expect(scope.getByText('Groceries · Dining · Sam')).toBeTruthy();
+    expect(scope.getByText('1 part is set separately')).toBeTruthy();
+  });
+
+  it('a person-filtered row shows the share with the whole charge beside it', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({ ...alexRow, amountCents: -4000, parentAmountCents: -15000, partial: true })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={categories}
+        people={people}
+        today="2026-03-09"
+        splits={{ 1: sharedParts }}
+        scopePersonName="Sam"
+      />,
+    );
+    expect(rowScope().getByText("Sam's part of -$150.00")).toBeTruthy();
+  });
+
+  it('Split opens with the whole amount, not the share', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({ ...alexRow, amountCents: -4000, parentAmountCents: -15000, partial: true })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={categories}
+        people={people}
+        today="2026-03-09"
+        splits={{ 1: sharedParts }}
+        scopePersonName="Sam"
+      />,
+    );
+    openRowMenu('Actions for');
+    fireEvent.click(screen.getByRole('menuitem', { name: /Split/ }));
+    expect(screen.getByRole('dialog', { name: /^Split/ }).textContent).toContain('-$150.00');
+    expect(screen.getByRole('combobox', { name: 'Person for part 2' })).toBeTruthy();
+  });
+
+  it('self view: your part, no checkbox and no menu on a row that is not yours, no person select', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({ ...alexRow, amountCents: -4000, attributedUserName: null, partial: true })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={categories}
+        people={[]}
+        today="2026-03-09"
+        splits={{ 1: [sharedParts[1]] }}
+        selfScoped
+        viewerId={5}
+      />,
+    );
+    const scope = rowScope();
+    expect(scope.getByText('Your part of a split charge')).toBeTruthy();
+    expect(scope.queryByRole('checkbox')).toBeNull();
+    expect(scope.queryByRole('button', { name: /^Actions for/ })).toBeNull();
+    expect(scope.getByText('Split · 1 part')).toBeTruthy();
   });
 });

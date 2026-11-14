@@ -277,3 +277,105 @@ describe('saveSplitsAction', () => {
     expect(result.error).toBe(CROSS_ORIGIN_ERROR);
   });
 });
+
+// v1.63.0 (plan 2026-11-12, D2): a part's person, and who may set it.
+import { buildSplitPersonFixture, type SplitPersonFixture } from '../helpers/split-person-fixture';
+import { NOT_YOURS_ERROR } from '@/lib/auth/viewer';
+import { UNKNOWN_SPLIT_PERSON_ERROR } from '@/lib/splits';
+
+describe('saveSplitsAction: a part belongs to a person (v1.63.0)', () => {
+  function as(f: SplitPersonFixture, id: number, name: string, role: 'admin' | 'member', visibility: 'household' | 'self') {
+    current = f.t;
+    currentUser = { id, name, username: name.toLowerCase(), role, visibility };
+  }
+  const parts = (f: SplitPersonFixture, persons: [unknown, unknown, unknown]) =>
+    JSON.stringify([
+      { categoryId: f.groceries, amountCents: -8000, person: persons[0] },
+      { categoryId: f.dining, amountCents: -4000, person: persons[1] },
+      { categoryId: f.supplies, amountCents: -3000, person: persons[2] },
+    ]);
+
+  it('an admin saves the split and the parts read back as written', async () => {
+    const f = buildSplitPersonFixture({ allFollow: true });
+    as(f, f.alex, 'Alex', 'admin', 'household');
+    const result = await saveSplitsAction({}, formData({ txnId: String(f.maple), parts: parts(f, ['follow', f.sam, 'household']) }));
+    expect(result.error).toBeUndefined();
+    expect(getSplits(f.maple).map((p) => [p.personSet, p.attributedUserId])).toEqual([
+      [false, null],
+      [true, f.sam],
+      [true, null],
+    ]);
+  });
+
+  it('a part with no person posted follows the transaction (a stale client keeps working)', async () => {
+    const f = buildSplitPersonFixture();
+    as(f, f.alex, 'Alex', 'admin', 'household');
+    const result = await saveSplitsAction({}, formData({ txnId: String(f.maple), parts: JSON.stringify([
+      { categoryId: f.groceries, amountCents: -9000 },
+      { categoryId: f.dining, amountCents: -6000 },
+    ]) }));
+    expect(result.error).toBeUndefined();
+    expect(getSplits(f.maple).every((p) => p.personSet === false)).toBe(true);
+  });
+
+  it('a household member assigns a part to Sam', async () => {
+    const f = buildSplitPersonFixture({ allFollow: true });
+    as(f, f.sam, 'Sam', 'member', 'household');
+    const result = await saveSplitsAction({}, formData({ txnId: String(f.maple), parts: parts(f, ['follow', f.sam, 'follow']) }));
+    expect(result.error).toBeUndefined();
+    expect(getSplits(f.maple)[1]).toMatchObject({ personSet: true, attributedUserId: f.sam });
+  });
+
+  it('a self viewer splits his own row with parts following or set to himself', async () => {
+    const f = buildSplitPersonFixture();
+    as(f, f.sam, 'Sam', 'member', 'self');
+    const body = (persons: [unknown, unknown]) =>
+      formData({ txnId: String(f.fuel), parts: JSON.stringify([
+        { categoryId: f.transport, amountCents: -3000, person: persons[0] },
+        { categoryId: f.dining, amountCents: -3130, person: persons[1] },
+      ]) });
+    expect((await saveSplitsAction({}, body(['follow', f.sam]))).error).toBeUndefined();
+    expect(getSplits(f.fuel)[1]).toMatchObject({ personSet: true, attributedUserId: f.sam });
+  });
+
+  it('a self viewer is refused setting a part to someone else', async () => {
+    const f = buildSplitPersonFixture();
+    as(f, f.sam, 'Sam', 'member', 'self');
+    const result = await saveSplitsAction({}, formData({ txnId: String(f.fuel), parts: JSON.stringify([
+      { categoryId: f.transport, amountCents: -3000, person: f.alex },
+      { categoryId: f.dining, amountCents: -3130, person: 'follow' },
+    ]) }));
+    expect(result.error).toBe(NOT_YOURS_ERROR);
+    expect(getSplits(f.fuel)).toHaveLength(0);
+  });
+
+  it('a self viewer is refused editing a row that is not his, even though a part of it is his', async () => {
+    const f = buildSplitPersonFixture();
+    as(f, f.sam, 'Sam', 'member', 'self');
+    const before = getSplits(f.maple);
+    const result = await saveSplitsAction({}, formData({ txnId: String(f.maple), parts: '[]' }));
+    expect(result.error).toBe(NOT_YOURS_ERROR);
+    expect(getSplits(f.maple)).toEqual(before);
+  });
+
+  it('a self viewer is refused editing his own row once a part is set to someone else', async () => {
+    const f = buildSplitPersonFixture();
+    as(f, f.alex, 'Alex', 'admin', 'household');
+    await saveSplitsAction({}, formData({ txnId: String(f.fuel), parts: JSON.stringify([
+      { categoryId: f.transport, amountCents: -3000, person: 'follow' },
+      { categoryId: f.dining, amountCents: -3130, person: f.alex },
+    ]) }));
+    as(f, f.sam, 'Sam', 'member', 'self');
+    const result = await saveSplitsAction({}, formData({ txnId: String(f.fuel), parts: '[]' }));
+    expect(result.error).toBe(NOT_YOURS_ERROR);
+    expect(getSplits(f.fuel)).toHaveLength(2);
+  });
+
+  it('a person who is not in the household is refused and nothing is written', async () => {
+    const f = buildSplitPersonFixture({ allFollow: true });
+    as(f, f.alex, 'Alex', 'admin', 'household');
+    const refused = await saveSplitsAction({}, formData({ txnId: String(f.maple), parts: parts(f, ['follow', 9999, 'follow']) }));
+    expect(refused.error).toBe(UNKNOWN_SPLIT_PERSON_ERROR);
+    expect(getSplits(f.maple).every((p) => p.personSet === false)).toBe(true);
+  });
+});

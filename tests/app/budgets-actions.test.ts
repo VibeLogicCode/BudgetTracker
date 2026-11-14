@@ -743,3 +743,35 @@ describe('D5: the household scope is closed to a self-visibility member on every
     expect((await setSavingsTargetAction({}, formData({ month: '2026-03', mode: 'percent', value: '10' }))).error).toBeUndefined();
   });
 });
+
+// v1.63.0 (plan 2026-11-12, D4): the drill-down lists a person's parts with their share.
+import { buildSplitPersonFixture, type SplitPersonFixture } from '../helpers/split-person-fixture';
+
+describe('categoryTransactionsAction: a split part belongs to a person (v1.63.0)', () => {
+  let f: SplitPersonFixture | null = null;
+  afterEach(() => {
+    f?.t.cleanup();
+    f = null;
+  });
+
+  it("Sam's personal Dining card lists the -40.00 part and its splits map holds only that part", async () => {
+    f = buildSplitPersonFixture();
+    currentUser = { id: f.sam, name: 'Sam', username: 'sam', role: 'member', visibility: 'self' };
+    const result = await categoryTransactionsAction({ scope: 'personal', userId: f.sam, month: '2026-03', categoryId: f.dining });
+    if (!('rows' in result)) throw new Error(result.error);
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]).toMatchObject({ amountCents: -4000, parentAmountCents: -4000, yours: false, splitId: f.parts.dining });
+    expect(Object.keys(result.splits)).toEqual([String(f.maple)]);
+    expect(result.splits[f.maple].map((p) => p.id)).toEqual([f.parts.dining]);
+    expect(JSON.stringify(result)).not.toContain('15000');
+  });
+
+  it("Alex's household card holds all three parts, with the person's name for the editor", async () => {
+    f = buildSplitPersonFixture();
+    currentUser = { id: f.alex, name: 'Alex', username: 'alex', role: 'admin', visibility: 'household' };
+    const result = await categoryTransactionsAction({ scope: 'household', userId: null, month: '2026-03', categoryId: f.dining });
+    if (!('rows' in result)) throw new Error(result.error);
+    expect(result.rows[0]).toMatchObject({ amountCents: -4000, parentAmountCents: -15000, personName: 'Alex' });
+    expect(result.splits[f.maple]).toHaveLength(3);
+  });
+});

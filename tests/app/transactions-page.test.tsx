@@ -1008,3 +1008,53 @@ describe('TransactionsPage: review by merchant, transfer pairs and Undo (v1.62.0
     expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
   });
 });
+
+// v1.63.0 (plan 2026-11-12, D3): what the page hands the client when a split part belongs to a person.
+import { buildSplitPersonFixture, type SplitPersonFixture } from '../helpers/split-person-fixture';
+
+describe('TransactionsPage: a split part belongs to a person (v1.63.0)', () => {
+  let f: SplitPersonFixture | null = null;
+  afterEach(() => {
+    f?.t.cleanup();
+    f = null;
+  });
+
+  async function pageProps(searchParams: Record<string, string> = {}) {
+    const { default: TransactionsPage } = await import('@/app/(app)/transactions/page');
+    const element = (await TransactionsPage({ searchParams: Promise.resolve(searchParams) })) as { props: Record<string, any> };
+    return element.props;
+  }
+
+  it('hands a self viewer his share only: MAPLE GROCER at -40.00 with one part, and no -150.00 anywhere', async () => {
+    f = buildSplitPersonFixture();
+    currentUser.value = { id: f.sam, name: 'Sam', username: 'sam', role: 'member', visibility: 'self' };
+    const props = await pageProps();
+    const maple = props.page.rows.find((row: { id: number }) => row.id === f!.maple);
+    expect(maple).toMatchObject({ amountCents: -4000, partial: true, parentAmountCents: null });
+    expect(props.splits[f.maple]).toHaveLength(1);
+    expect(props.splits[f.maple][0]).toMatchObject({ amountCents: -4000, attributedUserId: f.sam });
+    const serialized = JSON.stringify(props);
+    expect(serialized).not.toContain('-15000');
+    expect(serialized).not.toContain('-8000');
+  });
+
+  it('hands a household viewer all three parts with their people', async () => {
+    f = buildSplitPersonFixture();
+    currentUser.value = { id: f.alex, name: 'Alex', username: 'alex', role: 'admin', visibility: 'household' };
+    const props = await pageProps();
+    expect(props.splits[f.maple].map((p: { personSet: boolean; attributedUserId: number | null }) => [p.personSet, p.attributedUserId])).toEqual([
+      [false, null],
+      [true, f.sam],
+      [true, null],
+    ]);
+  });
+
+  it('a person filter reads the share, with the whole charge and the person it belongs to', async () => {
+    f = buildSplitPersonFixture();
+    currentUser.value = { id: f.alex, name: 'Alex', username: 'alex', role: 'admin', visibility: 'household' };
+    const props = await pageProps({ person: String(f.sam) });
+    const maple = props.page.rows.find((row: { id: number }) => row.id === f!.maple);
+    expect(maple).toMatchObject({ amountCents: -4000, parentAmountCents: -15000, partial: true });
+    expect(props.scopePersonName).toBe('Sam');
+  });
+});

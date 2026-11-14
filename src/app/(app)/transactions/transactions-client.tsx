@@ -52,6 +52,7 @@ import { transactionsHref } from '@/lib/transaction-links';
 import { budgetCardId, budgetsHref } from '@/lib/budgets-links';
 import { monthLabel } from '@/lib/dates';
 import type { SplitRow } from '@/lib/splits';
+import { effectivePartPerson, partPeople } from '@/lib/split-person';
 import type { WaitingSetAsideRow } from '@/lib/import/set-aside';
 import type { TransferPairSuggestions } from '@/lib/transfer-pairs';
 import type {
@@ -510,6 +511,7 @@ export function TransactionsClient({
   viewerId = null,
   isAdmin = false,
   importedRowIds = [],
+  scopePersonName = null,
 }: {
   page: TransactionPage;
   accounts: Option[];
@@ -524,6 +526,8 @@ export function TransactionsClient({
   /** v1.7.0 Task 4: existing splits for the rows on this page, keyed by transaction id. A
    *  row absent from this map (or mapped to an empty array) has never been split. */
   splits?: Record<number, SplitRow[]>;
+  /** v1.63.0. Whose share a person-filtered list shows ("Sam's part of ..."); null with no person filter. */
+  scopePersonName?: string | null;
   /** v1.13.0 ruling R7: quick-add's own default account for this person (users.last_account_id). */
   defaultAccountId?: number | null;
   /** v1.13.0 ruling R2: a self viewer's own id already forces the person filter server-side
@@ -1222,7 +1226,53 @@ export function TransactionsClient({
   // `renaming` uses, so opening a different row's editor always replaces whichever one was
   // already open. The existing parts are read at the call site below; SplitDialog seeds its draft.
   const openSplitEditor = (row: TransactionRow) => {
-    setSplitting({ id: row.id, merchant: row.normalizedMerchant, date: row.date, amountCents: row.amountCents });
+    // v1.63.0: the editor validates against the WHOLE charge, not the share a person filter shows.
+    setSplitting({
+      id: row.id,
+      merchant: row.normalizedMerchant,
+      date: row.date,
+      amountCents: row.parentAmountCents ?? row.amountCents,
+      personName: row.attributedUserName,
+    });
+  };
+
+  /** v1.63.0. A self viewer sees a row through a part of theirs without owning it; every action on it is refused server-side. */
+  const notYours = (row: TransactionRow): boolean => selfScoped && viewerId !== null && row.attributedUserId !== viewerId;
+
+  /** v1.63.0. The name of a part's person, for the row's split summary. */
+  const partPersonName = (row: TransactionRow, personId: number | null): string => {
+    if (personId === null) return 'Household';
+    if (personId === row.attributedUserId && row.attributedUserName) return row.attributedUserName;
+    return people.find((person) => person.id === personId)?.name ?? 'Someone';
+  };
+
+  /**
+   * v1.63.0. The split badge text, a part-by-part line when the parts do not all belong to the
+   * transaction's person, and how many parts are set separately (for the Person picker's hint).
+   */
+  const splitSummary = (row: TransactionRow) => {
+    const parts = splits[row.id] ?? [];
+    const count = parts.length;
+    const distinct = partPeople(parts, row.attributedUserId).length;
+    const badge = `Split · ${count} ${count === 1 ? 'part' : 'parts'}${distinct > 1 ? ` · ${distinct} people` : ''}`;
+    const differs = parts.some((part) => effectivePartPerson(part, row.attributedUserId) !== row.attributedUserId);
+    const lines = differs
+      ? parts.map((part) => {
+          const category = categories.find((c) => c.id === part.categoryId)?.name ?? 'Uncategorized';
+          const person = effectivePartPerson(part, row.attributedUserId);
+          return person === row.attributedUserId ? category : `${category} · ${partPersonName(row, person)}`;
+        })
+      : [];
+    const setSeparately = parts.filter((part) => part.personSet === true).length;
+    return { badge, lines, setSeparately };
+  };
+
+  /** v1.63.0. The muted line under an amount that is only a share of a split charge. */
+  const partialNote = (row: TransactionRow) => {
+    if (row.partial !== true) return null;
+    if (selfScoped) return <span className="block text-2xs text-muted">Your part of a split charge</span>;
+    if (row.parentAmountCents == null || scopePersonName === null) return null;
+    return <span className="block text-2xs text-muted">{`${scopePersonName}'s part of ${formatCents(row.parentAmountCents)}`}</span>;
   };
 
   /**
@@ -1416,6 +1466,7 @@ export function TransactionsClient({
    * new and review-mode-only (inventory #5/#7).
    */
   function rowMenu(row: TransactionRow) {
+    if (notYours(row)) return null;
     // Backlog BX: matchingCounts is populated for every row IN review mode (page.tsx) and empty
     // outside it -- so a MISSING entry (rather than a low one) is exactly "we're outside review
     // mode and never counted", and gets the generic label instead of a real number.
@@ -2282,15 +2333,19 @@ export function TransactionsClient({
               to bulk-select at all. The bulk toolbar just below this component's return is already
               mode-agnostic (nothing in it checks reviewMode), so giving every card a checkbox is
               the one line that was missing to make it usable from review too. */}
-          <label className="flex h-11 w-11 shrink-0 items-center justify-center sm:h-4 sm:w-4">
-            <input
-              type="checkbox"
-              checked={selected.includes(row.id)}
-              onChange={() => toggle(row.id)}
-              aria-label={`Select transaction ${row.id}`}
-              className="accent-accent"
-            />
-          </label>
+          {notYours(row) ? (
+            <span aria-hidden="true" className="h-11 w-11 shrink-0 sm:h-4 sm:w-4" />
+          ) : (
+            <label className="flex h-11 w-11 shrink-0 items-center justify-center sm:h-4 sm:w-4">
+              <input
+                type="checkbox"
+                checked={selected.includes(row.id)}
+                onChange={() => toggle(row.id)}
+                aria-label={`Select transaction ${row.id}`}
+                className="accent-accent"
+              />
+            </label>
+          )}
           {/* Row rhythm (item 4): the circled money-direction glyph. Decorative rhythm, not a
               control, so -- unlike everything else in this function -- it stays card-only exactly
               as it was before this task; the desktop table already says the same thing through
@@ -2354,7 +2409,10 @@ export function TransactionsClient({
               (coordinator fix: the kebab moved here from its own trailing line -- see this
               function's own docblock, point 1). */}
           <span className="flex shrink-0 items-center gap-1">
-            <Money cents={row.amountCents} className="text-base font-semibold" />
+            <span className="text-right">
+              <Money cents={row.amountCents} className="text-base font-semibold" />
+              {partialNote(row)}
+            </span>
             {rowMenu(row)}
           </span>
         </div>
@@ -2393,7 +2451,12 @@ export function TransactionsClient({
             {/* v1.7.0 Task 4: a split transaction has no ONE category -- same rule as the table
                 row, now honoured here too (never checked from this card before this task). */}
             {rowSplits.length > 0 ? (
-              <span className="badge badge--blue w-fit">{`Split · ${rowSplits.length} parts`}</span>
+              <span className="flex flex-col gap-0.5">
+                <span className="badge badge--blue w-fit">{splitSummary(row).badge}</span>
+                {splitSummary(row).lines.length > 0 ? (
+                  <span className="text-2xs text-muted">{splitSummary(row).lines.join(' · ')}</span>
+                ) : null}
+              </span>
             ) : (
               <AutoSaveSelect
                 name="categoryId"
@@ -2426,6 +2489,11 @@ export function TransactionsClient({
                 ariaLabel={`Person for transaction ${row.id}`}
               />
             )}
+            {!selfScoped && splitSummary(row).setSeparately > 0 ? (
+              <span className="text-2xs text-muted">
+                {`${splitSummary(row).setSeparately} ${splitSummary(row).setSeparately === 1 ? 'part is' : 'parts are'} set separately`}
+              </span>
+            ) : null}
           </span>
           {/* The one thing review mode adds beyond this card's shared control set. */}
           {reviewMode ? confirmButton(row) : null}
@@ -3291,6 +3359,8 @@ export function TransactionsClient({
           target={splitting}
           existing={splits[splitting.id] ?? []}
           categories={categories}
+          people={selfScoped ? null : people.map((person) => ({ id: person.id, name: person.name }))}
+          parentPersonName={splitting.personName ?? null}
           action={splitAction}
           onClose={() => setSplitting(null)}
         />
@@ -4064,13 +4134,15 @@ export function TransactionsClient({
                     column header names a checkbox, so `data-label=""` (ruling S2) rather than
                     reprinting something like "Select". */}
                 <td data-label="" className="cell-stack-lead">
-                  <input
-                    type="checkbox"
-                    checked={selected.includes(row.id)}
-                    onChange={() => toggle(row.id)}
-                    aria-label={`Select transaction ${row.id}`}
-                    className="accent-accent"
-                  />
+                  {notYours(row) ? null : (
+                    <input
+                      type="checkbox"
+                      checked={selected.includes(row.id)}
+                      onChange={() => toggle(row.id)}
+                      aria-label={`Select transaction ${row.id}`}
+                      className="accent-accent"
+                    />
+                  )}
                 </td>
                 {/* NOT `cell-stack-hide`: unlike the account name below, a date is not identical
                     down the page and is the thing a person scans for first when hunting a charge,
@@ -4136,13 +4208,19 @@ export function TransactionsClient({
                 </td>
                 <AmountCell className="whitespace-nowrap cell-stack-amount" data-label="Amount">
                   <Money cents={row.amountCents} />
+                  {partialNote(row)}
                 </AmountCell>
                 <td data-label="Category">
                   {/* v1.7.0 Task 4: a split transaction has no ONE category -- its money is
                       divided across its parts -- so it shows a badge instead of a control.
                       Editing the parts happens through Split… in the row menu. */}
                   {(splits[row.id] ?? []).length > 0 ? (
-                    <span className="badge badge--blue">{`Split · ${(splits[row.id] ?? []).length} parts`}</span>
+                    <span className="flex flex-col gap-0.5">
+                      <span className="badge badge--blue w-fit">{splitSummary(row).badge}</span>
+                      {splitSummary(row).lines.length > 0 ? (
+                        <span className="text-2xs text-muted">{splitSummary(row).lines.join(' · ')}</span>
+                      ) : null}
+                    </span>
                   ) : (
                     <AutoSaveSelect
                       name="categoryId"
@@ -4179,6 +4257,11 @@ export function TransactionsClient({
                       ariaLabel={`Person for transaction ${row.id}`}
                     />
                   )}
+                  {!selfScoped && splitSummary(row).setSeparately > 0 ? (
+                    <span className="block text-2xs text-muted">
+                      {`${splitSummary(row).setSeparately} ${splitSummary(row).setSeparately === 1 ? 'part is' : 'parts are'} set separately`}
+                    </span>
+                  ) : null}
                 </td>
                 {/* One menu instead of a link, a button and a select-with-button. The label
                     names the ROW, not the column: "Actions" repeated identically down a table

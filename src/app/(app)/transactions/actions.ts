@@ -7,7 +7,7 @@ import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireUser, type SessionUser } from '@/lib/auth/session';
 import { isSelfScoped, NOT_YOURS_ERROR, ownerScope } from '@/lib/auth/viewer';
 import { getOrCreateCashAccount, transactionAccountError } from '@/lib/accounts';
-import { setLastAccountId } from '@/lib/auth/users';
+import { listAttributablePeople, setLastAccountId } from '@/lib/auth/users';
 import {
   assignTransactionToBill,
   assignTransactionToLoan,
@@ -17,7 +17,8 @@ import {
   type NewLoanResult,
 } from '@/lib/loans';
 import { formatCents, parseAmountToCents } from '@/lib/money';
-import { setTransactionSplits } from '@/lib/splits';
+import { getSplits, setTransactionSplits, UNKNOWN_SPLIT_PERSON_ERROR } from '@/lib/splits';
+import { effectivePartPerson } from '@/lib/split-person';
 import { getWarrantyItem } from '@/lib/warranty/items';
 import { isLoanRepayment, loanAssignedMessage, loanClampWarning, LOAN_DIRECTIONS } from '@/lib/warranty/constants';
 import { isIsoDate } from '@/lib/dates';
@@ -1456,6 +1457,8 @@ const splitPartSchema = z.object({
   categoryId: z.number().int().positive(),
   amountCents: z.number().int(),
   note: z.string().nullable().optional(),
+  /** v1.63.0. Omitted is follow, so a client from before this release keeps working. */
+  person: z.union([z.literal('follow'), z.literal('household'), z.number().int().positive()]).optional(),
 });
 const splitPartsSchema = z.array(splitPartSchema);
 
@@ -1482,8 +1485,23 @@ export async function saveSplitsAction(_prev: ActionState, formData: FormData): 
   const txnIdParsed = z.coerce.number().int().positive().safeParse(formData.get('txnId'));
   if (!txnIdParsed.success) return { error: 'Invalid request.' };
 
+  // v1.63.0 (S4): the transaction's own person decides who may edit it, ahead of anything else. A
+  // self viewer reaches a row through a part of theirs only to READ it (getTransactionShare), never
+  // to write it.
+  const owners = transactionOwners([txnIdParsed.data]);
+  if (!owners.has(txnIdParsed.data)) return { error: 'That transaction no longer exists.' };
+  const owner = owners.get(txnIdParsed.data) ?? null;
+  const scope = ownerScope(user);
+  if (scope !== null && owner !== scope) return { error: NOT_YOURS_ERROR };
+
   const row = getTransaction(txnIdParsed.data, user);
   if (!row) return { error: 'That transaction no longer exists.' };
+
+  const existing = getSplits(txnIdParsed.data);
+  // A self viewer cannot rewrite a split that holds someone else's part: saving would drop it.
+  if (scope !== null && existing.some((part) => effectivePartPerson(part, owner) !== scope)) {
+    return { error: NOT_YOURS_ERROR };
+  }
 
   let rawParts: unknown;
   try {
@@ -1498,7 +1516,22 @@ export async function saveSplitsAction(_prev: ActionState, formData: FormData): 
     categoryId: part.categoryId,
     amountCents: part.amountCents,
     note: part.note ?? null,
+    person: part.person ?? ('follow' as const),
   }));
+
+  if (scope !== null) {
+    if (parts.some((part) => part.person !== 'follow' && part.person !== scope)) return { error: NOT_YOURS_ERROR };
+  } else {
+    // A household viewer may name anyone attributable, or whoever a part already carries (a member
+    // deactivated since keeps their part).
+    const allowed = new Set<number>(listAttributablePeople().map((person) => person.id));
+    for (const part of existing) {
+      if (part.personSet === true && part.attributedUserId != null) allowed.add(part.attributedUserId);
+    }
+    if (parts.some((part) => typeof part.person === 'number' && !allowed.has(part.person))) {
+      return { error: UNKNOWN_SPLIT_PERSON_ERROR };
+    }
+  }
 
   try {
     setTransactionSplits({ txnId: txnIdParsed.data, parts, userId: user.id });

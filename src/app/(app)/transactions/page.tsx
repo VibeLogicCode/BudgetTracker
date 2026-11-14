@@ -13,7 +13,8 @@ import { resolveRenameRule, reviewQueueCount } from '@/lib/categorize/engine';
 // rule renamed this row" at all.
 import { alwaysAskRuleFor, listRecurringMarkRules, listRules, recurringMarkFor } from '@/lib/categorize/rules';
 import type { RecurringMark } from '@/lib/categorize/mark-kinds';
-import { splitsForTransactions } from '@/lib/splits';
+import { splitsForTransactions, type SplitRow } from '@/lib/splits';
+import { effectivePartPerson } from '@/lib/split-person';
 import {
   countMatchingMerchant,
   groupTransactionsByCategory,
@@ -274,7 +275,25 @@ export default async function TransactionsPage({
         return [...byItem.values()];
       })()}
       loanLinks={Object.fromEntries(loanLinksForTransactions(page.rows.map((row) => row.id)))}
-      splits={Object.fromEntries(splitsForTransactions(page.rows.map((row) => row.id)))}
+      // v1.63.0 (S4): a self viewer receives only the parts that are theirs, so another person's
+      // category and amount never reach them. A household viewer receives every part.
+      splits={(() => {
+        const own = ownerScope(viewer);
+        const byTxn = splitsForTransactions(page.rows.map((row) => row.id));
+        if (own === null) return Object.fromEntries(byTxn);
+        const owners = new Map(page.rows.map((row) => [row.id, row.attributedUserId]));
+        const mine: Record<number, SplitRow[]> = {};
+        for (const [id, parts] of byTxn) {
+          mine[id] = parts.filter((part) => effectivePartPerson(part, owners.get(id) ?? null) === own);
+        }
+        return mine;
+      })()}
+      // The person a person-filtered list's shares belong to, for "Sam's part of ...".
+      scopePersonName={
+        typeof filter.attributedUserId === 'number'
+          ? (listAttributablePeople().find((person) => person.id === filter.attributedUserId)?.name ?? null)
+          : null
+      }
     />
   );
 }

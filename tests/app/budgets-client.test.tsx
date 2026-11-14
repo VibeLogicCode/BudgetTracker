@@ -1506,10 +1506,25 @@ describe('BudgetsClient — fixing a row from the card', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit split…' }));
     expect(screen.getByRole('dialog', { name: /^Split Phonemart/ }).textContent).toContain('-$42.17');
     // Scoped to the dialog: the page itself has a native select (a combobox role) of its own.
-    expect(within(screen.getByRole('dialog', { name: /^Split Phonemart/ })).getAllByRole('combobox')).toHaveLength(2);
+    expect(within(screen.getByRole('dialog', { name: /^Split Phonemart/ })).getAllByRole('combobox', { name: /^Category for part/ })).toHaveLength(2);
     fireEvent.click(screen.getByRole('button', { name: 'Save split' }));
     await waitFor(() => expect(saveSplitsAction).toHaveBeenCalled());
     expect((vi.mocked(saveSplitsAction).mock.calls.at(-1)![1] as FormData).get('txnId')).toBe('77');
+  });
+
+  /** v1.63.0 (D1, D4). */
+  it("a split part's editor offers a person per part, and a row that is not yours has no menu", async () => {
+    const parts = [{ id: 501, txnId: 77, categoryId: 1, amountCents: -2000, note: null, personSet: false, attributedUserId: null }, { id: 502, txnId: 77, categoryId: 2, amountCents: -2217, note: null, personSet: true, attributedUserId: null }];
+    await renderWithRows([panelRow({ amountCents: -2000, parentAmountCents: -4217, source: 'manual', splitId: 501, filedBy: null })], { 77: parts });
+    fireEvent.click(await screen.findByRole('button', { name: /^Fix Phonemart/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit split…' }));
+    const dialog = within(screen.getByRole('dialog', { name: /^Split Phonemart/ }));
+    expect((dialog.getByRole('combobox', { name: 'Person for part 2' }) as HTMLSelectElement).value).toBe('household');
+    cleanup();
+    await renderWithRows([panelRow({ amountCents: -2000, parentAmountCents: -2000, source: 'manual', splitId: 501, filedBy: null, yours: false })], { 77: parts });
+    expect(await screen.findByText('Phonemart')).toBeTruthy();
+    expect(screen.getByText('Your part of a split charge')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^Fix Phonemart/ })).toBeNull();
   });
 
   /** v1.57.2: an archived category's card is where these fixes are needed most. */

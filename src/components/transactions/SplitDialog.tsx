@@ -4,11 +4,12 @@ import { useState } from 'react';
 import { CategoryCombobox } from '@/components/CategoryCombobox';
 import { SubmitButton } from '@/components/SubmitButton';
 import { RowDialog } from '@/components/ui/RowDialog';
-import { inputClass } from '@/components/ui/form';
+import { inputClass, selectClass } from '@/components/ui/form';
 import { buttonClass } from '@/components/ui/Button';
 import { categoryOptions, type CategoryLike } from '@/lib/category-order';
 import { formatCents, parseAmountToCents, sumCents } from '@/lib/money';
 import type { SplitRow } from '@/lib/splits';
+import { splitPersonOf, type SplitPerson } from '@/lib/split-person';
 
 /** The transaction a split editor is open on: captured at open time so the dialog names the
  *  row (merchant, date, amount) in its own header once the row is out of view behind the
@@ -18,6 +19,8 @@ export interface SplitTarget {
   merchant: string;
   date: string;
   amountCents: number;
+  /** v1.63.0. The transaction's own person, for the 'Same as the transaction (name)' choice. */
+  personName?: string | null;
 }
 
 /** Draft state for one row of the split editor. Amounts are kept as the raw dollar text the
@@ -27,9 +30,13 @@ interface SplitPartDraft {
   categoryId: string;
   amount: string;
   note: string;
+  /** The person select's value: 'follow', 'household' or a user id as text. */
+  person: string;
 }
 
-const blankSplitPart = (): SplitPartDraft => ({ categoryId: '', amount: '', note: '' });
+const blankSplitPart = (): SplitPartDraft => ({ categoryId: '', amount: '', note: '', person: 'follow' });
+
+const personValue = (person: SplitPerson): string => String(person);
 
 /**
  * The split editor as a modal dialog, shared by the Transactions page and the Budgets card
@@ -47,6 +54,8 @@ export function SplitDialog({
   target,
   existing,
   categories,
+  people = null,
+  parentPersonName = null,
   action,
   onClose,
 }: {
@@ -58,6 +67,13 @@ export function SplitDialog({
    * that part holds an archived one, that one disabled (categoryOptions' assignment kind).
    */
   categories: CategoryLike[];
+  /**
+   * v1.63.0. Who a part can belong to. Null (a self-scoped viewer) shows no person select and every
+   * part follows the transaction.
+   */
+  people?: { id: number; name: string }[] | null;
+  /** The transaction's own person, for the 'Same as the transaction' choice; null reads as Household. */
+  parentPersonName?: string | null;
   /** The caller's useActionState dispatcher for saveSplitsAction; the caller reads the result. */
   action: (formData: FormData) => void;
   onClose: () => void;
@@ -69,6 +85,7 @@ export function SplitDialog({
           categoryId: String(part.categoryId),
           amount: (Math.abs(part.amountCents) / 100).toFixed(2),
           note: part.note ?? '',
+          person: personValue(splitPersonOf(part)),
         }))
       : [blankSplitPart(), blankSplitPart()],
   );
@@ -100,6 +117,7 @@ export function SplitDialog({
     categoryId: Number(part.categoryId),
     amountCents: draftPartCents(part),
     note: part.note.trim() === '' ? null : part.note.trim(),
+    person: people === null ? 'follow' : part.person === 'follow' || part.person === 'household' ? part.person : Number(part.person),
   }));
   const splitRemainderCents = target.amountCents - sumCents(activeSplitParts.map(draftPartCents));
 
@@ -122,6 +140,7 @@ export function SplitDialog({
           <div className="flex flex-wrap gap-2 text-xs font-medium text-muted">
             <span className="w-44">Category</span>
             <span className="w-24">Amount</span>
+            {people === null ? null : <span className="w-44">Person</span>}
             <span className="flex-1">Note</span>
           </div>
           {parts.map((part, index) => (
@@ -146,6 +165,22 @@ export function SplitDialog({
                 aria-label={`Amount for part ${index + 1}`}
                 className={`${inputClass} w-24`}
               />
+              {people === null ? null : (
+                <select
+                  value={part.person}
+                  onChange={(e) => updateSplitPart(index, { person: e.target.value })}
+                  aria-label={`Person for part ${index + 1}`}
+                  className={`${selectClass} w-44`}
+                >
+                  <option value="follow">{`Same as the transaction (${parentPersonName ?? 'Household'})`}</option>
+                  <option value="household">Household</option>
+                  {people.map((person) => (
+                    <option key={person.id} value={String(person.id)}>
+                      {person.name}
+                    </option>
+                  ))}
+                </select>
+              )}
               <input
                 value={part.note}
                 onChange={(e) => updateSplitPart(index, { note: e.target.value })}
