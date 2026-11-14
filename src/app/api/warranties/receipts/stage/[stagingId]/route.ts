@@ -1,5 +1,7 @@
 import { isSameOriginOrHeaderless } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
+import { aiReceiptPoll } from '@/lib/ai/receipt';
+import { enqueueAiJob } from '@/lib/ai/queue';
 import { STAGING_ID_RE, readSidecar, stagedByViewer } from '@/lib/warranty/staging';
 
 export const dynamic = 'force-dynamic';
@@ -46,5 +48,21 @@ export async function GET(request: Request, ctx: { params: Promise<{ stagingId: 
   if (sidecar.status === 'failed') {
     return Response.json({ status: 'failed', error: sidecar.error ?? 'OCR failed.', retryable: sidecar.retryable });
   }
-  return Response.json({ status: 'done', suggestions: sidecar.suggestions ?? {}, lines: sidecar.lines ?? [], candidates: sidecar.candidates ?? { amounts: [], dates: [] } });
+  /*
+    v1.64.0 (D1). The local AI's read of this receipt rides along on the done answer. The first done
+    poll with AI on queues the job (one per staging id: the queue's claimed set, then the AI sidecar,
+    make it idempotent) and says pending; the OCR tree itself never reaches the network.
+  */
+  let ai = aiReceiptPoll(stagingId);
+  if (ai.status === 'not-started') {
+    enqueueAiJob({ kind: 'receipt', stagingId, userId: user.id });
+    ai = { status: 'pending' };
+  }
+  return Response.json({
+    status: 'done',
+    suggestions: sidecar.suggestions ?? {},
+    lines: sidecar.lines ?? [],
+    candidates: sidecar.candidates ?? { amounts: [], dates: [] },
+    ai,
+  });
 }

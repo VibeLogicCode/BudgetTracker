@@ -3,6 +3,8 @@ import type { ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import {
+  POLL_GIVE_UP_MESSAGE,
+  POLL_GIVE_UP_MS,
   POLL_INTERVAL_MS,
   READING_MESSAGE,
   ReceiptUploader,
@@ -841,5 +843,88 @@ describe('summaryOf', () => {
       'Filled date — no total found.',
     );
     expect(summaryOf(found, [])).toBeNull();
+  });
+});
+
+describe('the local AI read after the pattern read (v1.64.0)', () => {
+  const polled = (cb: () => object) =>
+    vi
+      .fn()
+      .mockResolvedValueOnce(stageResponse({ originalFilename: 'bill.pdf', mime: 'application/pdf' }))
+      .mockImplementation(async () => ({ ok: true, json: async () => cb() }) as Response);
+  const base = { status: 'done', suggestions: { vendor: 'MAPLE', priceCents: 1299 }, lines: [], candidates: { amounts: [], dates: [] } };
+  async function pick(container: HTMLElement, fetchMock: ReturnType<typeof vi.fn>) {
+    fireEvent.change(container.querySelector('input[type="file"]')!, {
+      target: { files: [new File(['x'], 'bill.pdf', { type: 'application/pdf' })] },
+    });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+  }
+  const tick = async () => {
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+    await vi.advanceTimersByTimeAsync(0);
+  };
+
+  it('with ai off, applies the pattern read once and stops polling', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const fetchMock = polled(() => ({ ...base, ai: { status: 'off' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const onSuggestions = vi.fn(() => ['vendor' as const]);
+    const { container } = render(<ReceiptUploader onStagedChange={vi.fn()} onSuggestions={onSuggestions} />);
+    await pick(container, fetchMock);
+    await tick();
+    await tick();
+    expect(onSuggestions).toHaveBeenCalledTimes(1);
+    expect(onSuggestions).toHaveBeenCalledWith(base.suggestions);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('pending then done applies the merged AI fields with the ai source and says what it filled', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let n = 0;
+    const fetchMock = polled(() => {
+      n += 1;
+      return n < 3 ? { ...base, ai: { status: 'pending' } } : { ...base, ai: { status: 'done', fields: { vendor: 'Maple Grocer', priceCents: 1300 } } };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const onSuggestions = vi.fn((_f: object, source?: string) => (source === 'ai' ? ['vendor' as const] : ['amount' as const]));
+    const { container } = render(<ReceiptUploader onStagedChange={vi.fn()} onSuggestions={onSuggestions} />);
+    await pick(container, fetchMock);
+    await tick();
+    expect(screen.getByText('Read')).toBeTruthy();
+    expect(onSuggestions).toHaveBeenCalledTimes(1);
+    await tick();
+    await tick();
+    expect(onSuggestions).toHaveBeenCalledTimes(2);
+    // The AI total differs from the pattern's, so only the vendor is passed on.
+    expect(onSuggestions).toHaveBeenLastCalledWith({ vendor: 'Maple Grocer' }, 'ai');
+    expect(screen.getByText('AI filled the vendor.')).toBeTruthy();
+  });
+
+  it('giving up while the AI is pending shows no notice', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const fetchMock = polled(() => ({ ...base, ai: { status: 'pending' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { container } = render(<ReceiptUploader onStagedChange={vi.fn()} onSuggestions={() => ['vendor']} />);
+    await pick(container, fetchMock);
+    await tick();
+    await vi.advanceTimersByTimeAsync(POLL_GIVE_UP_MS + POLL_INTERVAL_MS);
+    expect(screen.queryByText(POLL_GIVE_UP_MESSAGE)).toBeNull();
+    expect(screen.getByText('Read')).toBeTruthy();
+    const calls = fetchMock.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 3);
+    expect(fetchMock.mock.calls.length).toBe(calls);
+  });
+
+  it('a failed AI read stops quietly', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const fetchMock = polled(() => ({ ...base, ai: { status: 'failed' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const onSuggestions = vi.fn(() => ['vendor' as const]);
+    const { container } = render(<ReceiptUploader onStagedChange={vi.fn()} onSuggestions={onSuggestions} />);
+    await pick(container, fetchMock);
+    await tick();
+    expect(onSuggestions).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/AI filled/)).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

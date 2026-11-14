@@ -7,6 +7,7 @@ import { scanReceiptFile, type ScanQuad } from '@/lib/scanner/scan';
 import { SCANNER_AUTO_ACCEPT_MS } from '@/lib/warranty/ocr/onnx/constants';
 import { candidateLabel, type AmountCandidate, type DateCandidate } from '@/lib/warranty/suggest';
 import { isIsoDate } from '@/lib/dates';
+import { mergeAiReceiptFields } from '@/lib/warranty/ai-merge';
 import { formatCents } from '@/lib/money';
 import { buttonClass } from '@/components/ui/Button';
 import { DisclosureSummary } from '@/components/ui/Disclosure';
@@ -38,6 +39,18 @@ export interface StagedFile {
   suggestions?: SuggestedFieldsDto;
   /** What the page actually filled from it, for the tile's one-line summary. */
   filled?: ReadonlyArray<FilledField>;
+  /** v1.64.0: what the local AI's read filled after the pattern read, for a second summary line. */
+  aiFilled?: ReadonlyArray<FilledField>;
+}
+
+/** Where a suggestion came from: the pattern reader, or the optional local AI. */
+export type SuggestionSource = 'receipt' | 'ai';
+
+/** The tile's AI line, or null when the AI filled nothing. */
+export function aiSummaryOf(filled: ReadonlyArray<FilledField>): string | null {
+  const named = FILLED_ORDER.filter((field) => filled.includes(field));
+  if (named.length === 0) return null;
+  return `AI filled ${named.map((field) => `the ${field}`).join(' and ')}.`;
 }
 
 /** A form field a read can fill, as the tile's summary names it. */
@@ -133,6 +146,8 @@ interface PollResponse {
   candidates?: { amounts: AmountCandidate[]; dates: DateCandidate[] };
   error?: string;
   retryable?: boolean;
+  /** v1.64.0: the local AI's read, when the server has it on. Absent from an older server. */
+  ai?: { status: 'off' | 'pending' | 'failed' } | { status: 'done'; fields: SuggestedFieldsDto };
 }
 
 const READ_FAILED_MESSAGE = 'That receipt could not be read.';
@@ -322,7 +337,7 @@ export function ReceiptUploader({
 }: {
   onStagedChange: (files: StagedFile[]) => void;
   /** Fills the page from a read, and returns the fields it actually filled. Nothing returned is nothing filled. */
-  onSuggestions?: (suggestions: SuggestedFieldsDto) => ReadonlyArray<FilledField> | void;
+  onSuggestions?: (suggestions: SuggestedFieldsDto, source?: SuggestionSource) => ReadonlyArray<FilledField> | void;
   /** A tapped amount chip (spec §2.3). No handler, no amount chips: a chip that does nothing is worse than none. */
   onPickAmount?: (cents: number) => void;
   /** A tapped date chip, as an ISO date. No handler, no date chips. */
@@ -450,6 +465,9 @@ export function ReceiptUploader({
         setFiles((prev) => prev.map((file) => (file.stagingId === stagingId ? { ...file, ocr: 'failed', error, retryable } : file)));
         settle();
       };
+      // v1.64.0: the pattern read, once applied. The tile is then done and polling goes on only to
+      // wait for the local AI, quietly.
+      let pattern: SuggestedFieldsDto | null = null;
       const timer = setInterval(async () => {
         // IMPORTANT 2: a rejected fetch/json (offline, transient network blip) must not
         // become an unhandled promise rejection, and must not kill this interval either --
@@ -460,7 +478,8 @@ export function ReceiptUploader({
           if (Date.now() - startedAt > POLL_GIVE_UP_MS) {
             originalsRef.current.delete(stagingId);
             settle();
-            setNotice(POLL_GIVE_UP_MESSAGE);
+            // Once the pattern read is in, only the AI's extra read is missing: no notice.
+            if (pattern === null) setNotice(POLL_GIVE_UP_MESSAGE);
             return;
           }
           const response = await fetch(`/api/warranties/receipts/stage/${stagingId}`, { signal });
@@ -473,6 +492,17 @@ export function ReceiptUploader({
           }
           const body = (await response.json()) as PollResponse;
           if (signal.aborted || body.status === 'pending') return;
+          if (pattern !== null) {
+            // Waiting for the AI only; the pattern read is already on the tile.
+            if (body.status !== 'done' || body.ai?.status === 'pending') return;
+            if (body.ai?.status === 'done') {
+              const merged = mergeAiReceiptFields(pattern, body.ai.fields);
+              const aiFilled = (onSuggestions ? onSuggestions(merged, 'ai') : undefined) ?? [];
+              setFiles((prev) => prev.map((file) => (file.stagingId === stagingId ? { ...file, aiFilled } : file)));
+            }
+            settle();
+            return;
+          }
           if (body.status === 'failed') {
             fail(body.error ?? READ_FAILED_MESSAGE, body.retryable);
             return;
@@ -495,6 +525,13 @@ export function ReceiptUploader({
                 : file,
             ),
           );
+          if (body.ai?.status === 'pending') {
+            // Keep the timer and the give-up bound; stop saying "Reading…" now the tile is done.
+            pattern = body.suggestions ?? {};
+            readingRef.current.delete(stagingId);
+            clearReadingNotice();
+            return;
+          }
           settle();
         } catch {
           // Transient failure this tick only -- leave the timer running.
@@ -723,6 +760,7 @@ export function ReceiptUploader({
                 </span>
                 {file.ocr === 'failed' && file.error ? <p className="text-muted">{file.error}</p> : null}
                 {summary !== null ? <p className="text-muted">{summary}</p> : null}
+                {file.aiFilled && aiSummaryOf(file.aiFilled) !== null ? <p className="text-muted">{aiSummaryOf(file.aiFilled)}</p> : null}
                 {file.ocr === 'done' ? (
                   <ReadFigures
                     candidates={file.candidates ?? { amounts: [], dates: [] }}

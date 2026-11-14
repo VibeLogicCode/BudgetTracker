@@ -4,7 +4,7 @@ import { useActionState, useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link';
 import { FormError } from '@/components/FormError';
 import { SubmitButton } from '@/components/SubmitButton';
-import { ReceiptUploader, type FilledField, type StagedFile, type SuggestedFieldsDto } from '@/components/warranty/ReceiptUploader';
+import { ReceiptUploader, type FilledField, type StagedFile, type SuggestedFieldsDto, type SuggestionSource } from '@/components/warranty/ReceiptUploader';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Field, inputClass, labelClass, selectClass, textareaClass } from '@/components/ui/form';
@@ -110,7 +110,8 @@ export function NewWarrantyClient({
     vendor: prefill.vendor !== undefined,
     price: prefill.priceCents !== undefined,
   });
-  const [suggested, setSuggested] = useState({
+  // v1.64.0: a flag says where the guess came from, so the hint can say "AI suggestion".
+  const [suggested, setSuggested] = useState<Record<'purchaseDate' | 'vendor' | 'price' | 'amountDue' | 'dueDate', false | SuggestionSource>>({
     purchaseDate: false,
     vendor: false,
     price: false,
@@ -220,7 +221,7 @@ export function NewWarrantyClient({
 
     Returns the fields it filled, for the receipt tile's summary.
   */
-  const routeAmountAndDueDate = useCallback((fields: SuggestedFieldsDto, kind: ItemKind, chosen = false): FilledField[] => {
+  const routeAmountAndDueDate = useCallback((fields: SuggestedFieldsDto, kind: ItemKind, chosen = false, source: SuggestionSource = 'receipt'): FilledField[] => {
     const filled: FilledField[] = [];
     if (fields.priceCents !== undefined) {
       const amount = centsToInput(fields.priceCents);
@@ -228,7 +229,7 @@ export function NewWarrantyClient({
         if (chosen || !billTouchedRef.current.amountDue) {
           setAmountDue(amount);
           if (chosen) setBillTouched((t) => ({ ...t, amountDue: true }));
-          setSuggested((s) => ({ ...s, amountDue: !chosen }));
+          setSuggested((s) => ({ ...s, amountDue: !chosen && source }));
           filled.push('amount');
         }
       } else if (billingAllowedForKind(kind)) {
@@ -240,14 +241,14 @@ export function NewWarrantyClient({
       } else if (chosen || !touchedRef.current.price) {
         setPrice(amount);
         if (chosen) setTouched((t) => ({ ...t, price: true }));
-        setSuggested((s) => ({ ...s, price: !chosen }));
+        setSuggested((s) => ({ ...s, price: !chosen && source }));
         filled.push('amount');
       }
     }
     if (fields.dueDate && installmentsAllowedForKind(kind) && (chosen || !billTouchedRef.current.dueDate)) {
       setDueDate(fields.dueDate);
       if (chosen) setBillTouched((t) => ({ ...t, dueDate: true }));
-      setSuggested((s) => ({ ...s, dueDate: !chosen }));
+      setSuggested((s) => ({ ...s, dueDate: !chosen && source }));
       filled.push('date');
     }
     return filled;
@@ -255,22 +256,23 @@ export function NewWarrantyClient({
 
   /** MUST-10.3: only EMPTY, untouched fields are filled from a suggestion. Returns the ones it filled. */
   const onSuggestions = useCallback(
-    (fields: SuggestedFieldsDto): FilledField[] => {
-      lastSuggestionRef.current = fields;
+    (fields: SuggestedFieldsDto, source: SuggestionSource = 'receipt'): FilledField[] => {
+      // An AI read adds to the pattern read, so a type picked later still routes both.
+      lastSuggestionRef.current = source === 'ai' ? { ...lastSuggestionRef.current, ...fields } : fields;
       const current = touchedRef.current;
       const filled = new Set<FilledField>();
       if (fields.purchaseDate && !current.purchaseDate) {
         setPurchaseDate(fields.purchaseDate);
         if (!balanceDateTouchedRef.current) setBalanceAsOfDate(fields.purchaseDate);
-        setSuggested((s) => ({ ...s, purchaseDate: true }));
+        setSuggested((s) => ({ ...s, purchaseDate: source }));
         filled.add('date');
       }
       if (fields.vendor && !current.vendor) {
         setVendor(fields.vendor);
-        setSuggested((s) => ({ ...s, vendor: true }));
+        setSuggested((s) => ({ ...s, vendor: source }));
         filled.add('vendor');
       }
-      for (const field of routeAmountAndDueDate(fields, kindRef.current)) filled.add(field);
+      for (const field of routeAmountAndDueDate(fields, kindRef.current, false, source)) filled.add(field);
       return [...filled];
     },
     [routeAmountAndDueDate],
@@ -336,10 +338,10 @@ export function NewWarrantyClient({
    * tell which values a machine guessed, so each guessed field says so and offers the
    * one-click way out.
    */
-  const suggestedNote = (flag: boolean, clear: () => void) =>
+  const suggestedNote = (flag: false | SuggestionSource, clear: () => void) =>
     flag ? (
       <span className="flex items-center gap-1.5 text-xs text-warning">
-        suggested from receipt
+        {flag === 'ai' ? 'AI suggestion' : 'suggested from receipt'}
         <button type="button" onClick={clear} className={buttonClass('ghost', 'sm', 'px-1.5 text-xs underline')}>
           clear
         </button>

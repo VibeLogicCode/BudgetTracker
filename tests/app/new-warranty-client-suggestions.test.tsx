@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup, fireEvent, act } from '@testing-library/react';
+import { render, cleanup, fireEvent, act, screen } from '@testing-library/react';
 import type { FilledField, SuggestedFieldsDto } from '@/components/warranty/ReceiptUploader';
 import { NewWarrantyClient } from '@/app/(app)/warranties/new/new-warranty-client';
 
@@ -10,7 +10,7 @@ import { NewWarrantyClient } from '@/app/(app)/warranties/new/new-warranty-clien
   polling, none of which this file is about.
 */
 const uploader = vi.hoisted(() => ({
-  onSuggestions: undefined as ((fields: SuggestedFieldsDto) => ReadonlyArray<FilledField> | void) | undefined,
+  onSuggestions: undefined as ((fields: SuggestedFieldsDto, source?: 'receipt' | 'ai') => ReadonlyArray<FilledField> | void) | undefined,
   onPickAmount: undefined as ((cents: number) => void) | undefined,
   onPickDate: undefined as ((iso: string) => void) | undefined,
   dateField: undefined as 'purchaseDate' | 'dueDate' | undefined,
@@ -19,7 +19,7 @@ const uploader = vi.hoisted(() => ({
 
 vi.mock('@/components/warranty/ReceiptUploader', () => ({
   ReceiptUploader: (props: {
-    onSuggestions?: (fields: SuggestedFieldsDto) => ReadonlyArray<FilledField> | void;
+    onSuggestions?: (fields: SuggestedFieldsDto, source?: 'receipt' | 'ai') => ReadonlyArray<FilledField> | void;
     onPickAmount?: (cents: number) => void;
     onPickDate?: (iso: string) => void;
     dateField?: 'purchaseDate' | 'dueDate';
@@ -281,5 +281,51 @@ describe('a tapped chip', () => {
     expect(form.field('dueDate')!.value).toBe('2026-11-24');
     // A chosen figure is not marked as a guess.
     expect(form.marks()).toBe(0);
+  });
+});
+
+/** v1.64.0 (D4): the local AI's fields are suggestions too, and never beat what was typed. */
+describe('an AI read on the new-item form', () => {
+  const suggestAi = (fields: SuggestedFieldsDto) => {
+    act(() => {
+      uploader.onSuggestions!(fields, 'ai');
+    });
+  };
+
+  it('fills an empty vendor and replaces an untouched pattern vendor', () => {
+    const form = renderForm();
+    suggest({ vendor: 'MAPLE' });
+    expect(form.field('vendor')!.value).toBe('MAPLE');
+    suggestAi({ vendor: 'Maple Grocer' });
+    expect(form.field('vendor')!.value).toBe('Maple Grocer');
+    expect(form.marks()).toBe(0);
+  });
+
+  it('shows the hint AI suggestion on a field the AI filled', () => {
+    const form = renderForm();
+    form.pick('1');
+    suggestAi({ vendor: 'Maple Grocer' });
+    expect(screen.getAllByText('AI suggestion').length).toBe(1);
+    expect(form.field('vendor')!.value).toBe('Maple Grocer');
+  });
+
+  it('never changes a typed vendor', () => {
+    const form = renderForm();
+    form.type('vendor', 'Corner Hardware');
+    suggestAi({ vendor: 'Maple Grocer' });
+    expect(form.field('vendor')!.value).toBe('Corner Hardware');
+  });
+
+  it('fills an empty price from an AI total and keeps a pattern total', () => {
+    const form = renderForm();
+    form.pick('1');
+    suggestAi({ priceCents: 1300 });
+    expect(form.field('price')!.value).toBe('13.00');
+    cleanup();
+    const other = renderForm();
+    other.pick('1');
+    suggest({ priceCents: 1299 });
+    suggestAi({});
+    expect(other.field('price')!.value).toBe('12.99');
   });
 });

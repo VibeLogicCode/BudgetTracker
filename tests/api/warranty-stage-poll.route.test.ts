@@ -1,11 +1,15 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createSeededTestDb, insertTestUser, type TestDb } from '../helpers/db';
 import { GET } from '@/app/api/warranties/receipts/stage/[stagingId]/route';
 import { SESSION_COOKIE_NAME, createSession } from '@/lib/auth/session';
-import { writeSidecar, writeStagedReceipt } from '@/lib/warranty/staging';
+import { writeAiSidecar, writeSidecar, writeStagedReceipt } from '@/lib/warranty/staging';
+import { saveLocalAiConfig } from '@/lib/ai/config';
+
+const enqueue = vi.hoisted(() => vi.fn(() => true));
+vi.mock('@/lib/ai/queue', () => ({ enqueueAiJob: enqueue }));
 
 let current: TestDb | null = null;
 let dataDir: string;
@@ -16,6 +20,7 @@ let userId: number;
 const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(64)]);
 
 beforeEach(() => {
+  enqueue.mockClear();
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-poll-route-'));
   originalDataDir = process.env.DATA_DIR;
   process.env.DATA_DIR = dataDir;
@@ -68,6 +73,7 @@ describe('GET /api/warranties/receipts/stage/[stagingId]', () => {
       suggestions: { vendor: 'HOME DEPOT', priceCents: 4200, purchaseDate: '2026-08-16' },
       lines: [],
       candidates: { amounts: [], dates: [] },
+      ai: { status: 'off' },
     });
     expect(body).not.toHaveProperty('text');
     expect(JSON.stringify(body)).not.toContain('RAW OCR TEXT');
@@ -93,6 +99,7 @@ describe('GET /api/warranties/receipts/stage/[stagingId]', () => {
       suggestions: { vendor: 'RIVERSIDE WATER', priceCents: 31244, dueDate: '2026-11-24' },
       lines,
       candidates,
+      ai: { status: 'off' },
     });
     expect(body).not.toHaveProperty('text');
   });
@@ -151,6 +158,7 @@ describe('D7: a staged upload belongs to whoever staged it', () => {
       suggestions: { vendor: 'HOME DEPOT', priceCents: 4200 },
       lines: [],
       candidates: { amounts: [], dates: [] },
+      ai: { status: 'off' },
     });
   });
 
@@ -160,5 +168,70 @@ describe('D7: a staged upload belongs to whoever staged it', () => {
     fs.rmSync(path.join(dataDir, 'tmp', `${stagingId}.owner.json`), { force: true });
     writeSidecar(stagingId, { status: 'done', suggestions: { vendor: 'HOME DEPOT' } });
     expect(await (await poll(stagingId)).json()).toEqual({ status: 'pending' });
+  });
+});
+
+describe('the local AI read on a done poll (v1.64.0)', () => {
+  const AT = new Date('2026-03-09T15:00:00.000Z');
+  function doneReceipt(): string {
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', userId);
+    writeSidecar(stagingId, { status: 'done', text: 'MAPLE GROCER', suggestions: { vendor: 'MAPLE' } });
+    return stagingId;
+  }
+  function aiOn() {
+    saveLocalAiConfig({ baseUrl: 'http://192.168.1.50:11434', model: 'test-model:1b', userId, at: AT });
+  }
+
+  it('with AI off, says off and queues nothing', async () => {
+    const body = await (await poll(doneReceipt())).json();
+    expect(body.ai).toEqual({ status: 'off' });
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('with AI on, the first done poll queues once and says pending; the second does not queue again', async () => {
+    aiOn();
+    const stagingId = doneReceipt();
+    const first = await (await poll(stagingId)).json();
+    expect(first.status).toBe('done');
+    expect(first.ai).toEqual({ status: 'pending' });
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(enqueue).toHaveBeenCalledWith({ kind: 'receipt', stagingId, userId });
+    // A second poll asks the queue again (its claimed set refuses a repeat) and still says pending.
+    expect((await (await poll(stagingId)).json()).ai).toEqual({ status: 'pending' });
+  });
+
+  it('an AI sidecar gives done with its fields and queues nothing', async () => {
+    aiOn();
+    const stagingId = doneReceipt();
+    writeAiSidecar(stagingId, { status: 'done', fields: { vendor: 'Maple Grocer', priceCents: 1299 }, at: AT.toISOString() });
+    const body = await (await poll(stagingId)).json();
+    expect(body.ai).toEqual({ status: 'done', fields: { vendor: 'Maple Grocer', priceCents: 1299 } });
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('a failed AI sidecar says failed', async () => {
+    aiOn();
+    const stagingId = doneReceipt();
+    writeAiSidecar(stagingId, { status: 'failed', at: AT.toISOString() });
+    expect((await (await poll(stagingId)).json()).ai).toEqual({ status: 'failed' });
+  });
+
+  it('while the helper is backing off, says off', async () => {
+    aiOn();
+    const { recordLocalAiFailure } = await import('@/lib/ai/config');
+    recordLocalAiFailure(new Date(), 'Could not reach the helper.');
+    const body = await (await poll(doneReceipt())).json();
+    expect(body.ai).toEqual({ status: 'off' });
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("another member's id still gets a bare pending and queues nothing", async () => {
+    aiOn();
+    const other = insertTestUser(current!.db, { username: 'bob' });
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', other);
+    writeSidecar(stagingId, { status: 'done', text: 'x', suggestions: {} });
+    const body = await (await poll(stagingId)).json();
+    expect(body).toEqual({ status: 'pending' });
+    expect(enqueue).not.toHaveBeenCalled();
   });
 });
