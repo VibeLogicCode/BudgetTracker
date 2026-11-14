@@ -179,3 +179,61 @@ describe('transactionsHref — the figure the link is under', () => {
     expect({ from: filter.from, to: filter.to }).toEqual({ from: null, to: null });
   });
 });
+
+/**
+ * v1.64.0 (plan 2026-11-12, E2). Ask in words: the filter a question was read as. Each part is
+ * one parameter the page already reads, an absent part adds none, and the range and person ride
+ * on the scope like every other target.
+ */
+describe('transactionsHref — the filter target (Ask in words)', () => {
+  const query = (href: string) => Object.fromEntries(new URLSearchParams(href.slice(href.indexOf('?') + 1)));
+
+  it('a category is that category and its children', () => {
+    const href = transactionsHref({ range: null, person: null }, { kind: 'filter', categoryId: 12 });
+    expect(query(href)).toEqual({ category: '12' });
+    expect({ categoryId: filterFromHref(href).categoryId, exact: filterFromHref(href).categoryExact }).toEqual({ categoryId: 12, exact: false });
+  });
+
+  it('an account', () => {
+    const href = transactionsHref({ range: null, person: null }, { kind: 'filter', accountId: 3 });
+    expect(query(href)).toEqual({ account: '3' });
+    expect(filterFromHref(href).accountId).toBe(3);
+  });
+
+  it('search text, trimmed', () => {
+    const href = transactionsHref({ range: null, person: null }, { kind: 'filter', search: '  maple grocer ' });
+    expect(query(href)).toEqual({ q: 'maple grocer' });
+    expect(filterFromHref(href).search).toBe('maple grocer');
+  });
+
+  it('spending only', () => {
+    const href = transactionsHref({ range: null, person: null }, { kind: 'filter', spendingOnly: true });
+    expect(query(href)).toEqual({ spending: '1' });
+    expect(filterFromHref(href).spendingOnly).toBe(true);
+  });
+
+  it('the range and the person come from the scope', () => {
+    const href = transactionsHref({ range: { from: '2025-01-01', to: '2025-12-31' }, person: 4 }, { kind: 'filter', spendingOnly: true });
+    expect(query(href)).toEqual({ range: 'custom', from: '2025-01-01', to: '2025-12-31', person: '4', spending: '1' });
+    const filter = filterFromHref(href);
+    expect({ from: filter.from, to: filter.to, person: filter.attributedUserId }).toEqual({ from: '2025-01-01', to: '2025-12-31', person: 4 });
+  });
+
+  it('every part at once, and an absent or empty part adds no parameter', () => {
+    const href = transactionsHref(
+      { range: { from: '2026-03-01', to: '2026-03-31' }, person: null },
+      { kind: 'filter', categoryId: 12, accountId: 3, search: 'vet', spendingOnly: true },
+    );
+    expect(href).toBe('/transactions?range=custom&from=2026-03-01&to=2026-03-31&category=12&account=3&q=vet&spending=1');
+    const bare = transactionsHref(
+      { range: { from: '2026-03-01', to: '2026-03-31' }, person: null },
+      { kind: 'filter', categoryId: null, accountId: null, search: '   ', spendingOnly: false },
+    );
+    expect(query(bare)).toEqual({ range: 'custom', from: '2026-03-01', to: '2026-03-31' });
+  });
+
+  it("a self viewer's own scope still wins over a person the link names", () => {
+    const href = transactionsHref({ range: null, person: 4 }, { kind: 'filter', categoryId: 12 });
+    expect(filterFromHref(href, 9).attributedUserId).toBe(9);
+  });
+});

@@ -108,7 +108,15 @@ export type TransactionsLinkTarget =
    * Spec 2026-10-21 (fix from Budgets) §2.6: one transaction. The id is the whole question, like an
    * import: callers pass { range: null, person: null }. See TransactionFilter.id.
    */
-  | { kind: 'transaction'; transactionId: number; via?: 'budgets' };
+  | { kind: 'transaction'; transactionId: number; via?: 'budgets' }
+  /**
+   * v1.64.0 (plan 2026-11-12, E2): Ask in words. The filter a typed question was read as, built
+   * from parts the Transactions page already reads (`category`, `account`, `q`, `spending`), with
+   * the range and person carried by the scope like every other target. Each part is optional and
+   * an absent one adds no parameter, so the link never claims a filter the question did not name.
+   * A category here means the category and its children, as a chip does.
+   */
+  | { kind: 'filter'; categoryId?: number | null; accountId?: number | null; search?: string | null; spendingOnly?: boolean };
 
 /** rangeParams() for a preset (one definition of "a range as query parameters", MUST-11.8), and
  *  the same `custom` shape it produces for a card carrying its own two dates. */
@@ -154,6 +162,12 @@ export function transactionsHref(scope: TransactionsLinkScope, target: Transacti
   } else if (target.kind === 'transaction') {
     params.set('id', String(target.transactionId));
     if (target.via) params.set('via', target.via);
+  } else if (target.kind === 'filter') {
+    if (typeof target.categoryId === 'number') params.set('category', String(target.categoryId));
+    if (typeof target.accountId === 'number') params.set('account', String(target.accountId));
+    const search = target.search?.trim() ?? '';
+    if (search.length > 0) params.set('q', search);
+    if (target.spendingOnly) params.set('spending', '1');
   } else {
     params.set('import', String(target.importId));
   }
