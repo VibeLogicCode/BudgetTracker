@@ -384,7 +384,7 @@ describe('a reversal leaves the ledger settled', () => {
     const itemId = interestBearing();
     const txnId = ctx.spend('HONDA FIN SVC', -45_000, { date: '2026-07-15' });
     assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId, at: new Date('2026-07-15T12:00:00.000Z') });
-    expect(loanLedger(itemId, TODAY)!.rows.some((row) => row.kind === 'interest')).toBe(true);
+    expect(loanLedger(itemId, TODAY, HOUSEHOLD_VIEWER)!.rows.some((row) => row.kind === 'interest')).toBe(true);
 
     expect(
       deleteTransaction({
@@ -395,7 +395,7 @@ describe('a reversal leaves the ledger settled', () => {
       }),
     ).toEqual({ ok: true });
 
-    const ledger = loanLedger(itemId, TODAY)!;
+    const ledger = loanLedger(itemId, TODAY, HOUSEHOLD_VIEWER)!;
     expect(ledger.dueAdjustment).toBeNull();
     expect(ctx.balanceOf(itemId)).toBe(ledger.postedBalanceCents);
   });
@@ -420,7 +420,7 @@ describe('a reversal leaves the ledger settled', () => {
     assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId, at: new Date('2026-07-15T12:00:00.000Z') });
 
     expect(unassignTransactionFromLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId, at: new Date(TODAY + 'T12:00:00.000Z') })).toBe(true);
-    const ledger = loanLedger(itemId, TODAY)!;
+    const ledger = loanLedger(itemId, TODAY, HOUSEHOLD_VIEWER)!;
     expect(ledger.dueAdjustment).toBeNull();
     expect(ctx.balanceOf(itemId)).toBe(ledger.postedBalanceCents);
   });

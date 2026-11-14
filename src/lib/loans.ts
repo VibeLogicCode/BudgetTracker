@@ -12,7 +12,7 @@ import { addDaysIso, addMonths, addMonthsClamped, daysBetweenIso, monthEnd, mont
 import type { RateVerdict } from '@/lib/notify/ratelimit';
 import { meanCents } from '@/lib/predict/stats';
 import { soleOwnerClause } from '@/lib/splits';
-import { displayNameOf, getTransaction } from '@/lib/transactions';
+import { displayNameOf, getTransaction, OTHER_ACCOUNT_LABEL } from '@/lib/transactions';
 import {
   isLoanRepayment,
   loanSignedDelta,
@@ -325,7 +325,11 @@ export interface LoanLink {
   source: 'rule' | 'manual';
 }
 
-/** One query, served by loan_payments_txn_idx. Used by the transactions page. */
+/**
+ * One query, served by loan_payments_txn_idx. Every link, whoever's loan it is: an internal read for
+ * the write paths (an assign's over-link warning, an unassign's amount, the bulk undo, the engine).
+ * A page shows visibleLoanLinksForTransactions instead.
+ */
 export function loanLinksForTransactions(txnIds: number[]): Map<number, LoanLink[]> {
   const out = new Map<number, LoanLink[]>();
   if (txnIds.length === 0) return out;
@@ -351,6 +355,33 @@ export function loanLinksForTransactions(txnIds: number[]): Map<number, LoanLink
       list.push(row);
       out.set(row.txnId, list);
     }
+  }
+  return out;
+}
+
+/**
+ * v1.64.1. The links a viewer may see on these transactions: only those whose loan resolves for them
+ * through getWarrantyItem (every loan for a household viewer, their own for a self viewer). A
+ * household loan rule can link a self viewer's own payment to someone else's loan; that link's
+ * loan name, amounts and Unassign control are not theirs to see. A transaction left with no visible
+ * link is absent from the map.
+ */
+export function visibleLoanLinksForTransactions(txnIds: number[], viewer: Viewer): Map<number, LoanLink[]> {
+  const all = loanLinksForTransactions(txnIds);
+  if (ownerScope(viewer) === null) return all;
+  const resolves = new Map<number, boolean>();
+  const visible = (itemId: number): boolean => {
+    let seen = resolves.get(itemId);
+    if (seen === undefined) {
+      seen = getWarrantyItem(itemId, viewer) !== null;
+      resolves.set(itemId, seen);
+    }
+    return seen;
+  };
+  const out = new Map<number, LoanLink[]>();
+  for (const [txnId, links] of all) {
+    const kept = links.filter((link) => visible(link.itemId));
+    if (kept.length > 0) out.set(txnId, kept);
   }
   return out;
 }
@@ -1172,8 +1203,13 @@ function ledgerFacts(
   };
 }
 
-/** The ledger for a loan, or null when it has no basis or has never been anchored. */
-export function loanLedger(itemId: number, today: string): Ledger | null {
+/**
+ * The ledger for a loan, or null when it has no basis or has never been anchored -- or (v1.64.1)
+ * when the viewer cannot open the loan (getWarrantyItem). Its payment rows read `Payment`, never the
+ * bank text of the transaction behind them.
+ */
+export function loanLedger(itemId: number, today: string, viewer: Viewer): Ledger | null {
+  if (getWarrantyItem(itemId, viewer) === null) return null;
   const facts = ledgerFacts(getDb(), itemId, today);
   return facts === null ? null : buildLedger(facts.input);
 }
@@ -2606,8 +2642,14 @@ export interface ItemLedger {
  * applied_cents itself (loan_payments.applied_cents is stored UNSIGNED in both directions; see
  * link()'s docblock far above). A bill installment carries no direction of its own -- there is no
  * balance for it to move -- so its appliedCents always adds in unsigned, "total paid".
+ *
+ * v1.64.1: `viewer` decides what a row says about the transaction behind it. For a self viewer, a
+ * payment on a transaction that is not theirs (a household loan rule can link one to their loan)
+ * reads `Payment` with no account name -- the date and the amounts stay, because it is their loan.
  */
-export function itemLedger(itemId: number): ItemLedger {
+export const OTHER_PAYMENT_LABEL = 'Payment';
+
+export function itemLedger(itemId: number, viewer: Viewer): ItemLedger {
   const db = getDb();
   const item = db
     .select({ kind: warrantyItemTypes.kind, direction: warrantyItems.loanDirection })
@@ -2627,6 +2669,7 @@ export function itemLedger(itemId: number): ItemLedger {
       date: transactions.date,
       rawDescription: transactions.rawDescription,
       displayDescription: transactions.displayDescription,
+      ownerId: transactions.attributedUserId,
       accountName: accounts.name,
       amountCents: transactions.amountCents,
       appliedCents: loanPayments.appliedCents,
@@ -2644,6 +2687,7 @@ export function itemLedger(itemId: number): ItemLedger {
       date: transactions.date,
       rawDescription: transactions.rawDescription,
       displayDescription: transactions.displayDescription,
+      ownerId: transactions.attributedUserId,
       accountName: accounts.name,
       amountCents: transactions.amountCents,
       appliedCents: billInstallments.amountCents,
@@ -2654,12 +2698,19 @@ export function itemLedger(itemId: number): ItemLedger {
     .where(and(eq(billInstallments.itemId, itemId), isNotNull(billInstallments.paidTxnId)))
     .all();
 
+  // A self viewer reads the transaction's own text and account only on a transaction of theirs.
+  const own = ownerScope(viewer);
+  const theirs = (row: { ownerId: number | null }) => own === null || row.ownerId === own;
+  const merchantOf = (row: { ownerId: number | null; rawDescription: string; displayDescription: string | null }) =>
+    theirs(row) ? displayNameOf(row) : OTHER_PAYMENT_LABEL;
+  const accountOf = (row: { ownerId: number | null; accountName: string }) => (theirs(row) ? row.accountName : OTHER_ACCOUNT_LABEL);
+
   const rows: ItemLedgerRow[] = [
     ...loanRows.map((row): ItemLedgerRow => ({
       txnId: row.txnId,
       date: row.date,
-      merchant: displayNameOf(row),
-      accountName: row.accountName,
+      merchant: merchantOf(row),
+      accountName: accountOf(row),
       amountCents: row.amountCents,
       appliedCents: row.appliedCents,
       source: row.source,
@@ -2671,8 +2722,8 @@ export function itemLedger(itemId: number): ItemLedger {
       // for the identical column.
       txnId: row.txnId as number,
       date: row.date,
-      merchant: displayNameOf(row),
-      accountName: row.accountName,
+      merchant: merchantOf(row),
+      accountName: accountOf(row),
       amountCents: row.amountCents,
       appliedCents: row.appliedCents,
       source: 'installment',
@@ -3243,7 +3294,7 @@ export function listLoanSummaries(today: string, viewer: Viewer): LoanSummary[] 
         basis: row.interestRateBasis,
         principalCents: row.principalCents,
       },
-      loanLedger(row.itemId, today),
+      loanLedger(row.itemId, today, viewer),
     );
     return {
       ...toLoanRow(row, today),
@@ -3276,8 +3327,7 @@ export function loanDetail(itemId: number, today: string, viewer: Viewer): LoanD
   const row = loanBaseRows(viewer, itemId)[0];
   if (row === undefined) return null;
 
-  const facts = ledgerFacts(getDb(), itemId, today);
-  const ledger = facts === null ? null : buildLedger(facts.input);
+  const ledger = loanLedger(itemId, today, viewer);
   const derived = interestFor(
     itemId,
     today,

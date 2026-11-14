@@ -85,7 +85,7 @@ export default async function WarrantyDetailPage({ params }: { params: Promise<{
       // Item 6 (v1.16.0 plan): the Linked transactions card. Fetched for every kind -- the
       // card itself renders unconditionally, so the client cannot decide "is there anything
       // to show" without the rows any more than the Installments card above could.
-      ledger={itemLedger(item.id)}
+      ledger={itemLedger(item.id, viewer)}
     />
   );
 }

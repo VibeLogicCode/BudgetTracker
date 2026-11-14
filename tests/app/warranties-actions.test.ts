@@ -1264,11 +1264,11 @@ describe('unlinkLedgerTransactionAction (item 6, v1.16.0 plan)', () => {
     const accountId = insertTestAccount(current!.db, { name: 'Chequing' });
     const txnId = seedTransaction(accountId);
     expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId }).linked).toBe(true);
-    expect(itemLedger(itemId).rows).toHaveLength(1);
+    expect(itemLedger(itemId, HOUSEHOLD_VIEWER).rows).toHaveLength(1);
 
     const result = await unlinkLedgerTransactionAction({}, formData({ itemId: String(itemId), txnId: String(txnId) }));
     expect(result.message).toBeTruthy();
-    expect(itemLedger(itemId).rows).toHaveLength(0);
+    expect(itemLedger(itemId, HOUSEHOLD_VIEWER).rows).toHaveLength(0);
   });
 
   it('unlinks a paid bill installment (the un-mark path) and the ledger row disappears', async () => {
@@ -1293,11 +1293,11 @@ describe('unlinkLedgerTransactionAction (item 6, v1.16.0 plan)', () => {
       sql`insert into bill_installments (item_id, due_date, amount_cents, paid_at, paid_txn_id, created_at)
           values (${billItemId}, '2026-06-15', 120000, ${nowIso()}, ${txnId}, ${nowIso()}) returning id`,
     ).id;
-    expect(itemLedger(billItemId).rows).toMatchObject([{ txnId, source: 'installment' }]);
+    expect(itemLedger(billItemId, HOUSEHOLD_VIEWER).rows).toMatchObject([{ txnId, source: 'installment' }]);
 
     const result = await unlinkLedgerTransactionAction({}, formData({ itemId: String(billItemId), txnId: String(txnId) }));
     expect(result.message).toBeTruthy();
-    expect(itemLedger(billItemId).rows).toHaveLength(0);
+    expect(itemLedger(billItemId, HOUSEHOLD_VIEWER).rows).toHaveLength(0);
     const row = current!.db.get<{ paidAt: string | null; paidTxnId: number | null }>(
       sql`select paid_at as paidAt, paid_txn_id as paidTxnId from bill_installments where id = ${installmentId}`,
     );

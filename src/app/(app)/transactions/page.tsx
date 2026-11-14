@@ -3,7 +3,7 @@ import { isSelfScoped, ownerScope } from '@/lib/auth/viewer';
 import { acceptsTransactions, listAccounts } from '@/lib/accounts';
 import { listCategories } from '@/lib/categories';
 import { findUserById, listAttributablePeople } from '@/lib/auth/users';
-import { loanLinksForTransactions, listLoanRows } from '@/lib/loans';
+import { listLoanRows, visibleLoanLinksForTransactions } from '@/lib/loans';
 import { resolveRenameRule, reviewQueueCount } from '@/lib/categorize/engine';
 // v1.26.0 Lane 1 (reported: a row showed a merchant name with no way to see the original
 // entry, so it was impossible to tell whether the rename was right). Read-only imports: listRules for the rule set, and (v1.31.0 R-09)
@@ -305,10 +305,11 @@ export default async function TransactionsPage({
       })()}
       // v1.63.0 fix round: a self viewer gets no loan link on a row they reach only through a part
       // of theirs -- its loan's name, amount and what it moved are the transaction's person's.
+      // v1.64.1: and on their own rows, only links to a loan they can open.
       loanLinks={(() => {
         const own = ownerScope(viewer);
         const ids = page.rows.filter((row) => own === null || row.attributedUserId === own).map((row) => row.id);
-        return Object.fromEntries(loanLinksForTransactions(ids));
+        return Object.fromEntries(visibleLoanLinksForTransactions(ids, viewer));
       })()}
       // v1.63.0 (S4): a self viewer receives only the parts that are theirs, so another person's
       // category and amount never reach them. A household viewer receives every part.

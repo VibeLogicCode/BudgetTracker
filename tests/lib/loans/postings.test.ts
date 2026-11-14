@@ -172,7 +172,7 @@ describe('postDueInterest: payments (P4)', () => {
     expect(rows[1]!.period_end).toBe('2026-09-01');
     expect(rows[1]!.interest_cents).toBeLessThan(rows[0]!.interest_cents);
 
-    const ledger = loanLedger(itemId, '2026-09-18')!;
+    const ledger = loanLedger(itemId, '2026-09-18', HOUSEHOLD_VIEWER)!;
     expect(ledger.dueAdjustment).toBeNull();
     expect(c.balanceOf(itemId)).toBe(ledger.postedBalanceCents);
   });
@@ -307,7 +307,7 @@ describe('postAllDueInterest (P3)', () => {
 describe('loanLedger', () => {
   it('returns the engine’s view for a loan with a basis and an anchor', () => {
     const itemId = seedInterestLoan();
-    const ledger = loanLedger(itemId, '2026-09-18')!;
+    const ledger = loanLedger(itemId, '2026-09-18', HOUSEHOLD_VIEWER)!;
     expect(ledger.owingCents).toBe(1_021_537);
     expect(ledger.rows[0]!.kind).toBe('opening');
     expect(ledger.rows.at(-1)!.kind).toBe('accrued');
@@ -316,7 +316,7 @@ describe('loanLedger', () => {
   it('is null without a basis', () => {
     c = setupLoanTest();
     const { itemId } = c.seedLoan({ balanceCents: 1_000_000 });
-    expect(loanLedger(itemId, '2026-09-18')).toBeNull();
+    expect(loanLedger(itemId, '2026-09-18', HOUSEHOLD_VIEWER)).toBeNull();
   });
 });
 
@@ -390,7 +390,7 @@ describe('the wall selects by the period a row belongs to (A1)', () => {
     // Everything that began before 2026-09-01 is inside the statement now: both postings and the
     // correction that fixed one of them. Nothing may be re-applied on top.
     expect(c.balanceOf(itemId)).toBe(510_000);
-    const ledger = loanLedger(itemId, '2026-09-18')!;
+    const ledger = loanLedger(itemId, '2026-09-18', HOUSEHOLD_VIEWER)!;
     expect(ledger.postedBalanceCents).toBe(510_000);
     expect(ledger.rows.filter((row) => row.kind === 'adjustment')).toHaveLength(0);
   });

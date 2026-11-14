@@ -172,9 +172,19 @@ describe('listLoanSummaries: interest once a basis is set', () => {
       )
       .run(itemId);
     const summary = loanOf(itemId, '2026-03-31').interest!;
-    const ledger = loanLedger(itemId, '2026-03-31')!;
+    const ledger = loanLedger(itemId, '2026-03-31', HOUSEHOLD_VIEWER)!;
     expect(summary.owingCents).toBe(ledger.owingCents);
     expect(summary.yearAtCurrentBalanceCents).toBe(ledger.yearAtThisBalanceCents);
+  });
+
+  it('is read only by a viewer who can open the loan (v1.64.1)', () => {
+    const { itemId, user } = mortgage();
+    setBasis(itemId, 'apr_monthly');
+    setLoanAnchor({ itemId, asOfDate: '2026-01-01', balanceCents: 30_000_000, source: 'reconcile', actorUserId: user });
+    const other = insertTestUser(current!.db, { name: 'Sam', username: 'sam', role: 'member' });
+    expect(loanLedger(itemId, '2026-03-31', { id: other, role: 'member', visibility: 'self' })).toBeNull();
+    expect(loanLedger(itemId, '2026-03-31', { id: other, role: 'member', visibility: 'household' })).not.toBeNull();
+    expect(loanLedger(itemId, '2026-03-31', { id: user, role: 'member', visibility: 'self' })).not.toBeNull();
   });
 });
 
@@ -257,7 +267,7 @@ describe('listLoanSummaries: the interest figures come off the ledger', () => {
 
   it('counts interest charged and unpaid once, not twice', () => {
     const { itemId } = charged();
-    const ledger = loanLedger(itemId, '2026-04-20')!;
+    const ledger = loanLedger(itemId, '2026-04-20', HOUSEHOLD_VIEWER)!;
     // Periods have closed since the statement and nothing has been paid against any of them.
     expect(ledger.interestPostedSinceStartCents).toBeGreaterThan(0);
     expect(loanOf(itemId, '2026-04-20').interest!.potCents).toBe(
@@ -279,7 +289,7 @@ describe('listLoanSummaries: the interest figures come off the ledger', () => {
     });
     assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId });
 
-    const ledger = loanLedger(itemId, '2026-04-20')!;
+    const ledger = loanLedger(itemId, '2026-04-20', HOUSEHOLD_VIEWER)!;
     const interest = loanOf(itemId, '2026-04-20').interest!;
     expect(ledger.interestPaidToDateCents).toBeGreaterThan(0);
     expect(interest.interestSinceAnchorCents).toBe(ledger.interestPostedSinceStartCents + ledger.accruedCents);
@@ -311,7 +321,7 @@ describe('a rate that is missing, not zero', () => {
 
   it('shows no ledger rather than claiming nothing is owed in interest', () => {
     const { itemId } = rateless();
-    expect(loanLedger(itemId, '2026-04-20')).toBeNull();
+    expect(loanLedger(itemId, '2026-04-20', HOUSEHOLD_VIEWER)).toBeNull();
     expect(loanOf(itemId, '2026-04-20').interest).toBeNull();
   });
 
@@ -327,6 +337,6 @@ describe('a rate that is missing, not zero', () => {
   it('still computes for a rate that really is zero', () => {
     const { itemId } = rateless();
     current!.sqlite.prepare('update warranty_items set interest_rate_bps = 0 where id = ?').run(itemId);
-    expect(loanLedger(itemId, '2026-04-20')).not.toBeNull();
+    expect(loanLedger(itemId, '2026-04-20', HOUSEHOLD_VIEWER)).not.toBeNull();
   });
 });

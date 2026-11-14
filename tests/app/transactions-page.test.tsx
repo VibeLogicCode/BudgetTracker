@@ -1102,6 +1102,34 @@ describe('TransactionsPage: loan links on a row reached through a part (v1.63.0 
     const alex = await pageProps();
     expect(alex.loanLinks[f.maple]).toMatchObject([{ itemName: 'Boat loan', amountCents: 15000 }]);
   });
+
+  it("a self viewer's own payment linked by a household loan rule to another person's loan carries no link, loan name or amount (v1.64.1)", async () => {
+    f = buildSplitPersonFixture();
+    const { backfillLoanRule, saveLoanRule } = await import('@/lib/loans');
+    const now = '2026-03-01T00:00:00.000Z';
+    const type = f.t.db.get<{ id: number }>(sql`
+      insert into warranty_item_types (name, is_subscription, kind, created_at) values ('Car loans', 0, 'loan', ${now}) returning id`);
+    const loan = f.t.db.get<{ id: number }>(sql`
+      insert into warranty_items (name, purchase_date, is_lifetime, owner_user_id, type_id, loan_direction, principal_cents,
+        current_balance_cents, created_at, updated_at)
+      values ('Alex car loan', '2025-01-15', 0, ${f.alex}, ${type.id}, 'owed', 1000000, 1000000, ${now}, ${now})
+      returning id`).id;
+    const rule = saveLoanRule({ itemId: loan, merchantContains: 'FUEL STOP', accountId: null, enabled: true, at: new Date('2026-03-20T12:00:00.000Z') });
+    expect(backfillLoanRule(rule, { at: new Date('2026-03-20T12:00:00.000Z') }).linked).toBe(1);
+    const applied = f.t.db.get<{ applied: number }>(sql`select applied_cents as applied from loan_payments where txn_id = ${f.fuel}`).applied;
+
+    currentUser.value = { id: f.sam, name: 'Sam', username: 'sam', role: 'member', visibility: 'self' };
+    const sam = await pageProps();
+    expect(sam.page.rows.find((row: { id: number }) => row.id === f!.fuel)).toMatchObject({ attributedUserId: f.sam, displayDescription: null });
+    expect(sam.loanLinks[f.fuel]).toBeUndefined();
+    expect(JSON.stringify(sam)).not.toContain('Alex car loan');
+    expect(JSON.stringify(sam.loanLinks)).not.toContain(String(applied));
+
+    // A household viewer still sees it.
+    currentUser.value = { id: f.alex, name: 'Alex', username: 'alex', role: 'admin', visibility: 'household' };
+    const alex = await pageProps();
+    expect(alex.loanLinks[f.fuel]).toMatchObject([{ itemId: loan, itemName: 'Alex car loan', appliedCents: applied }]);
+  });
 });
 
 /**

@@ -123,6 +123,14 @@ const REQUIRE_VIEWER: { file: string; fn: string }[] = [
   { file: 'src/lib/month-checkin.ts', fn: 'monthCheckIn' },
   { file: 'src/lib/setup-suggestions.ts', fn: 'setupSuggestions' },
   { file: 'src/lib/recurring.ts', fn: 'recurringThisMonth' },
+  /*
+    v1.64.1. The loan links the transactions page shows (only those whose loan the viewer can open),
+    a loan's ledger, and the item page's linked payments (a self viewer reads `Payment` on a
+    transaction that is not theirs).
+  */
+  { file: 'src/lib/loans.ts', fn: 'visibleLoanLinksForTransactions' },
+  { file: 'src/lib/loans.ts', fn: 'loanLedger' },
+  { file: 'src/lib/loans.ts', fn: 'itemLedger' },
 ];
 
 /** Exempt, WITH the reason. Nothing is exempt without one. */
@@ -156,6 +164,11 @@ const EXEMPT: { file: string; fn: string; why: string }[] = [
     file: 'src/lib/transactions.ts',
     fn: 'merchantsOfTransactions',
     why: 'not a read-model: returns the distinct normalized merchants of rows its only callers (setRecurringMarkAction and bulkRecurringMarkAction, spec 2026-10-05) have already passed through allTransactionsVisible -- the same shape and the same pre-check as transactionOwners above.',
+  },
+  {
+    file: 'src/lib/loans.ts',
+    fn: 'loanLinksForTransactions',
+    why: "internal read, v1.64.1: every link whoever's loan it is, for the write paths only -- assignToLoanAction's over-link warning (a sum, no name), unassignFromLoanAction's amount after it has checked getWarrantyItem(itemId, viewer), the bulk undo's snapshot and restore, and the categorize engine. The transactions page shows visibleLoanLinksForTransactions instead.",
   },
   {
     file: 'src/lib/budgets.ts',
@@ -301,9 +314,10 @@ describe('ruling R2: every read-model helper takes a viewer', () => {
   // v1.60.0: raised from 44 to 45, the actual count with cashflowForRange added.
   // v1.63.0: raised from 45 to 53, the actual count with the eight tax and year-end reads added.
   // v1.64.0: raised from 53 to 55, the actual count with aiSuggestionsForMerchants and askChoices added.
-  // v1.64.1: raised from 55 to 61, the actual count with the six reads above added.
-  it('the named lists cannot shrink below 61 entries', () => {
-    expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(61);
+  // v1.64.1: raised from 55 to 65, the actual count with the nine reads above and the
+  // loanLinksForTransactions exemption added.
+  it('the named lists cannot shrink below 65 entries', () => {
+    expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(65);
   });
 });
 

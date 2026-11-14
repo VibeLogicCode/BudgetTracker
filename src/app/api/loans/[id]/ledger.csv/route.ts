@@ -35,7 +35,7 @@ export async function GET(
   const item = getWarrantyItem(itemId, viewer);
   if (item === null) return new Response('Not Found', { status: 404 });
 
-  const ledger = loanLedger(itemId, todayIso());
+  const ledger = loanLedger(itemId, todayIso(), viewer);
   if (ledger === null) return new Response('Not Found', { status: 404 });
 
   const dollars = (cents: number | null): string => (cents === null ? '' : (cents / 100).toFixed(2));

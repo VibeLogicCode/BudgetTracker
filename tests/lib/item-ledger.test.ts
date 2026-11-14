@@ -1,8 +1,9 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
-import { assignTransactionToLoan, itemLedger, unlinkItemTransaction } from '@/lib/loans';
+import { assignTransactionToLoan, itemLedger, OTHER_PAYMENT_LABEL, unlinkItemTransaction } from '@/lib/loans';
 import { nowIso } from '@/lib/clock';
 import { setupLoanTest, type LoanTestContext } from './loans/fixtures';
+import { buildSplitPersonFixture, type SplitPersonFixture } from '../helpers/split-person-fixture';
 import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
 /**
@@ -43,7 +44,7 @@ describe('itemLedger: an item with no links', () => {
   it('returns an empty ledger', () => {
     ctx = setupLoanTest();
     const { itemId } = ctx.seedLoan();
-    expect(itemLedger(itemId)).toEqual({ rows: [], totalAppliedCents: 0 });
+    expect(itemLedger(itemId, HOUSEHOLD_VIEWER)).toEqual({ rows: [], totalAppliedCents: 0 });
   });
 });
 
@@ -63,7 +64,7 @@ describe('itemLedger: loan_payments rows, newest first, direction-correct total'
     ctx.t.db.run(sql`insert into loan_payments (txn_id, item_id, amount_cents, applied_cents, source, created_at)
                       values (${newer}, ${itemId}, 30000, 30000, 'manual', ${nowIso()})`);
 
-    const ledger = itemLedger(itemId);
+    const ledger = itemLedger(itemId, HOUSEHOLD_VIEWER);
     expect(ledger.rows.map((row) => row.txnId)).toEqual([newer, older]);
     expect(ledger.rows[0]).toMatchObject({
       date: '2026-07-15',
@@ -90,7 +91,7 @@ describe('itemLedger: loan_payments rows, newest first, direction-correct total'
 
     // Ruling P4: loanSignedDelta/isLoanRepayment own the flip -- the advance (money out) is
     // +50,000 in the loan's own frame, the repayment (money in) is -20,000.
-    expect(itemLedger(itemId).totalAppliedCents).toBe(30_000);
+    expect(itemLedger(itemId, HOUSEHOLD_VIEWER).totalAppliedCents).toBe(30_000);
   });
 });
 
@@ -102,7 +103,7 @@ describe('itemLedger: paid bill_installments rows, unsigned total', () => {
       amountCents: 120_000,
       txnDate: '2026-06-14',
     });
-    const ledger = itemLedger(billItemId);
+    const ledger = itemLedger(billItemId, HOUSEHOLD_VIEWER);
     expect(ledger.rows).toMatchObject([{ txnId, source: 'installment', appliedCents: 120_000 }]);
     expect(ledger.totalAppliedCents).toBe(120_000);
   });
@@ -121,7 +122,7 @@ describe('itemLedger: paid bill_installments rows, unsigned total', () => {
     ctx.t.db.run(sql`insert into bill_installments (item_id, due_date, amount_cents, paid_at, paid_txn_id, created_at)
                       values (${itemId}, '2026-05-15', 60000, ${nowIso()}, ${billTxn}, ${nowIso()})`);
 
-    const ledger = itemLedger(itemId);
+    const ledger = itemLedger(itemId, HOUSEHOLD_VIEWER);
     // The bill row (2026-05-20) is newer than the loan row (2026-05-01), so it sorts first.
     expect(ledger.rows.map((row) => ({ txnId: row.txnId, source: row.source }))).toEqual([
       { txnId: billTxn, source: 'installment' },
@@ -142,7 +143,7 @@ describe('unlinkItemTransaction', () => {
     expect(ctx.balanceOf(itemId)).toBe(150_000);
 
     expect(unlinkItemTransaction(itemId, txnId, HOUSEHOLD_VIEWER)).toBe(true);
-    expect(itemLedger(itemId).rows).toHaveLength(0);
+    expect(itemLedger(itemId, HOUSEHOLD_VIEWER).rows).toHaveLength(0);
     expect(ctx.balanceOf(itemId)).toBe(200_000);
   });
 
@@ -155,7 +156,7 @@ describe('unlinkItemTransaction', () => {
     });
 
     expect(unlinkItemTransaction(billItemId, txnId, HOUSEHOLD_VIEWER)).toBe(true);
-    expect(itemLedger(billItemId).rows).toHaveLength(0);
+    expect(itemLedger(billItemId, HOUSEHOLD_VIEWER).rows).toHaveLength(0);
     const row = ctx.t.db.get<{ paidAt: string | null; paidTxnId: number | null; unlinkedAt: string | null }>(
       sql`select paid_at as paidAt, paid_txn_id as paidTxnId, unlinked_at as unlinkedAt from bill_installments where id = ${installmentId}`,
     );
@@ -170,5 +171,49 @@ describe('unlinkItemTransaction', () => {
     const { itemId } = ctx.seedLoan();
     const txnId = ctx.spend('GROCERY STORE', -5_000);
     expect(unlinkItemTransaction(itemId, txnId, HOUSEHOLD_VIEWER)).toBe(false);
+  });
+});
+
+/**
+ * v1.64.1. A self viewer's own loan, with a payment linked from a transaction that is not theirs
+ * (a household loan rule can do that): the row reads `Payment` with no account name, and keeps its
+ * date and amounts. Their own payments, and a household viewer's whole ledger, read as before.
+ */
+describe('itemLedger: what a self viewer reads of a payment that is not theirs', () => {
+  let f: SplitPersonFixture | null = null;
+  afterEach(() => {
+    f?.t.cleanup();
+    f = null;
+  });
+
+  it("reads Payment on another person's transaction and the transaction itself on their own", () => {
+    f = buildSplitPersonFixture();
+    const now = '2026-03-01T00:00:00.000Z';
+    const type = f.t.db.get<{ id: number }>(sql`
+      insert into warranty_item_types (name, is_subscription, kind, created_at) values ('Car loans', 0, 'loan', ${now}) returning id`);
+    const loan = f.t.db.get<{ id: number }>(sql`
+      insert into warranty_items (name, purchase_date, is_lifetime, owner_user_id, type_id, loan_direction, principal_cents,
+        current_balance_cents, created_at, updated_at)
+      values ('Alex car loan', '2025-01-15', 0, ${f.alex}, ${type.id}, 'owed', 1000000, 1000000, ${now}, ${now})
+      returning id`).id;
+    const own = f.add({ date: '2026-03-15', description: 'AUTO LENDER', amountCents: -20000, categoryId: null, person: f.alex });
+    for (const txnId of [own, f.fuel]) expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: loan }).linked).toBe(true);
+
+    const alex = itemLedger(loan, f.self(f.alex));
+    expect(alex.rows.find((row) => row.txnId === f!.fuel)).toMatchObject({
+      date: '2026-03-12',
+      merchant: OTHER_PAYMENT_LABEL,
+      accountName: '—',
+      amountCents: -6130,
+      appliedCents: 6130,
+    });
+    expect(alex.rows.find((row) => row.txnId === own)).toMatchObject({ accountName: 'Joint chequing', amountCents: -20000 });
+    expect(alex.rows.find((row) => row.txnId === own)?.merchant).not.toBe(OTHER_PAYMENT_LABEL);
+    expect(JSON.stringify(alex)).not.toContain('FUEL STOP');
+
+    const household = itemLedger(loan, f.admin);
+    expect(household.rows.find((row) => row.txnId === f!.fuel)).toMatchObject({ accountName: 'Joint chequing' });
+    expect(household.rows.find((row) => row.txnId === f!.fuel)?.merchant).not.toBe(OTHER_PAYMENT_LABEL);
+    expect(household.totalAppliedCents).toBe(alex.totalAppliedCents);
   });
 });

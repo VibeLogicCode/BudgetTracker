@@ -45,7 +45,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   // figures even with nothing else in the body.
   if (getWarrantyItem(itemId, viewer) === null) return Response.json({ error: 'Not Found' }, { status: 404 });
 
-  const ledger = loanLedger(itemId, asOf);
+  const ledger = loanLedger(itemId, asOf, viewer);
   // No basis, or no statement to run from: there is no estimate, and null says so plainly.
   return Response.json({ asOf, owingCents: ledger?.owingCents ?? null }, { status: 200 });
 }
