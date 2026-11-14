@@ -21,6 +21,24 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.64.0] - 2026-11-13
+
+Migration 0033. Local AI is optional and off until an admin sets it up. Nothing changes for an
+install that does not use it.
+
+### Added
+
+- Local AI (optional): Settings, Connections can point the app at a model server you run on your
+  own home network (an Ollama or llama.cpp server). The app refuses any address outside the home
+  network, sends nothing anywhere else, and keeps working exactly as before when the server is off
+  or unreachable.
+- AI suggestions in Needs review: for merchants no rule or guess covers, the AI suggests a category
+  and a clean name. Nothing is filed until you press Use; Remember turns it into a rule as usual.
+- Receipt fields: after a receipt is read, the AI can suggest the vendor and other fields. It only
+  fills fields nobody has typed in, and figures found on the receipt itself win.
+- Ask in words: type a question such as what you spent at the vet last year, and the app opens the
+  matching Transactions view. The app does all the arithmetic; the AI only picks the filter.
+
 ## [1.63.0] - 2026-11-13
 
 Migration 0032. Existing split parts follow their transaction's person, as before.
