@@ -7,9 +7,8 @@ import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireAdmin } from '@/lib/auth/session';
 import { appendAudit } from '@/lib/audit';
 import { nowIso } from '@/lib/clock';
-import { listModels } from '@/lib/ai/client';
 import { saveLocalAiConfig, testLocalAiConnection, turnOffLocalAi } from '@/lib/ai/config';
-import { addressLabel, normalizeLocalAiBaseUrl } from '@/lib/ai/lan';
+import { addressLabel } from '@/lib/ai/lan';
 import { sweepAiWork } from '@/lib/ai/queue';
 import { MODEL_NAME_RE } from '@/lib/ai/schemas';
 import { forgetAiSuggestions } from '@/lib/ai/suggestions';
@@ -70,16 +69,9 @@ export async function testLocalAiAction(_prev: LocalAiActionState, formData: For
 
   const result = await testLocalAiConnection({ baseUrl: parsed.data.baseUrl, model: parsed.data.model }, new Date());
   if (!result.ok) return { error: result.message };
-  let models: string[] | undefined;
-  const address = normalizeLocalAiBaseUrl(parsed.data.baseUrl);
-  if (address.ok) {
-    try {
-      models = await listModels({ baseUrl: address.baseUrl, model: parsed.data.model });
-    } catch {
-      models = undefined;
-    }
-  }
-  return models && models.length > 0 ? { message: result.message, models } : { message: result.message };
+  // The test's own model list, handed back: one request to the server, never a second.
+  const models = result.models ?? [];
+  return models.length > 0 ? { message: result.message, models } : { message: result.message };
 }
 
 export async function turnOffLocalAiAction(_prev: LocalAiActionState, _formData: FormData): Promise<LocalAiActionState> {

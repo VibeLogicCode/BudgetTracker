@@ -5575,6 +5575,32 @@ describe('TransactionsClient: AI suggestion line (v1.64.0)', () => {
     fireEvent.submit(screen.getByRole('button', { name: 'Use Coffee for TIM HORTONS' }).closest('form') as HTMLFormElement);
     await waitFor(() => expect(screen.getByText('Category updated.')).toBeTruthy());
   });
+
+  it("a later action's result replaces the AI result in the banner, message and error alike", async () => {
+    const { setRowTransferAction } = await import('@/app/(app)/transactions/actions');
+    const { acceptAiSuggestionAction } = await import('@/app/(app)/transactions/ai-actions');
+    renderClient(uncategorized());
+    fireEvent.submit(screen.getByRole('button', { name: 'Use Coffee for TIM HORTONS' }).closest('form') as HTMLFormElement);
+    await waitFor(() => expect(screen.getByText('Category updated.')).toBeTruthy());
+
+    vi.mocked(setRowTransferAction).mockResolvedValueOnce({ message: 'Marked as a transfer.' });
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Mark as transfer' }));
+    await waitFor(() => expect(screen.getByText('Marked as a transfer.')).toBeTruthy());
+    expect(screen.queryByText('Category updated.')).toBeNull();
+    cleanup();
+
+    vi.mocked(acceptAiSuggestionAction).mockResolvedValueOnce({ error: 'That suggestion is no longer available.' });
+    renderClient(uncategorized());
+    fireEvent.submit(screen.getByRole('button', { name: 'Use Coffee for TIM HORTONS' }).closest('form') as HTMLFormElement);
+    await waitFor(() => expect(screen.getByText('That suggestion is no longer available.')).toBeTruthy());
+
+    vi.mocked(setRowTransferAction).mockResolvedValueOnce({ error: 'That row is gone.' });
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Mark as transfer' }));
+    await waitFor(() => expect(screen.getByText('That row is gone.')).toBeTruthy());
+    expect(screen.queryByText('That suggestion is no longer available.')).toBeNull();
+  });
 });
 
 /**

@@ -2,6 +2,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup, screen } from '@testing-library/react';
 import { saveLocalAiConfig, recordLocalAiFailure } from '@/lib/ai/config';
+import { recordMerchantSuggestion } from '@/lib/ai/suggestions';
+import { setSetting } from '@/lib/settings';
 import { createSeededTestDb, insertTestUser, type TestDb } from '../helpers/db';
 
 /** v1.64.0 Lane B (plan 2026-11-12, B3). The real page against a seeded database. */
@@ -55,6 +57,22 @@ describe('Settings, Connections: the Local AI card', () => {
     expect((screen.getByLabelText('Model server address') as HTMLInputElement).value).toBe('http://192.168.1.50:11434');
     expect((screen.getByLabelText('Model name') as HTMLInputElement).value).toBe('test-model:1b');
     expect(screen.getByRole('status').textContent).toMatch(/^Waiting after 1 failed try\. Next try about .+ Last problem: Could not reach/);
+  });
+
+  it('a saved address that no longer passes reads as off, with Turn off and Forget to clear it', async () => {
+    setup();
+    // fd::1 is 00fd::1, a public address an earlier check let through.
+    setSetting('local_ai_enabled', '1');
+    setSetting('local_ai_base_url', 'http://[fd::1]:11434');
+    setSetting('local_ai_model', 'test-model:1b');
+    recordMerchantSuggestion({ merchant: 'MAPLE GROCER', categoryId: null, cleanName: 'Maple Grocer', model: 'test-model:1b', at: new Date('2026-03-10T09:00:00.000Z') });
+    const { default: ConnectionsPage } = await import('@/app/(app)/settings/connections/page');
+    render(await ConnectionsPage());
+
+    expect(screen.getByRole('status').textContent).toMatch(/^Off\. The saved address or model is no longer accepted/);
+    expect((screen.getByLabelText('Model server address') as HTMLInputElement).value).toBe('http://[fd::1]:11434');
+    expect(screen.getByRole('button', { name: 'Turn off' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Forget all AI suggestions' })).toBeTruthy();
   });
 
   it('a member never reaches the page', async () => {

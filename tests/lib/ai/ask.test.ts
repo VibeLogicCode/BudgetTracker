@@ -18,9 +18,16 @@ import {
   readAskAnswer,
   resetAskLimitsForTests,
 } from '@/lib/ai/ask';
-import { SETTING_LOCAL_AI_FAILURES, localAiActive, saveLocalAiConfig } from '@/lib/ai/config';
+import {
+  SETTING_LOCAL_AI_FAILURES,
+  SETTING_LOCAL_AI_LAST_ATTEMPT_AT,
+  SETTING_LOCAL_AI_LAST_ERROR,
+  SETTING_LOCAL_AI_LAST_OK_AT,
+  localAiActive,
+  saveLocalAiConfig,
+} from '@/lib/ai/config';
 import type { Viewer } from '@/lib/auth/viewer';
-import { getSetting } from '@/lib/settings';
+import { getSetting, setSetting } from '@/lib/settings';
 import { transactionsHref } from '@/lib/transaction-links';
 import { chatBody, modelServerHandler, startFakeModelServer, type CapturedRequest, type FakeModelServer } from '../../helpers/fake-model-server';
 import { FIXTURE_NOTE, buildAiFixture, type AiFixture } from '../../helpers/ai-fixture';
@@ -226,6 +233,20 @@ describe('askToFilter: off, down, unreadable, and the question', () => {
     expect(await ask(household())).toEqual({ ok: false, error: ASK_OFF_ERROR });
     expect(getSetting(SETTING_LOCAL_AI_FAILURES)).toBe('1');
     expect(localAiActive(AT)).toBe(false);
+  });
+
+  it('an answer in the shape asked for clears an old failure count, as the queue does', async () => {
+    fx = buildAiFixture();
+    await turnOn(() => answer({ spendingOnly: true }));
+    // Two failures long past their wait: active again, but the next failure would wait 20 minutes.
+    setSetting(SETTING_LOCAL_AI_FAILURES, '2');
+    setSetting(SETTING_LOCAL_AI_LAST_ATTEMPT_AT, '2026-03-10T07:00:00.000Z');
+    setSetting(SETTING_LOCAL_AI_LAST_ERROR, 'Could not reach the model server.');
+    expect(localAiActive(AT)).toBe(true);
+    expect(await ask(household())).toMatchObject({ ok: true });
+    expect(getSetting(SETTING_LOCAL_AI_FAILURES)).toBeNull();
+    expect(getSetting(SETTING_LOCAL_AI_LAST_ERROR)).toBeNull();
+    expect(getSetting(SETTING_LOCAL_AI_LAST_OK_AT)).toBe(AT.toISOString());
   });
 
   it('an unreadable answer is this question only: refused, and no failure recorded', async () => {

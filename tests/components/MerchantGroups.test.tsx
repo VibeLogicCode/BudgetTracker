@@ -257,6 +257,37 @@ describe('MerchantGroups with an AI suggestion (v1.64.0)', () => {
     expect((vi.mocked(ignoreAiSuggestionAction).mock.calls.at(-1)![1] as FormData).get('merchant')).toBe('MAPLE GROCER');
   });
 
+  it('shows a Use or Ignore refusal in its card, as the group form does', async () => {
+    vi.mocked(acceptAiSuggestionAction).mockResolvedValueOnce({ error: 'That suggestion is no longer available.' });
+    renderGroups([group({ guessCategoryId: null })], { aiSuggestions: AI });
+    fireEvent.submit(within(card('MAPLE GROCER')).getByRole('button', { name: 'Use the name Maple Grocer for all (MAPLE GROCER)' }).closest('form') as HTMLFormElement);
+    await waitFor(() => expect(card('MAPLE GROCER').textContent).toContain('That suggestion is no longer available.'));
+    cleanup();
+
+    vi.mocked(ignoreAiSuggestionAction).mockResolvedValueOnce({ error: 'That suggestion is no longer available.' });
+    renderGroups([group({ guessCategoryId: null })], { aiSuggestions: AI });
+    fireEvent.submit(within(card('MAPLE GROCER')).getByRole('button', { name: 'Ignore the AI suggestion for MAPLE GROCER' }).closest('form') as HTMLFormElement);
+    await waitFor(() => expect(card('MAPLE GROCER').textContent).toContain('That suggestion is no longer available.'));
+  });
+
+  it('drops the AI suggestion label once another category is picked, and shows it again on the suggested one', () => {
+    renderGroups([group({ guessCategoryId: null })], { aiSuggestions: AI });
+    const maple = card('MAPLE GROCER');
+    const input = within(maple).getByRole('combobox', { name: 'Category for MAPLE GROCER' }) as HTMLInputElement;
+    const pick = (label: string) => {
+      fireEvent.focus(input);
+      fireEvent.change(input, { target: { value: label } });
+      fireEvent.mouseDown(within(screen.getByRole('listbox')).getByRole('option', { name: label }), { button: 0 });
+    };
+    expect(maple.textContent).toContain('AI suggestion');
+    pick('Groceries');
+    expect(picked('MAPLE GROCER')).toBe('42');
+    expect(maple.textContent).not.toContain('AI suggestion');
+    pick('Coffee');
+    expect(picked('MAPLE GROCER')).toBe('43');
+    expect(maple.textContent).toContain('AI suggestion');
+  });
+
   it('shows nothing of the AI without a suggestion or outside review', () => {
     renderGroups([group()], { aiSuggestions: {} });
     expect(card('MAPLE GROCER').querySelector('[data-ai-suggestion]')).toBeNull();

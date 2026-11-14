@@ -20,7 +20,8 @@ import {
  * zone, so this file imports no server module as a value.
  */
 export interface LocalAiCardProps {
-  status: Pick<LocalAiStatus, 'state' | 'failures' | 'lastError' | 'counts'>;
+  /** `enabled` true with `state: 'off'`: switched on over an address or model that no longer passes. */
+  status: Pick<LocalAiStatus, 'state' | 'failures' | 'lastError' | 'counts'> & Partial<Pick<LocalAiStatus, 'enabled'>>;
   /** Household-clock labels, already formatted (`14:32`, `Tomorrow at 03:10`). */
   lastOkLabel: string | null;
   nextTryLabel: string | null;
@@ -32,6 +33,9 @@ const initial: LocalAiActionState = {};
 
 function statusSentence(props: Pick<LocalAiCardProps, 'status' | 'lastOkLabel' | 'nextTryLabel'>): string {
   const { status, lastOkLabel, nextTryLabel } = props;
+  if (status.state === 'off' && status.enabled === true) {
+    return 'Off. The saved address or model is no longer accepted, so nothing is sent. Save a new one, or turn it off.';
+  }
   if (status.state === 'off') return 'Off. Nothing is sent anywhere.';
   if (status.state === 'waiting') {
     const tries = `${status.failures} failed ${status.failures === 1 ? 'try' : 'tries'}`;
@@ -57,7 +61,9 @@ export function LocalAiCard(props: LocalAiCardProps) {
   const [forgetState, forget, forgetPending] = useActionState(forgetAiSuggestionsAction, initial);
   const [confirmForget, setConfirmForget] = useState(false);
   const busy = savePending || testPending || offPending || forgetPending;
-  const on = props.status.state !== 'off';
+  // Turn off is offered while the switch is on, even over a saved address that no longer passes
+  // (state 'off', enabled true), so the admin can clear it.
+  const on = props.status.state !== 'off' || props.status.enabled === true;
   const knownCount = props.status.counts.suggested + props.status.counts.ignored + props.status.counts.failed;
   const models = testState.models ?? [];
 

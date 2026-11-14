@@ -8,7 +8,8 @@ import { isPrivateIpv4, isPrivateIpv6 } from '@/lib/net/private-address';
  * Only an address on the household's own network is accepted: a private or loopback IPv4 literal
  * (10/8, 172.16/12, 192.168/16, 127/8, 169.254/16), an IPv6 loopback, unique-local or link-local
  * literal, `localhost`, a one-word name (a compose service) or a name under `.local` or `.home.arpa`.
- * Everything else is refused, carrier NAT (100.64.0.0/10, Tailscale) included. A NAME can still
+ * Everything else is refused, carrier NAT (100.64.0.0/10, Tailscale) included, and so are the two
+ * cloud metadata addresses inside those ranges (169.254.169.254, fd00:ec2::254). A NAME can still
  * resolve anywhere, so src/lib/ai/client.ts re-checks every address a name resolves to on every
  * request (lanOnlyLookup) with isPrivateAddress below.
  *
@@ -50,12 +51,50 @@ function isMappedIpv6(address: string): boolean {
   return /^(?:0{0,4}:){0,5}:?ffff:/i.test(inner) || /^::(?:\d{1,3}\.){3}\d{1,3}$/.test(inner);
 }
 
+/** An IPv6 address as eight groups, `0` for zero and no leading zeros; null when it is not one. */
+function expandIpv6(address: string): string | null {
+  let text = address.toLowerCase();
+  // A dotted IPv4 tail is two more groups.
+  const tail = /(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(text);
+  if (tail !== null) {
+    const octets = tail.slice(1, 5).map(Number);
+    if (octets.some((n) => n > 255)) return null;
+    const [a, b, c, d] = octets as [number, number, number, number];
+    text = `${text.slice(0, tail.index)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const halves = text.split('::');
+  if (halves.length > 2) return null;
+  const head = halves[0] === '' ? [] : halves[0].split(':');
+  const rest = halves.length === 2 && halves[1] !== '' ? halves[1].split(':') : [];
+  const fill = halves.length === 2 ? 8 - head.length - rest.length : 0;
+  if (halves.length === 2 ? fill < 1 : head.length !== 8) return null;
+  const groups = [...head, ...Array<string>(fill).fill('0'), ...rest];
+  if (groups.some((group) => !/^[0-9a-f]{1,4}$/.test(group))) return null;
+  return groups.map((group) => Number.parseInt(group, 16).toString(16)).join(':');
+}
+
+/**
+ * The cloud metadata endpoints (AWS's IPv4 and IPv6 ones, the IPv4 one shared by most clouds). Both
+ * sit inside ranges isPrivateAddress otherwise accepts, and neither is ever a model server. Refused
+ * here only: the shared private-address check (and the Watchtower guard on it) is unchanged.
+ */
+const METADATA_IPV4 = '169.254.169.254';
+const METADATA_IPV6 = 'fd00:ec2:0:0:0:0:0:254';
+
+function isMetadataAddress(address: string): boolean {
+  if (IPV4_RE.test(address)) return address.split('.').map(Number).join('.') === METADATA_IPV4;
+  const inner = address.startsWith('[') && address.endsWith(']') ? address.slice(1, -1) : address;
+  return expandIpv6(inner) === METADATA_IPV6;
+}
+
 /**
  * True for an address a name resolved to (no brackets on IPv6) or an IP literal from a URL (with
- * them). Anything that is not a well-formed private IPv4 or IPv6 address is false.
+ * them). Anything that is not a well-formed private IPv4 or IPv6 address is false, and so is a
+ * cloud metadata address.
  */
 export function isPrivateAddress(address: string): boolean {
   if (typeof address !== 'string' || address.length === 0) return false;
+  if (isMetadataAddress(address)) return false;
   if (IPV4_RE.test(address)) return isPrivateIpv4(address);
   if (!address.includes(':')) return false;
   if (isMappedIpv6(address)) return false;
@@ -69,8 +108,7 @@ export function isPrivateAddress(address: string): boolean {
  */
 export function isLanHostname(hostname: string): boolean {
   if (typeof hostname !== 'string' || hostname.length === 0 || hostname.length > 253) return false;
-  if (IPV4_RE.test(hostname)) return isPrivateIpv4(hostname);
-  if (hostname.startsWith('[')) return isPrivateAddress(hostname);
+  if (IPV4_RE.test(hostname) || hostname.startsWith('[')) return isPrivateAddress(hostname);
   if (hostname === 'localhost') return true;
   // A name made only of digits and dots that is not an IPv4 literal is not a name anybody runs.
   if (/^[\d.]+$/.test(hostname)) return false;

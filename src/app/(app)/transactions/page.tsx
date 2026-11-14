@@ -24,7 +24,7 @@ import {
   listTransactions,
 } from '@/lib/transactions';
 import { lastBulkUndo } from '@/lib/bulk-undo';
-import { localAiActive, localAiEnabled } from '@/lib/ai/config';
+import { localAiActive, localAiUsable } from '@/lib/ai/config';
 import { ASK_MAX_QUESTION_CHARS } from '@/lib/ai/ask';
 import { AskInWords } from '@/components/AskInWords';
 import { aiSuggestionsForMerchants } from '@/lib/ai/suggestions';
@@ -206,11 +206,12 @@ export default async function TransactionsPage({
    * v1.64.0 (plan lane C2). The local AI's suggestions for the merchants whose rows Review shows as
    * waiting: uncategorized, not a transfer, not split (so a Bayes-guessed row's merchant is never
    * looked up), plus the merchant groups' merchants. Only in review mode, never the duplicates view,
-   * and only while the feature is on; a self viewer is not in review mode, and the lookup refuses
-   * them as well.
+   * and only while the feature is on and usable (localAiUsable, the test Settings' status line uses:
+   * a switch left on over an address that no longer passes reads as off here too); a self viewer is
+   * not in review mode, and the lookup refuses them as well.
    */
   let aiSuggestions: Record<string, AiSuggestionView> = {};
-  if (reviewMode && !duplicatesView && localAiEnabled()) {
+  if (reviewMode && !duplicatesView && localAiUsable()) {
     const split = splitsForTransactions(page.rows.map((row) => row.id));
     const merchants = new Set<string>();
     for (const row of page.rows) {

@@ -109,6 +109,9 @@ const REQUIRE_VIEWER: { file: string; fn: string }[] = [
   // v1.64.0 (plan 2026-11-12, A12): Review's AI suggestions name household merchants, so a self viewer
   // reads none. The viewer is required here, not left to each page to remember.
   { file: 'src/lib/ai/suggestions.ts', fn: 'aiSuggestionsForMerchants' },
+  // v1.64.0: Ask in words' lists (accounts and people) are what the model is told about, so they
+  // are this viewer's own: a self viewer's accounts only, and no person.
+  { file: 'src/lib/ai/ask.ts', fn: 'askChoices' },
 ];
 
 /** Exempt, WITH the reason. Nothing is exempt without one. */
@@ -286,9 +289,9 @@ describe('ruling R2: every read-model helper takes a viewer', () => {
   // v1.59.0: raised from 43 to 44, the actual count with budgetIncomeLine added.
   // v1.60.0: raised from 44 to 45, the actual count with cashflowForRange added.
   // v1.63.0: raised from 45 to 53, the actual count with the eight tax and year-end reads added.
-  // v1.64.0: raised from 53 to 54, the actual count with aiSuggestionsForMerchants added.
-  it('the named lists cannot shrink below 54 entries', () => {
-    expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(54);
+  // v1.64.0: raised from 53 to 55, the actual count with aiSuggestionsForMerchants and askChoices added.
+  it('the named lists cannot shrink below 55 entries', () => {
+    expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(55);
   });
 });
 

@@ -40,7 +40,11 @@ function reporting(onDone: (message: string | null) => void): (prev: ActionState
   };
 }
 
-/** An AI action, with its message handed up to the list for the reason `reporting` gives. */
+/**
+ * An AI action, with its message handed up to the list for the reason `reporting` gives. The whole
+ * result is still returned, so a refusal (the suggestion is gone, the row was filed meanwhile)
+ * shows in the card the way a group decision's does.
+ */
 function reportingAi(
   run: (prev: ActionState, formData: FormData) => Promise<ActionState>,
   onDone: (message: string | null) => void,
@@ -87,8 +91,8 @@ function GroupCard({
   const aiCategoryId =
     seed === null && suggestion?.categoryId != null && options.some((option) => option.id === suggestion.categoryId) ? suggestion.categoryId : null;
   const [categoryId, setCategoryId] = useState<number | null>(seed ?? aiCategoryId);
-  const [, aiUseAction] = useActionState(reportingAi(acceptAiSuggestionAction, onDone), initial);
-  const [, aiIgnoreAction] = useActionState(reportingAi(ignoreAiSuggestionAction, onDone), initial);
+  const [aiUseState, aiUseAction] = useActionState(reportingAi(acceptAiSuggestionAction, onDone), initial);
+  const [aiIgnoreState, aiIgnoreAction] = useActionState(reportingAi(ignoreAiSuggestionAction, onDone), initial);
 
   const name = merchantGroupName(group);
   const hasMerchant = group.merchant !== '';
@@ -159,7 +163,8 @@ function GroupCard({
                 {`Remember for future ${group.merchant} rows`}
               </label>
             ) : null}
-            {aiCategoryId !== null ? <span className="text-xs text-muted">AI suggestion</span> : null}
+            {/* Only while the picker still holds the AI's category: another pick is the person's own. */}
+            {aiCategoryId !== null && categoryId === aiCategoryId ? <span className="text-xs text-muted">AI suggestion</span> : null}
             <SubmitButton size="sm" disabled={categoryId === null} className="min-h-11 sm:min-h-0" ariaLabel={`File all ${count} (${name})`}>
               {`File all ${count}`}
             </SubmitButton>
@@ -233,6 +238,8 @@ function GroupCard({
             ) : null}
           </div>
           <FormError message={state.error} />
+          <FormError message={aiUseState.error} />
+          <FormError message={aiIgnoreState.error} />
         </div>
       ) : null}
     </li>

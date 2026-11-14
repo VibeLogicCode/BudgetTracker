@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { listAudit } from '@/lib/audit';
+import { localAiActive, recordLocalAiFailure } from '@/lib/ai/config';
 import { drainAiQueue, resetAiQueueForTests } from '@/lib/ai/queue';
 import { recordMerchantFailure } from '@/lib/ai/suggestions';
 import { getSetting } from '@/lib/settings';
@@ -70,6 +71,20 @@ describe('saveLocalAiAction', () => {
     expect(audit[0].detail).not.toContain('://');
   });
 
+  it('saving the same values while waiting after a failure clears the wait, so "start shortly" is true', async () => {
+    await saveLocalAiAction({}, fields());
+    await drainAiQueue();
+    recordLocalAiFailure(new Date(), 'Could not reach the model server.');
+    expect(localAiActive(new Date())).toBe(false);
+
+    const result = await saveLocalAiAction({}, fields());
+
+    expect(result.message).toMatch(/Suggestions start shortly\.$/);
+    expect(localAiActive(new Date())).toBe(true);
+    expect(getSetting('local_ai_failures')).toBeNull();
+    expect(listAudit().filter((row) => row.action === 'set_local_ai')).toHaveLength(1);
+  });
+
   it('refuses a public address with the library sentence and writes and audits nothing', async () => {
     const result = await saveLocalAiAction({}, form({ baseUrl: 'http://8.8.8.8:11434', model: MODEL }));
 
@@ -105,6 +120,8 @@ describe('testLocalAiAction', () => {
     expect(result.error).toBeUndefined();
     expect(result.message).toMatch(/test-model:1b answered in/);
     expect(result.models).toEqual([MODEL]);
+    // One request for the model list: the test's own, handed back, never a second.
+    expect(server!.requests.map((r) => `${r.method} ${r.path}`)).toEqual(['GET /v1/models', 'POST /v1/chat/completions']);
     expect(getSetting('local_ai_enabled')).toBeNull();
     expect(getSetting('local_ai_base_url')).toBeNull();
     expect(getSetting('local_ai_last_ok_at')).toBeNull();

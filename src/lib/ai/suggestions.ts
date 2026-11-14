@@ -177,13 +177,22 @@ export function aiSuggestionFor(merchant: string): AiSuggestionRecord | null {
   return row ?? null;
 }
 
-/** Settings' counts: rows by status, and how many merchants are still to ask. */
-export function aiSuggestionCounts(): AiSuggestionCounts {
+/**
+ * Settings' counts: rows by status, and how many merchants are still to ask. `toAsk: false` skips
+ * the review-queue scan behind that last one (it reads 0), for a status line that does not show it.
+ */
+export function aiSuggestionCounts(options: { toAsk?: boolean } = {}): AiSuggestionCounts {
   const rows = getDb()
     .select({ status: aiSuggestions.status, n: sql<number>`count(*)` })
     .from(aiSuggestions)
     .groupBy(aiSuggestions.status)
     .all();
   const count = (status: string) => rows.find((row) => row.status === status)?.n ?? 0;
-  return { suggested: count('suggested'), ignored: count('ignored'), failed: count('failed'), toAsk: allTargets().length };
+  const toAsk = options.toAsk === false ? 0 : allTargets().length;
+  return { suggested: count('suggested'), ignored: count('ignored'), failed: count('failed'), toAsk };
+}
+
+/** Whether any row of any status is stored: one row read at most. */
+export function hasAiSuggestions(): boolean {
+  return getDb().select({ one: sql<number>`1` }).from(aiSuggestions).limit(1).get() !== undefined;
 }

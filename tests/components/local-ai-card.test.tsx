@@ -58,6 +58,24 @@ describe('LocalAiCard status line', () => {
     expect(screen.getByRole('status').textContent).toBe('On. No answer yet.');
   });
 
+  it('switched on with a saved address that no longer passes: off, says why, and offers Turn off and Forget', () => {
+    render(
+      <LocalAiCard
+        {...props({
+          status: { state: 'off', enabled: true, failures: 0, lastError: null, counts: { suggested: 2, ignored: 1, failed: 0, toAsk: 0 } },
+          baseUrl: 'http://[fd::1]:11434',
+          model: 'test-model:1b',
+        })}
+      />,
+    );
+
+    expect(screen.getByRole('status').textContent).toBe(
+      'Off. The saved address or model is no longer accepted, so nothing is sent. Save a new one, or turn it off.',
+    );
+    expect(screen.getByRole('button', { name: 'Turn off' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Forget all AI suggestions' })).toBeTruthy();
+  });
+
   it('waiting: names the failures, the next try and the last problem', () => {
     render(
       <LocalAiCard

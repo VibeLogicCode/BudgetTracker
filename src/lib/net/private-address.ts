@@ -30,8 +30,10 @@ export function isPrivateIpv6(hostname: string): boolean {
   if (hostname === '[::1]') return true;
   const inner = hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
   if (inner === '::1') return true;
-  // fc00::/7 is fc.. or fd..; fe80::/10 is fe8./fe9./fea./feb.
-  if (/^f[cd][0-9a-f]{0,2}:/i.test(inner)) return true;
-  if (/^fe[89ab][0-9a-f]?:/i.test(inner)) return true;
+  // fc00::/7 is fc.. or fd..; fe80::/10 is fe8./fe9./fea./feb. The first group must be all four
+  // digits: a shorter one is zero-padded on the left, so `fc::1` is 00fc::1 and `fe8::1` is
+  // 0fe8::1, both global addresses.
+  if (/^f[cd][0-9a-f]{2}:/i.test(inner)) return true;
+  if (/^fe[89ab][0-9a-f]:/i.test(inner)) return true;
   return false;
 }

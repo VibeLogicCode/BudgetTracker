@@ -143,13 +143,18 @@ describe('askInWordsAction', () => {
     expect(s.requests).toHaveLength(2);
   });
 
-  it('never logs or stores the question, and writes nothing', async () => {
+  it('never logs or stores the question, and writes nothing but the server-answered state', async () => {
     fx = buildAiFixture();
     signIn('alex');
     await turnOn();
+    // An answer records a working server (the backoff's own keys, as the queue does); nothing else.
+    const settingsBesidesState = () =>
+      fx!.t.sqlite
+        .prepare("select * from settings where key not in ('local_ai_last_attempt_at', 'local_ai_last_ok_at') order by key")
+        .all();
     const snapshot = () =>
       JSON.stringify([
-        fx!.t.sqlite.prepare('select * from settings order by key').all(),
+        settingsBesidesState(),
         fx!.t.sqlite.prepare('select * from audit_log order by id').all(),
         fx!.t.sqlite.prepare('select * from transactions order by id').all(),
         fx!.t.sqlite.prepare('select * from merchant_rules order by id').all(),
@@ -161,5 +166,7 @@ describe('askInWordsAction', () => {
     const printed = spies.flatMap((spy) => spy.mock.calls.flat().map(String)).join('\n');
     expect(printed).not.toContain('birthday');
     expect(snapshot()).toBe(before);
+    expect(JSON.stringify(fx!.t.sqlite.prepare('select * from settings').all())).not.toContain('birthday');
+    expect(fx!.t.sqlite.prepare("select value from settings where key = 'local_ai_last_ok_at'").get()).toEqual({ value: AT.toISOString() });
   });
 });

@@ -6,8 +6,8 @@ import { LOCAL_AI_MODEL_NAME_ERROR, LocalAiAnswerError, LocalAiServerError, chat
 import { addressLabel, normalizeLocalAiBaseUrl } from '@/lib/ai/lan';
 import { TEST_LABELS, TEST_PROMPT } from '@/lib/ai/prompts';
 import { isModelName, merchantAnswer } from '@/lib/ai/schemas';
-import { aiSuggestionCounts, clearFailedAiSuggestions } from '@/lib/ai/suggestions';
-import type { LocalAiConfig, LocalAiStatus } from '@/lib/ai/types';
+import { aiSuggestionCounts, clearFailedAiSuggestions, hasAiSuggestions } from '@/lib/ai/suggestions';
+import type { AiSuggestionCounts, LocalAiConfig, LocalAiStatus } from '@/lib/ai/types';
 
 /**
  * v1.64.0 (plan 2026-11-12, L4 and L5). Local AI's settings and its backoff, as plain settings rows
@@ -60,9 +60,18 @@ export function localAiEnabled(): boolean {
   return getSetting(SETTING_LOCAL_AI_ENABLED) === '1';
 }
 
-/** On, set up, and not waiting after failures: the only state in which a request may be made. */
+/**
+ * On and set up: the switch is on AND the saved address and model still pass today's checks. Review
+ * shows stored suggestions, and Settings reads the helper as on, only then. A switch left on over an
+ * address a stricter check now refuses reads as off everywhere; Settings still offers Turn off.
+ */
+export function localAiUsable(): boolean {
+  return localAiEnabled() && readLocalAiConfig() !== null;
+}
+
+/** Usable, and not waiting after failures: the only state in which a request may be made. */
 export function localAiActive(now: Date = new Date()): boolean {
-  return localAiEnabled() && readLocalAiConfig() !== null && localAiBackoff(now) === null;
+  return localAiUsable() && localAiBackoff(now) === null;
 }
 
 // ---------------------------------------------------------------------------------- writing
@@ -73,10 +82,19 @@ function clearLocalAiState(): void {
   for (const key of STATE_KEYS) deleteSetting(key);
 }
 
+/** The backoff only: the failure count, its attempt time and last error, and the unreadable streak. */
+function clearLocalAiBackoff(): void {
+  for (const key of [SETTING_LOCAL_AI_FAILURES, SETTING_LOCAL_AI_LAST_ATTEMPT_AT, SETTING_LOCAL_AI_LAST_ERROR, SETTING_LOCAL_AI_UNREADABLE_STREAK]) {
+    deleteSetting(key);
+  }
+}
+
 /**
  * Checks the address (LAN only) and the model name, then turns the helper on with them. A new
  * address or model starts clean: the backoff and its last error go, and so do failed answers, so
- * those merchants are asked again. One audit row when anything changed, none when nothing did.
+ * those merchants are asked again. The same address and model again is the admin asking it to try
+ * now: the backoff goes (failed answers and the last answer's time stay), so the save's "Suggestions
+ * start shortly" is true. One audit row when anything changed, none when nothing did.
  */
 export function saveLocalAiConfig(input: { baseUrl: string; model: string; userId: number; at?: Date }): SaveLocalAiResult {
   const address = normalizeLocalAiBaseUrl(input.baseUrl);
@@ -94,6 +112,8 @@ export function saveLocalAiConfig(input: { baseUrl: string; model: string; userI
     if (targetChanged) {
       clearLocalAiState();
       clearFailedAiSuggestions();
+    } else {
+      clearLocalAiBackoff();
     }
     const anything = targetChanged || !wasOn;
     if (anything) {
@@ -172,16 +192,28 @@ export function recordUnreadableAnswer(): number {
 
 // ---------------------------------------------------------------------------------- status
 
+const NO_COUNTS: AiSuggestionCounts = { suggested: 0, ignored: 0, failed: 0, toAsk: 0 };
+
+/**
+ * Settings, Connections reads this for every admin. Off (or never set up), the merchants still to
+ * ask are never shown, so the review-queue scan behind them is skipped, and an empty table is not
+ * counted at all; stored rows are, so Forget is still offered.
+ */
 export function localAiStatus(now: Date = new Date()): LocalAiStatus {
   const backoff = localAiBackoff(now);
-  const on = localAiEnabled() && readLocalAiConfig() !== null;
+  const enabled = localAiEnabled();
+  const on = enabled && readLocalAiConfig() !== null;
+  let counts: AiSuggestionCounts;
+  if (on) counts = aiSuggestionCounts();
+  else counts = hasAiSuggestions() ? aiSuggestionCounts({ toAsk: false }) : { ...NO_COUNTS };
   return {
     state: !on ? 'off' : backoff !== null ? 'waiting' : 'on',
+    enabled,
     lastOkAt: getSetting(SETTING_LOCAL_AI_LAST_OK_AT),
     nextTryAt: backoff === null ? null : nowIso(backoff.nextTryAt),
     failures: readCount(SETTING_LOCAL_AI_FAILURES),
     lastError: getSetting(SETTING_LOCAL_AI_LAST_ERROR),
-    counts: aiSuggestionCounts(),
+    counts,
   };
 }
 
@@ -190,9 +222,13 @@ export function localAiStatus(now: Date = new Date()): LocalAiStatus {
 /**
  * Settings' Test, with the posted (unsaved) values. Asks the server for its models, then asks the
  * model about a made-up row (TEST_PROMPT), so no household data leaves on a test. Writes no setting,
- * no state, no suggestion and no audit row.
+ * no state, no suggestion and no audit row. A test that got an answer hands back the models the
+ * server listed, for the card's picker, so the action never asks for them a second time.
  */
-export async function testLocalAiConnection(input: { baseUrl: string; model: string }, _now: Date = new Date()): Promise<{ ok: boolean; message: string }> {
+export async function testLocalAiConnection(
+  input: { baseUrl: string; model: string },
+  _now: Date = new Date(),
+): Promise<{ ok: boolean; message: string; models?: string[] }> {
   const address = normalizeLocalAiBaseUrl(input.baseUrl);
   if (!address.ok) return { ok: false, message: address.error };
   const model = typeof input.model === 'string' ? input.model.trim() : '';
@@ -206,8 +242,8 @@ export async function testLocalAiConnection(input: { baseUrl: string; model: str
       return { ok: false, message: `${model} answered, but not in the shape the app asked for. Try a different model.` };
     }
     const seconds = Math.max(ms / 1000, 0.1).toFixed(1);
-    if (!listed.includes(model)) return { ok: true, message: `The server does not list ${model}; it answered anyway.` };
-    return { ok: true, message: `${model} answered in ${seconds} seconds.` };
+    if (!listed.includes(model)) return { ok: true, message: `The server does not list ${model}; it answered anyway.`, models: listed };
+    return { ok: true, message: `${model} answered in ${seconds} seconds.`, models: listed };
   } catch (error) {
     if (error instanceof LocalAiServerError) return { ok: false, message: error.message };
     if (error instanceof LocalAiAnswerError) return { ok: false, message: `${model} answered, but not in the shape the app asked for. Try a different model.` };

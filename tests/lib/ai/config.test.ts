@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import {
@@ -16,6 +16,7 @@ import {
   localAiBackoffMs,
   localAiEnabled,
   localAiStatus,
+  localAiUsable,
   readLocalAiConfig,
   recordLocalAiFailure,
   recordLocalAiSuccess,
@@ -94,16 +95,52 @@ describe('saving, reading and turning off', () => {
     recordLocalAiFailure(AT, 'Could not reach the model server at 192.168.1.50:11434.');
     recordUnreadableAnswer();
 
-    // The same values again change nothing, and clear nothing.
+    // The same values again change nothing and keep the failed rows, but clear the backoff (below).
     expect(saveLocalAiConfig({ baseUrl: 'http://192.168.1.50:11434', model: 'test-model:1b', userId: alex, at: AT })).toMatchObject({ changed: false });
-    expect(getSetting(SETTING_LOCAL_AI_FAILURES)).toBe('1');
+    expect(t!.sqlite.prepare("select count(*) as c from ai_suggestions where status = 'failed'").get()).toEqual({ c: 1 });
 
+    recordLocalAiFailure(AT, 'Could not reach the model server at 192.168.1.50:11434.');
+    recordUnreadableAnswer();
     saveLocalAiConfig({ baseUrl: 'http://192.168.1.50:11434', model: 'llama3.2:3b', userId: alex, at: AT });
     for (const key of [SETTING_LOCAL_AI_FAILURES, SETTING_LOCAL_AI_LAST_ATTEMPT_AT, SETTING_LOCAL_AI_LAST_ERROR, SETTING_LOCAL_AI_LAST_OK_AT, SETTING_LOCAL_AI_UNREADABLE_STREAK]) {
       expect(getSetting(key), key).toBeNull();
     }
     const statuses = t!.sqlite.prepare('select normalized_merchant as m, status from ai_suggestions order by m').all();
     expect(statuses).toEqual([{ m: 'MAPLE GROCER', status: 'suggested' }]);
+  });
+
+  it('saving the same address and model again clears an old backoff, so suggestions do start shortly', () => {
+    const alex = setup();
+    saveLocalAiConfig({ baseUrl: 'http://192.168.1.50:11434', model: 'test-model:1b', userId: alex, at: AT });
+    recordLocalAiSuccess(AT);
+    recordLocalAiFailure(AT, 'Could not reach the model server at 192.168.1.50:11434.');
+    recordUnreadableAnswer();
+    expect(localAiActive(AT)).toBe(false);
+
+    expect(saveLocalAiConfig({ baseUrl: 'http://192.168.1.50:11434', model: 'test-model:1b', userId: alex, at: AT })).toMatchObject({ ok: true, changed: false });
+    expect(localAiActive(AT)).toBe(true);
+    expect(localAiStatus(AT)).toMatchObject({ state: 'on', failures: 0, lastError: null, nextTryAt: null, lastOkAt: AT.toISOString() });
+    for (const key of [SETTING_LOCAL_AI_FAILURES, SETTING_LOCAL_AI_LAST_ERROR, SETTING_LOCAL_AI_UNREADABLE_STREAK]) {
+      expect(getSetting(key), key).toBeNull();
+    }
+    // Nothing changed, so nothing is audited beyond the first save.
+    expect(listAudit()).toHaveLength(1);
+  });
+
+  it('a saved address that no longer passes reads as off everywhere, and can still be turned off', () => {
+    const alex = setup();
+    // fd::1 is 00fd::1, a public address an earlier check let through.
+    setSetting(SETTING_LOCAL_AI_ENABLED, '1');
+    setSetting(SETTING_LOCAL_AI_BASE_URL, 'http://[fd::1]:11434');
+    setSetting(SETTING_LOCAL_AI_MODEL, 'test-model:1b');
+    expect(readLocalAiConfig()).toBeNull();
+    expect(localAiEnabled()).toBe(true);
+    expect(localAiUsable()).toBe(false);
+    expect(localAiActive(AT)).toBe(false);
+    expect(localAiStatus(AT)).toMatchObject({ state: 'off', enabled: true });
+
+    expect(turnOffLocalAi({ userId: alex, at: AT })).toBe(true);
+    expect(localAiStatus(AT)).toMatchObject({ state: 'off', enabled: false });
   });
 
   it('turning off keeps the address and model for the form', () => {
@@ -192,12 +229,63 @@ describe('backoff (L5)', () => {
     recordMerchantSuggestion({ merchant: 'MAPLE GROCER', categoryId: null, cleanName: 'Maple Grocer', model: 'test-model:1b', at: AT });
     expect(localAiStatus(AT)).toEqual({
       state: 'off',
+      enabled: false,
       lastOkAt: null,
       nextTryAt: null,
       failures: 0,
       lastError: null,
       counts: { suggested: 1, ignored: 0, failed: 0, toAsk: 0 },
     });
+  });
+});
+
+/**
+ * v1.64.0 review fix. The Connections page reads localAiStatus for every admin. While the helper is
+ * off or was never set up, it does no review-queue scan, and with no stored suggestion it counts
+ * nothing at all.
+ */
+describe('localAiStatus does no new work while off', () => {
+  function statements(run: () => void): string[] {
+    const spy = vi.spyOn(t!.sqlite, 'prepare');
+    try {
+      run();
+      return spy.mock.calls.map(([sql]) => String(sql));
+    } finally {
+      spy.mockRestore();
+    }
+  }
+  const touchesTransactions = (sql: string) => /"transactions"/.test(sql);
+  const countsSuggestions = (sql: string) => /ai_suggestions/.test(sql) && /count\(/i.test(sql);
+
+  it('never set up, with an empty table: no count and no review-queue scan', () => {
+    setup();
+    let status: ReturnType<typeof localAiStatus> | null = null;
+    const sqls = statements(() => {
+      status = localAiStatus(AT);
+    });
+    expect(status!.counts).toEqual({ suggested: 0, ignored: 0, failed: 0, toAsk: 0 });
+    expect(sqls.filter(touchesTransactions)).toEqual([]);
+    expect(sqls.filter(countsSuggestions)).toEqual([]);
+  });
+
+  it('turned off with stored rows: counts them for Forget, still no review-queue scan', () => {
+    const alex = setup();
+    saveLocalAiConfig({ baseUrl: 'http://192.168.1.50:11434', model: 'test-model:1b', userId: alex, at: AT });
+    recordMerchantFailure({ merchant: 'FUEL STOP 12', model: 'test-model:1b', reason: 'Nothing in the answer could be used.', at: AT });
+    turnOffLocalAi({ userId: alex, at: AT });
+    let status: ReturnType<typeof localAiStatus> | null = null;
+    const sqls = statements(() => {
+      status = localAiStatus(AT);
+    });
+    expect(status!.counts).toEqual({ suggested: 0, ignored: 0, failed: 1, toAsk: 0 });
+    expect(sqls.filter(touchesTransactions)).toEqual([]);
+  });
+
+  it('on: counts the merchants still to ask', () => {
+    const alex = setup();
+    saveLocalAiConfig({ baseUrl: 'http://192.168.1.50:11434', model: 'test-model:1b', userId: alex, at: AT });
+    const sqls = statements(() => localAiStatus(AT));
+    expect(sqls.filter(touchesTransactions).length).toBeGreaterThan(0);
   });
 });
 
@@ -210,6 +298,8 @@ describe('testLocalAiConnection', () => {
     const result = await testLocalAiConnection({ baseUrl: server.baseUrl, model: 'test-model:1b' }, AT);
     expect(result.ok).toBe(true);
     expect(result.message).toMatch(/^test-model:1b answered in \d+\.\d seconds\.$/);
+    // The models it listed come back with the answer, so the card's picker needs no second request.
+    expect(result.models).toEqual(['test-model:1b']);
     expect(server.requests.map((r) => `${r.method} ${r.path}`)).toEqual(['GET /v1/models', 'POST /v1/chat/completions']);
     expect(server.requests[1].body).toContain('MAPLE GROCER 0042');
     expect(allSettings()).toEqual({});
@@ -223,6 +313,7 @@ describe('testLocalAiConnection', () => {
     expect(await testLocalAiConnection({ baseUrl: server.baseUrl, model: 'test-model:1b' }, AT)).toEqual({
       ok: true,
       message: 'The server does not list test-model:1b; it answered anyway.',
+      models: ['llama3.2:3b'],
     });
   });
 

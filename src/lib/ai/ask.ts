@@ -6,7 +6,7 @@ import { addMonthsClamped, dayLabel, isIsoDate } from '@/lib/dates';
 import { transactionsHref } from '@/lib/transaction-links';
 import { z } from '@/lib/zod';
 import { LocalAiAnswerError, LocalAiServerError, chatJson, type LocalAiTimeouts } from '@/lib/ai/client';
-import { readLocalAiConfig, recordLocalAiFailure } from '@/lib/ai/config';
+import { readLocalAiConfig, recordLocalAiFailure, recordLocalAiSuccess } from '@/lib/ai/config';
 import type { PromptPair } from '@/lib/ai/prompts';
 import { categoryChoices, type JsonSchema } from '@/lib/ai/schemas';
 
@@ -239,7 +239,9 @@ export function readAskAnswer(content: unknown, choices: AskChoices, today: stri
 /**
  * One question to the model. The caller has already checked that local AI is active and that this
  * person may ask now (beginAsk). A server failure is recorded for the backoff and reads as off; an
- * answer that cannot be read is this question's problem only and is not recorded.
+ * answer that cannot be read is this question's problem only and is not recorded. An answer in the
+ * shape asked for is a working server, recorded as the queue records one, so an old failure count
+ * does not make the next failure wait longer.
  */
 export async function askToFilter(input: {
   question: unknown;
@@ -253,7 +255,7 @@ export async function askToFilter(input: {
   const config = readLocalAiConfig();
   if (config === null) return { ok: false, error: ASK_OFF_ERROR };
   const choices = askChoices(input.viewer);
-  const { jsonSchema } = askAnswer(choices);
+  const { jsonSchema, zodSchema } = askAnswer(choices);
   let content: unknown;
   try {
     ({ content } = await chatJson({
@@ -271,6 +273,7 @@ export async function askToFilter(input: {
     if (error instanceof LocalAiAnswerError) return { ok: false, error: ASK_UNREADABLE_ERROR };
     throw error;
   }
+  if (zodSchema.safeParse(content).success) recordLocalAiSuccess(input.at);
   return readAskAnswer(content, choices, input.today);
 }
 

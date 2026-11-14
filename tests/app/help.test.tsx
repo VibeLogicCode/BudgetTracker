@@ -122,6 +122,11 @@ describe('the help page: local AI (v1.64.0)', () => {
     const copy = textOf(entry.body);
     expect(copy).toContain('/settings/connections');
     expect(copy).toMatch(/never files a row/);
+    // What it really does with a field: on a receipt it fills only empty ones, marked, clearable;
+    // in Review it pre-selects, and nothing is filed until Use.
+    expect(copy).not.toMatch(/changes? a field by itself/);
+    expect(copy).toMatch(/fills only empty fields[\s\S]*marked AI suggestion[\s\S]*clear[\s\S]*before saving/);
+    expect(copy).toMatch(/pre-selects[\s\S]*nothing is filed until you press Use/);
     expect(copy).toMatch(/own network/);
     expect(copy).toMatch(/off until you turn it on/);
     expect(copy).toMatch(/localhost[\s\S]*container/);

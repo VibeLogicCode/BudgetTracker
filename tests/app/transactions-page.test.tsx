@@ -11,6 +11,7 @@ import { readEnv } from '@/lib/env';
 import { bulkSetAttribution } from '@/lib/transactions';
 import { recordLocalAiFailure, saveLocalAiConfig, turnOffLocalAi } from '@/lib/ai/config';
 import { ignoreAiSuggestion, recordMerchantSuggestion } from '@/lib/ai/suggestions';
+import { setSetting } from '@/lib/settings';
 import { buildAiFixture, type AiFixture } from '../helpers/ai-fixture';
 
 /**
@@ -1154,6 +1155,17 @@ describe('TransactionsPage: AI suggestions in Review (v1.64.0)', () => {
     ignoreAiSuggestion({ merchant: 'MAPLE GROCER', userId: fx!.alex, at: AT });
     await renderPage({ review: '1' });
     expect(screen.queryByText('AI suggests:')).toBeNull();
+  });
+
+  it('carries none while switched on with a saved address that no longer passes, as the Settings card reads it', async () => {
+    setup(false);
+    // fd::1 is 00fd::1, a public address an earlier check let through.
+    setSetting('local_ai_enabled', '1');
+    setSetting('local_ai_base_url', 'http://[fd::1]:11434');
+    setSetting('local_ai_model', 'test-model:1b');
+    const { container } = await renderPage({ review: '1' });
+    expect(screen.queryByText('AI suggests:')).toBeNull();
+    expect(container.textContent).not.toContain('Maple Grocer');
   });
 
   it('serializes none to a self viewer asking for ?review=1', async () => {

@@ -1123,8 +1123,10 @@ export function TransactionsClient({
     lastGroupAction === null
       ? null
       : { confirmGroup: confirmGroupState, recatGroup: recatGroupState, confirmView: confirmViewState }[lastGroupAction];
+  // v1.64.0: aiResult sits LAST in both chains. It is a plain state that lives until its timer
+  // clears it, so anywhere earlier it would mask a newer action's result for those seconds.
   const notice =
-    aiResult.message ?? newLoanState.message ?? applyAllState.message ??
+    newLoanState.message ?? applyAllState.message ??
     attrState.message ?? bulkCatState.message ?? bulkTfrState.message ?? bulkRecurringState.message ??
     renameState.message ?? assignState.message ?? unassignState.message ?? splitState.message ?? noteState.message ??
     bulkLoanState.message ?? bulkNoteState.message ??
@@ -1138,15 +1140,15 @@ export function TransactionsClient({
     // assignState/unassignState: one-off actions whose result is only ever seen here.
     billState.message ?? deleteState.message ?? ruleCreateState.message ??
     acceptState.message ?? acceptAllState.message ?? rowTransferState.message ?? rowRecurringState.message ??
-    askSentMessage;
+    askSentMessage ?? aiResult.message;
   const error =
-    aiResult.error ?? newLoanState.error ?? applyAllState.error ??
+    newLoanState.error ?? applyAllState.error ??
     attrState.error ?? bulkCatState.error ?? bulkTfrState.error ?? bulkRecurringState.error ??
     renameState.error ?? assignState.error ?? unassignState.error ?? splitState.error ?? noteState.error ??
     bulkLoanState.error ?? bulkNoteState.error ??
     lastGroupState?.error ?? confirmGroupState.error ?? recatGroupState.error ?? confirmViewState.error ??
     billState.error ?? deleteState.error ?? ruleCreateState.error ??
-    acceptState.error ?? acceptAllState.error ?? rowTransferState.error ?? rowRecurringState.error;
+    acceptState.error ?? acceptAllState.error ?? rowTransferState.error ?? rowRecurringState.error ?? aiResult.error;
 
   // Review round: unlike renaming/noting/splitting (which close their own form onSubmit right
   // away, before the action even settles), the new-loan editor must stay open on a REFUSAL --

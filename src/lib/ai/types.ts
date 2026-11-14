@@ -29,6 +29,11 @@ export type AiReceiptPoll =
 /** Settings, Connections' one status line (localAiStatus). Times are ISO instants. */
 export interface LocalAiStatus {
   state: 'off' | 'on' | 'waiting';
+  /**
+   * The admin's switch (local_ai_enabled), whatever `state` says. True with `state: 'off'` means the
+   * saved address or model no longer passes the checks: off everywhere, but Settings offers Turn off.
+   */
+  enabled: boolean;
   lastOkAt: string | null;
   nextTryAt: string | null;
   failures: number;

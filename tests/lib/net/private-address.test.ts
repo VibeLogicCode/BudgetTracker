@@ -33,6 +33,24 @@ describe('isPrivateIpv6', () => {
     }
   });
 
+  it('accepts every first-group spelling of fc00::/7 and fe80::/10, any case', () => {
+    for (const host of ['fc00::1', 'fcff::1', 'fd00::1', 'fdff::1', '[FD12::1]', 'fe80::1', 'fe9f::1', 'feab::1', 'febf::1', '[FEBF::1]']) {
+      expect(isPrivateIpv6(host), host).toBe(true);
+    }
+  });
+
+  it('refuses a short first group, which is a different, public address (fc:: is 00fc::)', () => {
+    for (const host of ['fc::1', 'fd::1', '[fc::1]', '[fd::1]', 'fc0::1', 'fd1::1', 'fe8::1', 'fe9::1', 'fea::1', 'feb::1', '[fe8::1]', 'f::1', 'fe::1']) {
+      expect(isPrivateIpv6(host), host).toBe(false);
+    }
+  });
+
+  it('refuses the neighbours of each range', () => {
+    for (const host of ['fb00::1', 'fe00::1', 'fec0::1', 'fe7f::1', 'ffff::1']) {
+      expect(isPrivateIpv6(host), host).toBe(false);
+    }
+  });
+
   it('refuses a global address', () => {
     for (const host of ['[2001:db8::1]', '[2606:4700::1]', '2001:db8::1', '[::]', '[ff02::1]']) {
       expect(isPrivateIpv6(host), host).toBe(false);

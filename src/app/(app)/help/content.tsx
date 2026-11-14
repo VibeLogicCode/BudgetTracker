@@ -788,8 +788,9 @@ export const HELP_SECTIONS: HelpSection[] = [
           An admin can point the app at a language model running on your own network, with Ollama or
           llama.cpp. It offers <B>suggestions</B> and nothing more: a category and a tidy merchant name for
           rows in Review that nothing else has sorted, and the vendor, total and dates on a receipt being
-          read. It never files a row, writes a rule or changes a field by itself. You press Use, or you
-          ignore it.
+          read. It never files a row or writes a rule by itself. On a receipt it fills only empty fields,
+          each marked <B>AI suggestion</B>, and you can clear any of them before saving. In Review it
+          pre-selects its suggestion, but nothing is filed until you press Use; or you ignore it.
         </P>
         <P>
           It talks only to the address you enter, and that address must be on your own network: a 10.x,

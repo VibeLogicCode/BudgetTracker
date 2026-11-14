@@ -126,6 +126,40 @@ describe('isLanHostname and isPrivateAddress', () => {
   });
 });
 
+/**
+ * v1.64.0 review fix. The cloud metadata addresses are link-local and unique-local, so the shared
+ * private-address check passes them (the Watchtower guard keeps that); local AI refuses them, in
+ * every spelling a URL or a resolver can hand it.
+ */
+describe('the metadata addresses', () => {
+  it('refuses 169.254.169.254 and fd00:ec2::254 as typed, as URL literals and as resolved addresses', () => {
+    for (const input of [
+      'http://169.254.169.254',
+      'http://169.254.169.254:11434',
+      'http://2852039166',
+      'http://[fd00:ec2::254]',
+      'http://[fd00:0ec2:0000:0000:0000:0000:0000:0254]:11434',
+      'http://[FD00:EC2::254]',
+    ]) {
+      expect(normalizeLocalAiBaseUrl(input), input).toEqual({ ok: false, error: LOCAL_AI_LAN_ONLY_ERROR });
+    }
+    for (const address of ['169.254.169.254', 'fd00:ec2::254', 'fd00:ec2:0:0:0:0:0:254', 'FD00:0EC2::0254', '[fd00:ec2::254]', 'fd00:ec2::0.0.2.84']) {
+      expect(isPrivateAddress(address), address).toBe(false);
+    }
+    expect(isLanHostname('169.254.169.254')).toBe(false);
+    expect(isLanHostname('[fd00:ec2::254]')).toBe(false);
+    expect(() => assertLocalAiUrl('http://169.254.169.254/v1/models')).toThrow(/refusing a local AI request/);
+    expect(() => assertLocalAiUrl('http://[fd00:ec2::254]/v1/models')).toThrow(/refusing a local AI request/);
+  });
+
+  it('still accepts their neighbours', () => {
+    for (const address of ['169.254.169.253', '169.254.10.1', 'fd00:ec2::253', 'fd00::254', 'fe80::254']) {
+      expect(isPrivateAddress(address), address).toBe(true);
+    }
+    expect(normalizeLocalAiBaseUrl('http://169.254.169.1:11434')).toEqual({ ok: true, baseUrl: 'http://169.254.169.1:11434' });
+  });
+});
+
 describe('assertLocalAiUrl', () => {
   it('passes the two endpoints on a LAN host', () => {
     expect(LOCAL_AI_PATHS).toEqual(['/v1/chat/completions', '/v1/models']);
