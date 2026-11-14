@@ -838,6 +838,16 @@ describe('INSTALL.md', () => {
     }
   });
 
+  it('v1.64.0: both docs count four opt-in exceptions and name the LAN-only local AI helper', () => {
+    for (const doc of ['README.md', 'INSTALL.md']) {
+      const source = read(doc).replace(/\s+/g, ' ');
+      expect(source, doc).toMatch(/local AI/);
+      expect(source, doc).toMatch(/your own network/);
+      expect(source, doc).toMatch(/beyond four opt-in exceptions/);
+      expect(source, doc).not.toMatch(/three opt-in exceptions/);
+    }
+  });
+
   it('has a cross-origin FAQ entry naming TRUST_PROXY and X-Forwarded-Host (m4)', () => {
     expect(install).toMatch(/Cross-origin request rejected/);
     expect(install).toContain('TRUST_PROXY');

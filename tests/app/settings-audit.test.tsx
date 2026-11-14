@@ -73,6 +73,22 @@ describe('AuditPage', () => {
     expect(bodyText.indexOf('Undid an import')).toBeLessThan(bodyText.indexOf('Deleted an item'));
   });
 
+  it('labels the local AI actions (v1.64.0)', async () => {
+    current = createSeededTestDb();
+    const adminId = insertTestUser(current.db, { name: 'Admin', username: 'admin', role: 'admin' });
+    currentUser.value = { id: adminId, name: 'Admin', username: 'admin', role: 'admin', visibility: 'household' };
+    appendAudit({ userId: adminId, action: 'set_local_ai', entity: 'settings', entityId: 0, detail: 'Local AI on: test-model:1b at 192.168.1.50:11434', at: '2026-03-10T10:00:00.000Z' });
+    appendAudit({ userId: adminId, action: 'forget_ai_suggestions', entity: 'settings', entityId: 0, detail: 'Forgot 3 AI suggestions', at: '2026-03-10T11:00:00.000Z' });
+
+    const { default: AuditPage } = await import('@/app/(app)/settings/audit/page');
+    render(await AuditPage());
+
+    expect(screen.getByText('Changed local AI')).toBeTruthy();
+    expect(screen.getByText('Forgot AI suggestions')).toBeTruthy();
+    expect(screen.getByText('Local AI on: test-model:1b at 192.168.1.50:11434')).toBeTruthy();
+    expect(screen.getByText(/every local AI change/i)).toBeTruthy();
+  });
+
   it('falls back to the raw action string for an action label it does not recognize', async () => {
     current = createSeededTestDb();
     const adminId = insertTestUser(current.db, { name: 'Admin', username: 'admin', role: 'admin' });

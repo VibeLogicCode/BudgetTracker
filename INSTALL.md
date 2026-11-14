@@ -1,11 +1,13 @@
 # Installing Budget Tracker
 
 Budget Tracker runs as one Docker container with one SQLite file. There is no cloud account, no
-sign-up, and no network traffic at runtime beyond three opt-in exceptions: the optional SimpleFIN
+sign-up, and no network traffic at runtime beyond four opt-in exceptions: the optional SimpleFIN
 bank sync, notifications, dormant until a channel is configured and then reaching only
 `api.telegram.org` and the SMTP relay you enter, and update checks (2026-08-17 spec), dormant
 until an admin enables them and then reaching only `api.github.com`, one host and two endpoints,
-with no authentication and nothing about the install in the request. Pick your platform below;
+with no authentication and nothing about the install in the request, and an optional local AI
+helper, off until an admin turns it on, which then talks only to a model server on your own
+network and never to the internet. Pick your platform below;
 each path ends with a URL you can open.
 
 ---
@@ -91,8 +93,8 @@ taken verbatim, so stray leading/trailing whitespace in `.env` is significant th
 them and leaves them unset. The token has no default: put your own long random value in a `.env`
 file next to the compose file (see `install/synology-pull.env.example`). They are what lets Settings → About ask Watchtower to update on
 request instead of Watchtower polling on its own timer. The Watchtower endpoint sits on the
-compose project's private network and is never published to the host, so it is not a fourth
-egress destination beyond the three named above.
+compose project's private network and is never published to the host, so it is not a further
+egress destination beyond the four named above.
 
 **If you restore a backup onto a different machine, the receipt reader may need to re-check
 itself.** The app records, per processor family, whether the fast OCR engine runs on that

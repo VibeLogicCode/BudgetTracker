@@ -113,6 +113,27 @@ describe('the help page: part 2, the feature index', () => {
   });
 });
 
+describe('the help page: local AI (v1.64.0)', () => {
+  it('has a local-ai section with an id, after bank-sync, that says where, what, LAN-only, off and Docker', () => {
+    const ids = HELP_SECTIONS.map((entry) => entry.id);
+    expect(ids.indexOf('local-ai')).toBe(ids.indexOf('bank-sync') + 1);
+    const entry = section('local-ai');
+    expect(entry.title).toBe('Local AI is optional');
+    const copy = textOf(entry.body);
+    expect(copy).toContain('/settings/connections');
+    expect(copy).toMatch(/never files a row/);
+    expect(copy).toMatch(/own network/);
+    expect(copy).toMatch(/off until you turn it on/);
+    expect(copy).toMatch(/localhost[\s\S]*container/);
+    expect(copy).toMatch(/\.local[\s\S]*IP address/);
+  });
+
+  it('mentions AI suggestions in Review and receipts', () => {
+    expect(textOf(section('review').body)).toMatch(/AI suggestion[\s\S]*Remember[\s\S]*Ignore/);
+    expect(textOf(section('coverage').body)).toMatch(/Local AI on, it also fills only empty fields/);
+  });
+});
+
 describe('the help page covers the features no screen advertises', () => {
   const all = () => textOf(<>{[HELP_ROUTINE, ...HELP_SECTIONS].map((s) => <div key={s.id}>{s.body}</div>)}</>);
 

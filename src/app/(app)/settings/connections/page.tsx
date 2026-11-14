@@ -12,7 +12,9 @@ import {
   remainingRequestsToday,
 } from '@/lib/simplefin/connection';
 import { getSetting } from '@/lib/settings';
+import { localAiStatus, readLocalAiConfig } from '@/lib/ai/config';
 import { ConnectionsClient } from './connections-client';
+import { LocalAiCard } from './local-ai-card';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,7 +27,11 @@ export default async function ConnectionsPage() {
   // household's clock, HH:mm, with the day named when it is not today (a backoff runs up to 24h).
   const now = new Date();
   const backoff = autoSync !== null && connection !== null ? autoSyncBackoff(now) : null;
+  // v1.64.0: the optional local AI card. Reads settings only; nothing here waits on the model server.
+  const aiStatus = localAiStatus(now);
+  const aiConfig = readLocalAiConfig();
   return (
+    <div className="flex flex-col gap-4 sm:gap-5">
     <ConnectionsClient
       connection={connection}
       // v1.61.0: each link carries its start date (syncFrom), shown as `from May 29`; today lets a
@@ -47,5 +53,13 @@ export default async function ConnectionsPage() {
       // (better-sqlite3) and would break the client bundle. See connections-client.tsx.
       autoSyncOptions={Object.entries(AUTO_SYNC_INTERVALS).map(([value, cfg]) => ({ value, label: cfg.label }))}
     />
+    <LocalAiCard
+      status={aiStatus}
+      lastOkLabel={aiStatus.lastOkAt ? localTimeLabel(aiStatus.lastOkAt, now) : null}
+      nextTryLabel={aiStatus.nextTryAt ? localTimeLabel(aiStatus.nextTryAt, now) : null}
+      baseUrl={aiConfig?.baseUrl ?? getSetting('local_ai_base_url') ?? ''}
+      model={aiConfig?.model ?? getSetting('local_ai_model') ?? ''}
+    />
+    </div>
   );
 }

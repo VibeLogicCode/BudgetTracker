@@ -237,6 +237,12 @@ export const HELP_SECTIONS: HelpSection[] = [
           not spending at all, such as a credit-card payment from a chequing account.
         </P>
         <P>
+          If an admin has turned on <B>Local AI</B>, a row nothing else could sort may show an{' '}
+          <B>AI suggestion</B>: a category and a tidier merchant name. <B>Use</B> files it the way you
+          would have, <B>Remember</B> (ticked to start) teaches the app for the next row of that merchant, and{' '}
+          <B>Ignore</B> stops the suggestions for that merchant. Nothing is filed until you press Use.
+        </P>
+        <P>
           Some descriptions go to different places each time: an e-transfer to one person is rent and to
           another is a birthday present. <B>Always ask for rows like this…</B> on a row&rsquo;s menu tells the
           app never to file them on its own. No rule and no guess will categorize a matching row, choosing a
@@ -447,7 +453,8 @@ export const HELP_SECTIONS: HelpSection[] = [
           the paper's edges can be found; when they cannot, the whole photo is used and the page
           says so. Under each receipt you can open <B>What was read</B> to see the text and tap
           the figure you meant. A PDF with a text layer is read directly; a scanned PDF is not yet
-          supported — photograph the page instead.
+          supported — photograph the page instead. With Local AI on, it also fills only empty fields,
+          from what is printed on the receipt.
         </P>
         <P>
           A loan recorded here can have real transactions assigned to it from the Transactions
@@ -767,6 +774,36 @@ export const HELP_SECTIONS: HelpSection[] = [
           Where it is set up, each remote account maps to exactly one account here, a sync brings
           rows in with an overlap window so nothing falls through the gap between runs, and those
           rows go through the same review queue and the same undo path as an imported file.
+        </P>
+      </>
+    ),
+  },
+  {
+    id: 'local-ai',
+    title: 'Local AI is optional',
+    body: (
+      <>
+        <Where path="/settings/connections">Settings, then Connections —</Where>
+        <P>
+          An admin can point the app at a language model running on your own network, with Ollama or
+          llama.cpp. It offers <B>suggestions</B> and nothing more: a category and a tidy merchant name for
+          rows in Review that nothing else has sorted, and the vendor, total and dates on a receipt being
+          read. It never files a row, writes a rule or changes a field by itself. You press Use, or you
+          ignore it.
+        </P>
+        <P>
+          It talks only to the address you enter, and that address must be on your own network: a 10.x,
+          172.16&ndash;31.x or 192.168.x address, <code>localhost</code>, a one-word name, or a{' '}
+          <code>.local</code> name. Anything else is refused, and nothing is sent to the internet.
+        </P>
+        <P>
+          <B>It is off until you turn it on, and the app works the same without it.</B> If the model server
+          is down the app waits and tries again later; the only sign is one line on that page.
+        </P>
+        <P>
+          Inside Docker, <code>localhost</code> is the app&rsquo;s own container, not the machine that runs
+          the model, and a <code>.local</code> name may not resolve. Use the model server&rsquo;s IP address,
+          like <code>http://192.168.1.50:11434</code>.
         </P>
       </>
     ),

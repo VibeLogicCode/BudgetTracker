@@ -14,6 +14,8 @@ const ACTION_LABEL: Record<string, string> = {
   delete_item: 'Deleted an item',
   delete_receipt: 'Deleted a receipt',
   undo_import: 'Undid an import',
+  set_local_ai: 'Changed local AI',
+  forget_ai_suggestions: 'Forgot AI suggestions',
 };
 
 /**
@@ -29,7 +31,7 @@ export default async function AuditPage() {
       <PageHeader
         eyebrow="Settings"
         title="Audit log"
-        description="Every deletion and every undone import, with who did it."
+        description="Every deletion, every undone import and every local AI change, with who did it."
       />
       <Card>
         <CardHeader title="Recent activity" description="Newest first. Nothing here can be edited or removed." />

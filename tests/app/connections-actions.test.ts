@@ -171,7 +171,9 @@ describe('ConnectionsPage: the backoff line names the day when it is not today',
     for (let i = 0; i < failures; i += 1) recordAutoSyncFailure();
     vi.useFakeTimers({ now: new Date(now), toFake: ['Date'] });
     const { default: ConnectionsPage } = await import('@/app/(app)/settings/connections/page');
-    const element = (await ConnectionsPage()) as { props: { autoSyncWaiting: { nextTry: string } | null } };
+    // v1.64.0: the page is ConnectionsClient followed by the Local AI card, in one wrapper.
+    const page = (await ConnectionsPage()) as { props: { children: [{ props: { autoSyncWaiting: { nextTry: string } | null } }, unknown] } };
+    const element = page.props.children[0];
     return element.props.autoSyncWaiting?.nextTry;
   }
 

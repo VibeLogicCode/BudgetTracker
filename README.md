@@ -6,13 +6,15 @@ column-mapping wizard), the app categorizes spending and learns from corrections
 monthly budgets per category and savings goals.
 
 It runs as a single Docker container on a Synology NAS (or any Docker host), stays on your LAN,
-stores everything in one SQLite file, and makes **no network calls at runtime** beyond three
+stores everything in one SQLite file, and makes **no network calls at runtime** beyond four
 opt-in exceptions: the optional SimpleFIN bank sync, notifications, which stays dormant until you
 configure a channel and then reaches only `api.telegram.org` and the SMTP relay you typed in, and
 update checks (2026-08-17 spec), dormant until an admin enables them and then reaching only
 `api.github.com`, one host and two endpoints, with no authentication and nothing about the install
-in the request. No telemetry, no cloud account, no mandatory bank API. The receipt scanner and
-the new OCR engine (2026-08-22) add no fourth exception: the recognition models ship inside the
+in the request, and an optional local AI helper, off until an admin turns it on, which then talks
+only to a model server on your own network (a private or `.local` address; anything else is
+refused) and never to the internet. No telemetry, no cloud account, no mandatory bank API. The
+receipt scanner and the new OCR engine (2026-08-22) add no further exception: the recognition models ship inside the
 image, the scanner is served from the container under `/scanner/`, and nothing is fetched at
 run time to read a receipt.
 
@@ -303,7 +305,7 @@ example `openssl rand -hex 32`) in a `.env` file next to the compose file, using
 `install/synology-pull.env.example` as the starting point. They let the app ask
 its Watchtower companion to update on your say-so from Settings → About, instead of Watchtower
 polling on a timer. The Watchtower endpoint lives on the compose project's private network and is
-never published to the host, so it is not a fourth egress destination — see the note above.
+never published to the host, so it is not a further egress destination — see the note above.
 
 ---
 
