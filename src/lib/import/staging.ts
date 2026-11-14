@@ -30,7 +30,11 @@ const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 /** The most bytes all staged import files together may hold in DATA_DIR/tmp. */
 export const MAX_STAGED_IMPORT_BYTES = 200 * 1024 * 1024;
 
-export const STAGING_FULL_MESSAGE = 'Too many files are waiting to be imported. Import or clear some, then try again.';
+/** The most bytes one member's own staged import files may hold, so one person cannot fill the shared budget. */
+export const MAX_STAGED_IMPORT_BYTES_PER_MEMBER = 100 * 1024 * 1024;
+
+export const STAGING_FULL_MESSAGE =
+  'Too many files are waiting to be imported. Finish or cancel your pending imports, or try again later (unfinished uploads clear after a day).';
 
 /** The status a route answers a StagingError with: 429 when staging is full, else 410 (gone). */
 export function stagingErrorStatus(error: StagingError): number {
@@ -81,11 +85,33 @@ export function stagedImportBytes(): number {
   return total;
 }
 
+/** The bytes the staged import files owned by `userId` hold together (counted from the owner records). */
+export function stagedImportBytesFor(userId: number): number {
+  const dir = stagingDir();
+  if (!fs.existsSync(dir)) return 0;
+  let total = 0;
+  for (const entry of fs.readdirSync(dir)) {
+    if (!STAGED_IMPORT_RE.test(entry)) continue;
+    const stagingId = entry.slice(0, -'.csv'.length);
+    if (stagedImportOwner(stagingId) !== userId) continue;
+    try {
+      total += fs.statSync(path.join(dir, entry)).size;
+    } catch {
+      // Removed between the listing and the stat: nothing to count.
+    }
+  }
+  return total;
+}
+
 /**
  * Stages an import file for `uploadedBy`, recorded beside it. Refused with nothing written when it
- * would take the staged import files past MAX_STAGED_IMPORT_BYTES.
+ * would take that member's staged files past MAX_STAGED_IMPORT_BYTES_PER_MEMBER, or all staged
+ * import files past MAX_STAGED_IMPORT_BYTES.
  */
 export function writeStagedFile(buf: Buffer, uploadedBy: number): string {
+  if (stagedImportBytesFor(uploadedBy) + buf.length > MAX_STAGED_IMPORT_BYTES_PER_MEMBER) {
+    throw new StagingError(STAGING_FULL_MESSAGE, 'staging_full');
+  }
   if (stagedImportBytes() + buf.length > MAX_STAGED_IMPORT_BYTES) {
     throw new StagingError(STAGING_FULL_MESSAGE, 'staging_full');
   }

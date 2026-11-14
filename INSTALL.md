@@ -595,7 +595,7 @@ docker compose exec -T budget-tracker node --experimental-strip-types \
 It never takes the password on the command line. It sets the new password (10 to 1024
 characters), reactivates the account if it was deactivated and says so, signs out every one of
 that user's sessions, clears the recorded failed sign-ins (the per-username backoff and any
-per-browser counts) so the lockout lifts immediately, and records the reset in the audit log. The
+per-browser counts) so the lockout lifts immediately, and records the reset in the audit log. The reset clears that person's own counts; while the household-wide limit for browsers that have not signed in before is reached, only a browser that has signed in before gets in until it eases (15 minutes). The
 password you set works for one sign-in: the person then chooses their own before anything else. A
 person whose sign-in an admin withdrew still needs an admin to allow sign-in under **Settings →
 Users** first. Run it with no arguments to see the usage text, or with an unknown name to see the

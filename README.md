@@ -356,7 +356,7 @@ earned. Separately, once 100 sign-ins from browsers that have not signed in befo
 within 15 minutes, across every username together, all such browsers wait until that count drops;
 browsers that have signed in before are not held up. Either wait it out, or reset the password: an admin's
 **Reset password** under **Settings → Users**, or `npm run reset-password` on the host (see
-INSTALL.md for the `docker exec` form). Both clear the recorded attempts.
+INSTALL.md for the `docker exec` form). Both clear the recorded attempts. The reset clears that person's own counts; while the household-wide limit for browsers that have not signed in before is reached, only a browser that has signed in before gets in until it eases (15 minutes).
 
 **Someone lost their phone and their recovery codes.** An admin can clear their two-factor
 enrollment with **Reset MFA** under **Settings → Users**.

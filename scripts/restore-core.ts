@@ -124,6 +124,7 @@ export function assertArchiveEntriesAreSafe(artifactPath: string, opts: { freeBy
     problemCount += 1;
     if (problems.length < MAX_LISTED_PROBLEMS) problems.push(cleanRestoreText(text, MAX_LISTED_NAME_CHARS));
   };
+  const maxEntries = opts.maxEntries ?? MAX_ARCHIVE_ENTRIES;
   const seen = new Set<string>();
   let entryCount = 0;
   let expandedBytes = 0;
@@ -132,6 +133,12 @@ export function assertArchiveEntriesAreSafe(artifactPath: string, opts: { freeBy
     sync: true,
     onReadEntry: (entry) => {
       entryCount += 1;
+      // Past the cap the archive is refused whatever else it holds: stop tracking names so a huge
+      // listing cannot grow `seen` or the problem list, and flag it once.
+      if (entryCount > maxEntries) {
+        if (entryCount === maxEntries + 1) flag(`more than ${maxEntries} entries`);
+        return;
+      }
       if (entry.type === 'File') expandedBytes += Number(entry.size ?? 0);
       const name = entry.path.replace(/\/+$/, '');
       if (entry.type !== 'File' && entry.type !== 'Directory') {
@@ -161,12 +168,12 @@ export function assertArchiveEntriesAreSafe(artifactPath: string, opts: { freeBy
       }
     },
   });
+  if (entryCount > maxEntries) {
+    throw new RestoreError('That archive holds too many entries to restore. Nothing was changed.');
+  }
   if (problemCount > 0) {
     const more = problemCount > problems.length ? `, and ${problemCount - problems.length} more` : '';
     throw new RestoreError(`Refusing to extract unexpected archive entries: ${problems.join(', ')}${more}`);
-  }
-  if (entryCount > (opts.maxEntries ?? MAX_ARCHIVE_ENTRIES)) {
-    throw new RestoreError('That archive holds too many entries to restore. Nothing was changed.');
   }
   const free = opts.freeBytes ?? freeBytesAt(path.dirname(path.resolve(artifactPath)));
   if (expandedBytes + RESTORE_HEADROOM_BYTES > free) {

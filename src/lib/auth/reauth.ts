@@ -1,4 +1,5 @@
 import { KNOWN_DEVICE_COOKIE_NAME, knownDeviceFor } from './known-device';
+import { BUSY_LOGIN_ERROR } from './login';
 import { verifyPassword } from './password';
 import { checkLockout, clientIpFromHeaders, lockoutMessage, recordLoginAttempt } from './ratelimit';
 import { readCookieFromHeader, type SessionUser } from './session';
@@ -35,14 +36,27 @@ function bucketFor(context: ReauthContext): { username: string; ip: string; devi
   };
 }
 
+/**
+ * Users with a re-check being verified right now. A second one for the same user is refused busy,
+ * so one signed-in member cannot keep the shared password line full.
+ */
+const checking = new Set<number>();
+
 export async function verifyCurrentPassword(input: ReauthContext & { password: string }): Promise<ReauthResult> {
   const at = input.at ?? new Date();
   const bucket = bucketFor(input);
   const lock = checkLockout({ ...bucket, at });
   if (lock.locked) return { ok: false, error: lockoutMessage(lock.retryAfterMs) };
 
-  const record = findUserByUsername(input.user.username);
-  const matches = record !== null && (await verifyPassword(record.passwordHash, input.password));
+  if (checking.has(input.user.id)) return { ok: false, error: BUSY_LOGIN_ERROR };
+  checking.add(input.user.id);
+  let matches: boolean;
+  try {
+    const record = findUserByUsername(input.user.username);
+    matches = record !== null && (await verifyPassword(record.passwordHash, input.password));
+  } finally {
+    checking.delete(input.user.id);
+  }
   if (!matches) {
     recordLoginAttempt({ ...bucket, success: false, at });
     return { ok: false, error: WRONG_CURRENT_PASSWORD };

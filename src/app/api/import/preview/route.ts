@@ -7,7 +7,7 @@ import { importMappingSchema, type ImportMapping } from '@/lib/import/mapping';
 import { looksLikeOfx } from '@/lib/import/ofx';
 import { getProfile } from '@/lib/import/presets';
 import { buildPreview } from '@/lib/import/preview';
-import { StagingError, readStagedFile, stagingErrorStatus, writeStagedFile } from '@/lib/import/staging';
+import { StagingError, deleteStagedFile, readStagedFile, stagingErrorStatus, writeStagedFile } from '@/lib/import/staging';
 import { readFormOrNull, uploadTooLargeResponse } from '@/lib/upload-limits';
 import { ImportLimitError, MAX_FILE_BYTES } from '@/lib/import/parse';
 
@@ -68,6 +68,7 @@ export async function POST(request: Request): Promise<Response> {
 
   const contentType = request.headers.get('content-type') ?? '';
   let payload: unknown;
+  let stagedHere = false;
 
   if (contentType.includes('multipart/form-data')) {
     // First hop: the browser posts the file itself.
@@ -99,6 +100,7 @@ export async function POST(request: Request): Promise<Response> {
     let stagingId: string;
     try {
       stagingId = writeStagedFile(buf, user.id);
+      stagedHere = true;
     } catch (error) {
       if (error instanceof StagingError) return Response.json({ error: error.message, code: error.code }, { status: stagingErrorStatus(error) });
       throw error;
@@ -162,6 +164,8 @@ export async function POST(request: Request): Promise<Response> {
     });
     return Response.json(preview);
   } catch (error) {
+    // A file this request staged itself is not left behind when it cannot be read.
+    if (stagedHere) deleteStagedFile(parsed.data.stagingId, user.id);
     if (error instanceof ImportLimitError) return Response.json({ error: error.message, code: error.code }, { status: 413 });
     // `code` tells the client WHICH 410 this is: 'staged_file_missing' means the bytes were swept
     // or already imported, and the screen offers to choose the file again.

@@ -179,8 +179,11 @@ The new password is never taken on the command line. It must be ${MIN_PASSWORD_L
 ${MAX_PASSWORD_LENGTH} characters, works for one sign-in, and the person then chooses their own.
 The account is reactivated if it was deactivated, every one of its sessions is
 signed out, its failed-login history is cleared so the lockout lifts immediately,
-and the reset is recorded in the audit log. A person whose sign-in an admin
-withdrew still needs an admin to allow sign-in again.
+and the reset is recorded in the audit log. The reset clears that person's own
+counts; while the household-wide limit for browsers that have not signed in before
+is reached, only a browser that has signed in before gets in until it eases (15
+minutes). A person whose sign-in an admin withdrew still needs an admin to allow
+sign-in again.
 
   --clear-mfa   Also turn off two-factor authentication for that user: clears
                 totp_enabled, deletes the stored (encrypted) TOTP secret, and

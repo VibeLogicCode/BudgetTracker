@@ -241,6 +241,17 @@ describe('the forced password change', () => {
 });
 
 describe('verifyCurrentPassword', () => {
+  it('refuses a second concurrent re-check for the same user as busy, then allows the next', async () => {
+    const { alex } = await signedIn();
+    const user = { id: alex.id, name: 'Alex', username: 'alex', role: 'admin' as const, visibility: 'household' as const };
+    const headers = new Headers();
+    const first = verifyCurrentPassword({ user, password: PASSWORD, headers });
+    const second = await verifyCurrentPassword({ user, password: PASSWORD, headers });
+    expect(second).toEqual({ ok: false, error: 'The server is busy. Try again in a moment.' });
+    expect(await first).toEqual({ ok: true });
+    expect(await verifyCurrentPassword({ user, password: PASSWORD, headers })).toEqual({ ok: true });
+  });
+
   it('counts a re-check from a recognised browser in that browser’s own bucket', async () => {
     const { alex } = await signedIn();
     const device = withKnownDevice(undefined, 'alex');

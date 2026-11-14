@@ -73,7 +73,7 @@ export async function POST(request: Request): Promise<Response> {
   if (countStagedReceiptsBy(user.id) + parts.length > MAX_STAGED_RECEIPTS_PER_MEMBER) {
     return Response.json(
       {
-        error: `You already have ${MAX_STAGED_RECEIPTS_PER_MEMBER} uploaded receipts not saved to an item. Save those first; unsaved uploads are cleared after a day.`,
+        error: `You already have ${MAX_STAGED_RECEIPTS_PER_MEMBER} uploaded receipts not saved to an item. Save or remove those first; they clear on their own after a day if not saved.`,
         code: 'too_many_staged',
       },
       { status: 429 },

@@ -664,6 +664,19 @@ describe('archive size and shape', () => {
     }
   };
 
+  it('answers too many entries for a long listing, without listing each entry as a problem', async () => {
+    const names = Array.from({ length: 40 }, (_, i) => `extra-${i}.bin`);
+    const artifact = await tarDuplicate(names, {});
+    let message = '';
+    try {
+      assertArchiveEntriesAreSafe(artifact, { freeBytes: 10 ** 12, maxEntries: 5 });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toMatch(/too many entries/);
+    expect(message).not.toMatch(/extra-30/);
+  });
+
   it('refuses an archive whose declared sizes exceed the free space, extracting nothing', async () => {
     const artifact = await makeArchive(work);
     const scratch = path.join(work, 'scratch-free');

@@ -163,6 +163,20 @@ describe('POST /api/import/preview', () => {
     expect(fs.existsSync(tmp) ? fs.readdirSync(tmp) : []).toHaveLength(0);
   });
 
+  it('removes the staged file when the preview cannot be built from it', async () => {
+    const rows = Array.from({ length: MAX_ROWS + 5 }, () => '03/02/2026,COFFEE,4.85,,0.00').join(String.fromCharCode(10));
+    const form = new FormData();
+    form.append('file', new File([rows], 'many.csv', { type: 'text/csv' }));
+    form.append('accountId', String(accountId));
+    form.append('profileId', String(profileId));
+    const response = await previewRoute(
+      new Request('http://nas.local:3000/api/import/preview', { method: 'POST', headers: headers(), body: form }),
+    );
+    expect(response.status).toBe(413);
+    const tmp = path.join(tempDir, 'tmp');
+    expect(fs.existsSync(tmp) ? fs.readdirSync(tmp) : []).toHaveLength(0);
+  });
+
   it('rejects on the declared content-length alone, before formData/json is ever called (review finding 1)', async () => {
     const formDataSpy = vi.fn(async () => {
       throw new Error('formData() must not be called once content-length already exceeds the cap');

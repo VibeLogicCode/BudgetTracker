@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   MAX_STAGED_IMPORT_BYTES,
+  MAX_STAGED_IMPORT_BYTES_PER_MEMBER,
+  STAGING_FULL_MESSAGE,
   StagingError,
   deleteStagedFile,
   purgeStagedFiles,
@@ -215,6 +217,21 @@ describe('staged import owner', () => {
 });
 
 describe('staged import budget', () => {
+  it('refuses one member past their own share while another member can still stage', () => {
+    const filler = writeStagedFile(Buffer.alloc(0), SAM);
+    fs.truncateSync(stagedFilePath(filler), MAX_STAGED_IMPORT_BYTES_PER_MEMBER);
+    let refused: unknown;
+    try {
+      writeStagedFile(Buffer.from('x'), SAM);
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(StagingError);
+    expect((refused as StagingError).message).toBe(STAGING_FULL_MESSAGE);
+    expect(STAGING_FULL_MESSAGE).toMatch(/pending imports/);
+    expect(() => writeStagedFile(Buffer.from('x'), ALEX)).not.toThrow();
+  });
+
   it('refuses a file past MAX_STAGED_IMPORT_BYTES with nothing written', () => {
     // One staged file sized up to four bytes short of the budget, without writing its bytes.
     const filler = writeStagedFile(Buffer.alloc(0), SAM);
