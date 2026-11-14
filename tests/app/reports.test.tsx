@@ -12,6 +12,8 @@ import { setTransactionSplits } from '@/lib/splits';
 import type { Viewer } from '@/lib/auth/viewer';
 import type { SavingsMonthRow } from '@/app/(app)/reports/reports-client';
 import { createSeededTestDb, createTestDb, categoryIdByName, type TestDb } from '../helpers/db';
+import type { YearInReviewData } from '@/components/YearInReviewCard';
+import { buildYearEndFixture, type YearEndFixture } from '../helpers/year-end-fixture';
 
 /**
  * v1.13.0 ruling R2: reports are force-scoped -- every one of Task 6's seven aggregates takes
@@ -402,7 +404,11 @@ describe('ReportsPage — savings targets in one read (v1.60.0 item 13b)', () =>
     return (element.props as { cashflow: SavingsMonthRow[] }).cashflow;
   }
 
-  /** Cashflow queries prepared during `run` -- the grouped month-by-income read, old shape or new. */
+  /**
+   * Cashflow queries prepared during `run` -- the grouped month-by-income read, old shape or new.
+   * v1.63.0: every count below includes YEAR_IN_REVIEW_READS, the Year in review card's one
+   * cashflowForRange over the selected year, which is not the savings card's.
+   */
   async function cashflowReads(run: () => Promise<unknown>): Promise<number> {
     const sqlite = t!.sqlite;
     const original = sqlite.prepare.bind(sqlite);
@@ -418,6 +424,8 @@ describe('ReportsPage — savings targets in one read (v1.60.0 item 13b)', () =>
     }
     return count;
   }
+
+  const YEAR_IN_REVIEW_READS = 1;
 
   /** v1.59.1's computation: the card's own row, plus savingsProgress for that month. */
   function oracle(person: number | null, viewer: Viewer): SavingsMonthRow[] {
@@ -440,7 +448,7 @@ describe('ReportsPage — savings targets in one read (v1.60.0 item 13b)', () =>
     expect(rows.map((row) => row.met)).toEqual([true, true, false]);
     expect(rows.every((row) => row.targetCents !== null)).toBe(true);
     // The card rows and the household rows; v1.59.1 read the card rows plus one per month.
-    expect(await cashflowReads(() => cashflowProp(params))).toBe(2);
+    expect(await cashflowReads(() => cashflowProp(params))).toBe(2 + YEAR_IN_REVIEW_READS);
   });
 
   it('with no person filter, the household rows are the card rows: one cashflow read', async () => {
@@ -448,7 +456,7 @@ describe('ReportsPage — savings targets in one read (v1.60.0 item 13b)', () =>
     currentUser.value = { id: alex.id, name: 'Alex', username: 'alex', role: 'admin', visibility: 'household' };
     const viewer: Viewer = { id: alex.id, role: 'admin', visibility: 'household' };
     expect(await cashflowProp(RANGE)).toEqual(oracle(null, viewer));
-    expect(await cashflowReads(() => cashflowProp(RANGE))).toBe(1);
+    expect(await cashflowReads(() => cashflowProp(RANGE))).toBe(1 + YEAR_IN_REVIEW_READS);
   });
 
   it('a self viewer gets savingsProgress over their own rows, as before, whatever person the URL names', async () => {
@@ -456,7 +464,7 @@ describe('ReportsPage — savings targets in one read (v1.60.0 item 13b)', () =>
     currentUser.value = { id: sam.id, name: 'Sam', username: 'sam', role: 'member', visibility: 'self' };
     const samSelf: Viewer = { id: sam.id, role: 'member', visibility: 'self' };
     expect(await cashflowProp({ ...RANGE, person: String(alex.id) })).toEqual(oracle(sam.id, samSelf));
-    expect(await cashflowReads(() => cashflowProp(RANGE))).toBe(1);
+    expect(await cashflowReads(() => cashflowProp(RANGE))).toBe(1 + YEAR_IN_REVIEW_READS);
   });
 });
 
@@ -524,5 +532,121 @@ describe('ReportsPage — no link that bounces the viewer (v1.60.0 item 8)', () 
     expect(all).toContain('/import');
     expect(all).toContain('/settings/managers');
     expect(all).toContain('/settings/accounts');
+  });
+});
+
+/**
+ * v1.63.0 (plan 2026-11-12, B7). The Year in review card's props, built by the page over the
+ * viewer's own scope, on the year-end fixture (2026: Medical and Charity flagged, receipts r1 and
+ * r2). The page's element is read directly, so a prop that never renders is checked too.
+ */
+describe('ReportsPage: Year in review (v1.63.0)', () => {
+  let fx: YearEndFixture | null = null;
+  afterEach(() => {
+    fx?.cleanup();
+    fx = null;
+    vi.setSystemTime(new Date('2026-03-18T16:00:00.000Z'));
+  });
+
+  async function pageProps(viewer: { id: number; name: string; role: 'admin' | 'member'; visibility: 'household' | 'self' }, taxYear = '2026') {
+    currentUser.value = { ...viewer, username: viewer.name.toLowerCase() };
+    const { default: ReportsPage } = await import('@/app/(app)/reports/page');
+    const element = (await ReportsPage({ searchParams: Promise.resolve({ taxYear }) })) as unknown as {
+      props: { yearInReview: YearInReviewData | null; taxYears: number[]; taxRows: { categoryName: string; byUser: unknown[] }[] };
+    };
+    return { element, props: element.props };
+  }
+
+  const figures = (review: YearInReviewData | null) => ({
+    title: review === null ? null : `${review.year}${review.current ? ' so far' : ''} to ${review.through}`,
+    totals: review?.totals,
+    top: review?.topCategories.map((row) => [row.categoryName, row.spentCents]),
+    largest: review?.largest.map((row) => [row.description, row.categoryName, row.spentCents]),
+    pack: review?.pack,
+  });
+
+  it('admin, a past year: the household year, to December 31', async () => {
+    vi.setSystemTime(new Date('2027-02-01T16:00:00.000Z'));
+    fx = buildYearEndFixture();
+    const { props } = await pageProps({ id: fx.admin, name: 'Admin', role: 'admin', visibility: 'household' });
+    expect(figures(props.yearInReview)).toEqual({
+      title: '2026 to 2026-12-31',
+      totals: { incomeCents: 250000, uncategorizedInCents: 0, spendCents: 33217, netCents: 216783 },
+      top: [
+        ['Medical', 15217],
+        ['Groceries', 8000],
+        ['Charity', 6000],
+        ['Dining', 4000],
+      ],
+      largest: [
+        ['CITY CLINIC', 'Medical', 12000],
+        ['COMMUNITY FUND', 'Split', 10000],
+        ['MAPLE GROCER', 'Groceries', 8000],
+        ['PHARMACY PLUS', 'Pharmacy', 4217],
+      ],
+      pack: { line: 'Includes 2 receipts, 41 bytes.', zipAvailable: true },
+    });
+  });
+
+  it('self viewer Alex: his own year, and no other person name or amount anywhere in the props', async () => {
+    vi.setSystemTime(new Date('2027-02-01T16:00:00.000Z'));
+    fx = buildYearEndFixture();
+    const { props } = await pageProps({ id: fx.alex, name: 'Alex', role: 'member', visibility: 'self' });
+    expect(figures(props.yearInReview)).toEqual({
+      title: '2026 to 2026-12-31',
+      totals: { incomeCents: 250000, uncategorizedInCents: 0, spendCents: 17217, netCents: 232783 },
+      top: [
+        ['Groceries', 8000],
+        ['Charity', 6000],
+        ['Medical', 3217],
+      ],
+      largest: [
+        ['MAPLE GROCER', 'Groceries', 8000],
+        ['COMMUNITY FUND', 'Charity', 6000],
+        ['PHARMACY PLUS', 'Pharmacy', 4217],
+      ],
+      pack: { line: 'Includes 1 receipt, 25 bytes.', zipAvailable: true },
+    });
+    expect(props.taxYears).toEqual([2026, 2025]);
+    expect(props.taxRows.map((row) => [row.categoryName, row.byUser])).toEqual([
+      ['Charity', [{ userId: fx.alex, label: 'Alex', cents: 6000 }]],
+      ['Medical', [{ userId: fx.alex, label: 'Alex', cents: 3217 }]],
+    ]);
+    const serialized = JSON.stringify(props);
+    for (const forbidden of ['Sam', 'CITY CLINIC', 'Dining', '12000', '15217', '33217', 'Household/unattributed']) {
+      expect(serialized, forbidden).not.toContain(forbidden);
+    }
+  });
+
+  it('a self viewer sees the card and its downloads, and still no Tax year card', async () => {
+    vi.setSystemTime(new Date('2027-02-01T16:00:00.000Z'));
+    fx = buildYearEndFixture();
+    const { element } = await pageProps({ id: fx.alex, name: 'Alex', role: 'member', visibility: 'self' });
+    const { container } = render(element as unknown as React.ReactElement);
+    expect(screen.getByRole('heading', { name: 'Year in review: 2026' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Tax year' })).toBeNull();
+    expect(container.querySelector('a[href="/api/reports/tax-detail?year=2026"]')).toBeTruthy();
+    expect(container.querySelector('a[href="/api/reports/year-end?year=2026"]')).toBeTruthy();
+  });
+
+  it('the current year reads so far and stops at today', async () => {
+    vi.setSystemTime(new Date('2026-05-01T16:00:00.000Z'));
+    fx = buildYearEndFixture();
+    const { element, props } = await pageProps({ id: fx.admin, name: 'Admin', role: 'admin', visibility: 'household' });
+    const review = figures(props.yearInReview);
+    expect(review.title).toBe('2026 so far to 2026-05-01');
+    // COMMUNITY FUND (June 1) is after today: not spent yet as far as this card knows.
+    expect(review.totals?.spendCents).toBe(23217);
+    expect(review.largest?.map(([description]) => description)).toEqual(['CITY CLINIC', 'MAPLE GROCER', 'PHARMACY PLUS']);
+    render(element as unknown as React.ReactElement);
+    expect(screen.getByRole('heading', { name: 'Year in review: 2026 so far' })).toBeTruthy();
+  });
+
+  it('follows the Year picker, under its old parameter name', async () => {
+    vi.setSystemTime(new Date('2027-02-01T16:00:00.000Z'));
+    fx = buildYearEndFixture();
+    const { props } = await pageProps({ id: fx.admin, name: 'Admin', role: 'admin', visibility: 'household' }, '2025');
+    expect(props.yearInReview?.year).toBe(2025);
+    expect(props.yearInReview?.totals.spendCents).toBe(5500);
   });
 });

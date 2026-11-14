@@ -353,7 +353,7 @@ describe('v1.63.0: every split-joined aggregate counts a part for its own person
       spend: [...categorySpend(MONTH, { scope: 'household' })].sort(([a], [b]) => a - b),
       progress: flattenBudgetRows(budgetProgress(MONTH, 'household', null)).map((row) => [row.categoryId, row.spentCents]),
       series: categorySeries({ months: [MONTH], scope: 'household', userId: null }).map((row) => [row.categoryId, row.monthlyCents]),
-      tax: taxYearReport(2026).map((row) => [row.categoryName, row.totalCents]),
+      tax: taxYearReport(2026, fx.admin).map((row) => [row.categoryName, row.totalCents]),
       peopleTotal: personSpendSplit(MARCH, fx.admin).reduce((sum, row) => sum + row.spentCents, 0),
     };
   }

@@ -43,16 +43,13 @@ import { savingsRate } from '@/lib/savings-rate';
 // dashboard's Server Component and the transactions row menu share it with this file rather
 // than each hand-rolling a querystring -- see its own docblock for why that mattered.
 import { transactionsHref, type TransactionsLinkScope, type TransactionsLinkTarget } from '@/lib/transaction-links';
-import type { TaxYearRow } from '@/lib/tax';
+// v1.63.0 (B7): the tax rows' order and total live in the pure tax-order module, shared with the
+// Year in review card, so the two cards cannot total the same rows differently.
+import { orderTaxRows, taxGrandTotal, type TaxYearDisplayRow } from '@/lib/tax-order';
 import { buttonClass } from '@/components/ui/Button';
+import { YearInReviewCard, type YearInReviewData } from '@/components/YearInReviewCard';
 
-/** Task 15b (v1.7.0): one taxYearReport() row, plus its place in the category tree. tax.ts's
- *  TaxYearRow does not carry parentId -- a tax-year row does not otherwise need it -- so the
- *  page attaches it before handing rows to this card, which needs it to indent a flagged child
- *  under its flagged parent and disclose the overlap (see orderTaxRows below). */
-export interface TaxYearDisplayRow extends TaxYearRow {
-  parentId: number | null;
-}
+export type { TaxYearDisplayRow } from '@/lib/tax-order';
 
 /**
  * Savings targets, Lane 4 (spec docs/superpowers/plans/2026-08-30-savings-targets.md,
@@ -109,6 +106,7 @@ export function ReportsClient({
   taxYears,
   taxYear,
   taxRows,
+  yearInReview,
   showPersonSplit,
   showHouseholdTotals,
   showExport,
@@ -167,8 +165,13 @@ export function ReportsClient({
   /** The resolved selected year, or null when taxYears is empty (no data at all yet). */
   taxYear: number | null;
   /** taxYearReport(taxYear), each row's parentId attached by the page. Empty whenever nothing
-   *  is flagged for this year, which is what drives the card's empty state below. */
+   *  is flagged for this year, which is what drives the card's empty state below. v1.63.0: read
+   *  through the viewer, so a self viewer's rows are their own (the Year in review card shows
+   *  them; the Tax year card stays household-only). */
   taxRows: TaxYearDisplayRow[];
+  /** v1.63.0 (B7): the Year in review card's figures for `taxYear`, or null when there is no year
+   *  to review yet. Built by the page for every viewer, over that viewer's own scope. */
+  yearInReview: YearInReviewData | null;
   /** v1.13.0 ruling R2: false for a self viewer -- there is no per-person breakdown to offer
    *  when the person scope is always and only themselves, so the picker's Person field and the
    *  "Who spent it" card are both dropped rather than shown with one row. */
@@ -313,8 +316,10 @@ export function ReportsClient({
             <Field label="Compare month">
               <input type="month" name="yoyMonth" defaultValue={yoyMonth} max={monthOf(today)} className={inputClass} />
             </Field>
+            {/* v1.63.0 (B7): `Year` for every viewer, since it now feeds the Year in review card
+                as well as the Tax year card. The parameter keeps its name, so old links work. */}
             {taxYears.length > 0 ? (
-              <Field label="Tax year">
+              <Field label="Year">
                 <select name="taxYear" defaultValue={taxYear ?? ''} className={selectClass}>
                   {taxYears.map((year) => (
                     <option key={year} value={year}>
@@ -328,7 +333,8 @@ export function ReportsClient({
           </form>
           <p className="text-xs text-subtle">
             The dates{showPersonSplit ? ' and person' : ''} drive every card. Compare month feeds
-            year-over-year{taxYears.length > 0 ? ', and Tax year feeds the tax year card' : ''}.
+            year-over-year
+            {taxYears.length > 0 ? `, and Year feeds the year in review${showHouseholdTotals ? ' and the tax year card' : ''}` : ''}.
           </p>
         </CardBody>
       </Card>
@@ -710,7 +716,7 @@ export function ReportsClient({
           when the person scope is always and only themselves. */}
       {showPersonSplit ? (
         <Card>
-          <CardHeader title="Who spent it" description="Split by the person each transaction is attributed to." />
+          <CardHeader title="Who spent it" description="Split by the person each transaction, or each part of a split, belongs to." />
           {/* item A (ruling P2): NOT split.length === 0 -- personSpendSplit always pushes the
               unattributed bucket (src/lib/reports.ts:361-362), deliberately, so this array is never
               empty for the only viewer who sees this card and the branch below was unreachable. The
@@ -833,10 +839,15 @@ export function ReportsClient({
         </Card>
       ) : null}
 
-      {/* Ruling R2 (fix round 1): dropped entirely for a self viewer -- taxYearReport() rolls up
-          every household member's spend with no owner scoping of its own, and the Download CSV
-          link below points at a household-wide route (Task 14 refuses it server-side, but a
-          self viewer is not offered it here in the first place). */}
+      {/* v1.63.0 (B7): the year in review, for every viewer and over their own scope -- a self
+          viewer's figures, tax rows, largest purchases and downloads are their own rows only
+          (owner decision 1). Above the Tax year card, which it summarises. */}
+      {yearInReview !== null ? <YearInReviewCard data={yearInReview} taxRows={taxRows} isAdmin={isAdmin} /> : null}
+
+      {/* Ruling R2 (fix round 1): dropped entirely for a self viewer. v1.63.0: taxYearReport() now
+          scopes itself to the viewer and a self viewer reads their own tax rows on the Year in
+          review card above, but THIS card's job is the household's per-person breakdown, which
+          is a household comparison R2 still keeps from a self viewer. */}
       {showHouseholdTotals ? (
         <Card>
           <CardHeader
@@ -896,7 +907,7 @@ export function ReportsClient({
                         >
                           {/* F-01's highest-value link: the whole tax year, that category, THAT
                               PERSON. The person comes from the ROW, never from the page's filter
-                              -- taxYearReport takes no person scope at all, so this card's own
+                              -- taxYearReport takes no person filter at all, so this card's own
                               figures do not follow the picker and a link that carried it would
                               open a list that does not add up to the amount beside it. The
                               transaction list this reaches is what a return actually needs, which
@@ -1153,40 +1164,4 @@ function accountsNote(accountsMissing: number, accountsStale: number): string {
     return `${missingPhrase}. Update ${accountsMissing === 1 ? 'it' : 'them'} in Settings and Accounts.`;
   }
   return `${stalePhrase}. Update ${accountsStale === 1 ? 'it' : 'them'} in Settings and Accounts.`;
-}
-
-/**
- * Task 15b: pairs each taxYearReport() row with whether it is a flagged child nested under a
- * flagged parent that is ALSO present in this year's rows -- the one case where two rows on
- * this card overlap (src/lib/tax.ts's module doc comment: a flagged parent's row always folds
- * in every child's spend, flagged or not, so a separately-flagged child's own row duplicates
- * part of its parent's total by design).
- *
- * A nested row is placed directly after its parent regardless of where taxYearReport's own
- * totalCents-descending sort put it -- the whole point of nesting is that the two rows read
- * together, adjacent, not wherever their totals happened to rank. A child whose parent is not
- * separately flagged (so the parent never appears as its own row here) has nothing to overlap
- * with and stays at the top level, in taxYearReport's original order.
- */
-function orderTaxRows(rows: TaxYearDisplayRow[]): { row: TaxYearDisplayRow; nested: boolean }[] {
-  const presentIds = new Set(rows.map((row) => row.categoryId));
-  const nestedIds = new Set(
-    rows.filter((row) => row.parentId !== null && presentIds.has(row.parentId)).map((row) => row.categoryId),
-  );
-  const ordered: { row: TaxYearDisplayRow; nested: boolean }[] = [];
-  for (const row of rows) {
-    if (nestedIds.has(row.categoryId)) continue;
-    ordered.push({ row, nested: false });
-    for (const child of rows) {
-      if (nestedIds.has(child.categoryId) && child.parentId === row.categoryId) ordered.push({ row: child, nested: true });
-    }
-  }
-  return ordered;
-}
-
-/** The card's own total. A nested row's spend already counts inside the parent row placed
- *  directly above it, so only the non-nested rows are added -- summing every row's totalCents
- *  unconditionally would double the exact overlap this card exists to disclose. */
-function taxGrandTotal(ordered: { row: TaxYearDisplayRow; nested: boolean }[]): number {
-  return ordered.filter((entry) => !entry.nested).reduce((sum, entry) => sum + entry.row.totalCents, 0);
 }

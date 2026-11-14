@@ -9,6 +9,7 @@ import {
 } from '@/app/(app)/reports/reports-client';
 import { buildSavingsSeries, flowTooltipValue, hasAnyTarget, SavingsChart } from '@/components/charts/SavingsChart';
 import { UNATTRIBUTED_LABEL } from '@/lib/reports';
+import type { YearInReviewData } from '@/components/YearInReviewCard';
 import type { ResolvedRange } from '@/lib/date-range';
 import type { NetWorthPoint } from '@/lib/networth';
 
@@ -47,6 +48,7 @@ function baseProps(
     taxYear?: number | null;
     taxRows?: TaxYearDisplayRow[];
     cashflow?: SavingsMonthRow[];
+    yearInReview?: YearInReviewData | null;
   } = {},
 ) {
   return {
@@ -75,6 +77,8 @@ function baseProps(
     taxYears: overrides.taxYears ?? [],
     taxYear: overrides.taxYear ?? null,
     taxRows: overrides.taxRows ?? [],
+    // v1.63.0: no Year in review card unless a test asks for one.
+    yearInReview: overrides.yearInReview ?? null,
     // v1.13.0 ruling R2: every fixture in this file predates the household/self split, so it
     // keeps the pre-existing (household-viewer) behavior -- the person picker and split card
     // both visible -- unless a test overrides it.
@@ -1016,5 +1020,55 @@ describe('ReportsClient — no link to a page that bounces the viewer (v1.60.0 i
     expect(hrefs(container).filter((href) => href.startsWith('/import'))).toEqual([]);
     expect(within(cardByTitle(container, 'Category baselines')).getByText(/A household member or an admin can import older statements\./)).toBeTruthy();
     expect(within(cardByTitle(container, 'Debt over time')).getByText(/A household member or an admin can import older/)).toBeTruthy();
+  });
+});
+
+/** v1.63.0 (plan 2026-11-12, B7). The Year in review card's place on the page, and the copy around it. */
+describe('ReportsClient: Year in review (v1.63.0)', () => {
+  const review: YearInReviewData = {
+    year: 2026,
+    current: false,
+    through: '2026-12-31',
+    totals: { incomeCents: 250000, uncategorizedInCents: 0, spendCents: 33217, netCents: 216783 },
+    topCategories: [{ categoryId: 1, categoryName: 'Medical', spentCents: 15217 }],
+    largest: [],
+    pack: { line: 'Includes 2 receipts, 41 bytes.', zipAvailable: true },
+  };
+  const headings = (container: HTMLElement) => [...container.querySelectorAll('h2')].map((h) => h.textContent);
+
+  it('renders above the Tax year card, for the selected year', () => {
+    const { container } = render(<ReportsClient {...baseProps({ taxYears: [2026], taxYear: 2026, yearInReview: review })} />);
+    const all = headings(container);
+    expect(all.indexOf('Year in review: 2026')).toBeGreaterThan(-1);
+    expect(all.indexOf('Year in review: 2026')).toBeLessThan(all.indexOf('Tax year'));
+  });
+
+  it('renders for a self viewer, whose Tax year card stays dropped', () => {
+    const { container } = render(
+      <ReportsClient
+        {...baseProps({ taxYears: [2026], taxYear: 2026, yearInReview: review })}
+        showPersonSplit={false}
+        showHouseholdTotals={false}
+        showExport={false}
+      />,
+    );
+    expect(headings(container)).toContain('Year in review: 2026');
+    expect(headings(container)).not.toContain('Tax year');
+    // The year picker is offered to every viewer, labelled Year, under its old parameter name.
+    const select = container.querySelector('select[name="taxYear"]') as HTMLSelectElement;
+    expect(select.closest('label')?.querySelector('span')?.textContent).toBe('Year');
+    expect(container.textContent).toContain('Year feeds the year in review.');
+    expect(container.textContent).not.toContain('tax year card');
+  });
+
+  it('a household viewer reads that Year feeds both cards', () => {
+    const { container } = render(<ReportsClient {...baseProps({ taxYears: [2026], taxYear: 2026, yearInReview: review })} />);
+    expect(container.textContent).toContain('Year feeds the year in review and the tax year card.');
+    expect(container.textContent).not.toMatch(/Tax year feeds/);
+  });
+
+  it('Who spent it says a split part counts for its own person', () => {
+    const { container } = render(<ReportsClient {...baseProps()} />);
+    expect(container.textContent).toContain('Split by the person each transaction, or each part of a split, belongs to.');
   });
 });

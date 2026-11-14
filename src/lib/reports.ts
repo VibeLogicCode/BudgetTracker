@@ -642,6 +642,59 @@ export function topMerchants(input: DateRange & { limit?: number; attributedUser
     .slice(0, input.limit ?? 10);
 }
 
+export interface LargestPurchaseRow {
+  id: number;
+  date: string;
+  /** The display name: display_description when set, else the bank's own wording. */
+  description: string;
+  /** The counted part's category, `Split` when more than one part counted, `Uncategorized` for none. */
+  categoryName: string;
+  /** Positive: what the charge cost the scope, net of any part of it filed as a refund. */
+  spentCents: number;
+}
+
+/**
+ * v1.63.0 (plan 2026-11-12, B6). The Year in review card's largest purchases: one row per
+ * transaction over the split join, so a split charge counts once at the sum of the parts in scope
+ * (a self viewer's share of a shared charge, never the whole). The same row rules as Who spent it:
+ * rangeClauses (transfers and loan principal out, the viewer's parts only), income categories out,
+ * and uncategorized money in left out (NOT_UNCATEGORIZED_IN). A transaction that nets to money in
+ * -- a refund -- is not a purchase. Largest first, then by id so equal amounts keep one order.
+ */
+export function largestPurchases(input: DateRange & { limit?: number }, viewer: Viewer): LargestPurchaseRow[] {
+  const scope = scopeFor(undefined, viewer);
+  const total = sql<number>`sum(${EFFECTIVE_AMOUNT})`;
+  const rows = getDb()
+    .select({
+      id: transactions.id,
+      date: transactions.date,
+      rawDescription: transactions.rawDescription,
+      displayDescription: transactions.displayDescription,
+      parts: sql<number>`count(*)`,
+      categoryId: sql<number | null>`min(${EFFECTIVE_CATEGORY})`,
+      total,
+    })
+    .from(transactions)
+    .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
+    .leftJoin(categories, eq(categories.id, EFFECTIVE_CATEGORY))
+    .where(and(...rangeClauses(input, scope), sql`coalesce(${categories.isIncome}, 0) = 0`, NOT_UNCATEGORIZED_IN))
+    .groupBy(transactions.id)
+    .having(sql`${total} < 0`)
+    .orderBy(total, transactions.id)
+    .limit(input.limit ?? 5)
+    .all();
+
+  const names = new Map(listCategories({ includeArchived: true }).map((category) => [category.id, category.name]));
+  return rows.map((row) => ({
+    id: row.id,
+    date: row.date,
+    description: row.displayDescription !== null && row.displayDescription.length > 0 ? row.displayDescription : row.rawDescription,
+    categoryName:
+      row.parts > 1 ? 'Split' : row.categoryId === null ? 'Uncategorized' : (names.get(row.categoryId) ?? 'Uncategorized'),
+    spentCents: netSpentCents(row.total ?? 0),
+  }));
+}
+
 export interface CsvColumn<T> {
   key: keyof T & string;
   header: string;

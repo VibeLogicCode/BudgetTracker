@@ -191,6 +191,15 @@ export const HELP_SECTIONS: HelpSection[] = [
           kept underneath, so duplicate detection and the categorizer are unaffected.
         </P>
         <P>
+          A part of a split can also belong to someone else: the dinner on a shared grocery run can
+          be another person&rsquo;s while the rest stays yours. A part{' '}
+          <B>follows the transaction</B> unless you set it, so changing the transaction&rsquo;s
+          person moves every following part with it and leaves the parts you set alone. Who spent
+          it, the person filters, personal budgets, the tax figures and the digests count each part
+          for its own person. Someone who sees only their own spending sees only their own parts of
+          a shared charge.
+        </P>
+        <P>
           Cash and anything the bank will never send you can be typed in by hand with{' '}
           <B>Quick add</B>, including an optional note for why it happened. Money moving between
           two of your own accounts should be marked as a <B>transfer</B>, which keeps it out of
@@ -572,6 +581,18 @@ export const HELP_SECTIONS: HelpSection[] = [
           presets or set your own dates. <B>Export CSV</B> hands you the rows behind the range.
         </P>
         <P>
+          The <B>Year in review</B> card sums up the year picked under <B>Year</B>: money in, spent
+          and net, the top categories, the tax-relevant totals and the largest purchases. For the
+          current year it says &ldquo;so far&rdquo; and stops at today. Under it,{' '}
+          <B>Download detail CSV</B> lists every transaction, or part of a split, behind the tax
+          totals, and <B>Download year-end pack (.zip)</B> bundles that list, the totals and the
+          receipt files linked to those transactions, by an item&rsquo;s purchase or a bill it paid.
+          A pack holds only the receipts you could open yourself; any other is named in the list as
+          held by someone else, not included. A pack carries up to 2 GB of receipts; past that,
+          download the list and fetch the receipts from each item. Someone who sees only their own
+          spending gets the card and both downloads over their own rows.
+        </P>
+        <P>
           Most panels need a few months of history before they can say anything, and several need
           three. &ldquo;Not enough history yet&rdquo; is those panels being honest, not a fault:
           import older statements and they fill in. A range with no rows in it produces the same
@@ -786,6 +807,13 @@ export const HELP_SECTIONS: HelpSection[] = [
           kept beside the live one as a <code>pre-restore</code> copy, so restoring the wrong
           archive costs you a second restore rather than your data.
         </P>
+        <P>
+          <B>Moving to a new machine:</B> download a backup from the old install first. Then install
+          the app on the new machine, create an admin account, and open Settings, then Backups, and{' '}
+          <B>Restore from a file</B> with that archive. Before you do, copy <code>secret.key</code>{' '}
+          from the old install&rsquo;s data folder into the new one&rsquo;s, or two-factor codes and
+          saved bank connections stop working; a recovery code still signs you in.
+        </P>
       </>
     ),
   },
@@ -858,7 +886,8 @@ export const HELP_SECTIONS: HelpSection[] = [
           </li>
           <li>
             <B>Split</B> — one transaction divided across several categories, with the parts adding
-            up to the whole.
+            up to the whole. A part can belong to a different person; it follows the transaction
+            unless set.
           </li>
           <li>
             <B>Mapping</B> or <B>profile</B> — which column of a particular bank&rsquo;s export

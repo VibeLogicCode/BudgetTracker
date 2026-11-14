@@ -81,12 +81,15 @@ export const SPECIAL_PAGES = [
   ['/warranties/999999', [307], [404]],
 ];
 
-// 8 safe API GETs (spec's "Proposed smoke test" route list). [path, anonExpected, authExpected]
+// 9 safe API GETs (spec's "Proposed smoke test" route list; v1.63.0 adds the year-end pair).
+// [path, anonExpected, authExpected]
 export const API_GETS = [
   ['/api/backup/download', [401], [200]],
   ['/api/reports/export', [401], [200]],
   // parseTaxYear() 400s with no ?year= -- always pass one so the auth-expected branch is 200.
   ['/api/reports/tax-export?year=2026', [401], [200]],
+  ['/api/reports/tax-detail?year=2026', [401], [200]],
+  ['/api/reports/year-end?year=2026', [401], [200]],
   ['/api/packs/rules/export', [401], [200]],
   ['/api/packs/profiles/export', [401], [200]],
   // Admin session, no SimpleFIN connection configured in this fixture -> the documented

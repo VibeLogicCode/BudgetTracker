@@ -90,6 +90,22 @@ const REQUIRE_VIEWER: { file: string; fn: string }[] = [
   // v1.59.0: the Budgets income line, the month's income and spend for the household or a person.
   { file: 'src/lib/budget-income.ts', fn: 'budgetIncomeLine' },
   { file: 'src/lib/reports.ts', fn: 'cashflowForRange' },
+  /*
+    v1.63.0 (plan 2026-11-12, B1, owner decision 1). taxYearReport and taxYears moved here from
+    HOUSEHOLD_ONLY_AT_PAGE: both now scope themselves (a self viewer reads their own parts), because
+    a self-scoped member gets the Year in review card and the tax downloads over their own rows.
+    taxYearCsv is the totals file built on taxYearReport. The rest are the year-end pack's reads:
+    the detail rows, the pack's plan, its detail CSV and the card's estimate of it, and the card's
+    largest purchases.
+  */
+  { file: 'src/lib/tax.ts', fn: 'taxYearReport' },
+  { file: 'src/lib/tax.ts', fn: 'taxYears' },
+  { file: 'src/lib/tax.ts', fn: 'taxYearCsv' },
+  { file: 'src/lib/tax.ts', fn: 'taxDetailRows' },
+  { file: 'src/lib/year-end.ts', fn: 'planYearEndPack' },
+  { file: 'src/lib/year-end.ts', fn: 'yearEndPackEstimate' },
+  { file: 'src/lib/year-end.ts', fn: 'yearEndDetailCsv' },
+  { file: 'src/lib/reports.ts', fn: 'largestPurchases' },
 ];
 
 /** Exempt, WITH the reason. Nothing is exempt without one. */
@@ -139,9 +155,9 @@ const EXEMPT: { file: string; fn: string; why: string }[] = [
 /**
  * Third named list (v1.13.0 whole-branch review, item M-d). These read-models are, by design,
  * household-wide with NO viewer parameter at all -- unlike REQUIRE_VIEWER's functions, which
- * scope themselves down for a self viewer, the five below have no self-scoped shape to fall back
- * to (see item C1's own fix, src/app/(app)/reports/page.tsx: a self viewer gets NO category
- * baselines, not a household-scoped call run and discarded).
+ * scope themselves down for a self viewer, the three below (five until v1.63.0) have no
+ * self-scoped shape to fall back to (see item C1's own fix, src/app/(app)/reports/page.tsx: a self
+ * viewer gets NO category baselines, not a household-scoped call run and discarded).
  *
  * The guarantee they carry is different from both REQUIRE_VIEWER and EXEMPT above: the CALLER
  * gates, not the function, because the function structurally cannot -- it has no viewer to refuse
@@ -172,16 +188,6 @@ const HOUSEHOLD_ONLY_AT_PAGE: { file: string; fn: string; why: string }[] = [
     file: 'src/lib/predict/history.ts',
     fn: 'suggestionsFor',
     why: "no viewer parameter at all. budgets/page.tsx and reports/page.tsx both skip the scope: 'household' call OUTRIGHT for a self viewer (item C1) rather than running it and discarding the result -- the same 'no household figure leaves this file, even unrendered' reasoning both pages document inline. Gate shape 1 again in notify/evaluate/monthly.ts, which S-18 added: comparePredicted (called for scope 'household' by firePredictedVsActual) and refreshFor (by fireSuggestedRefresh) are both skipped outright for a self-scoped recipient, so neither a household suggestion figure nor the total derived from it is computed for them, let alone rendered. The two remaining callers, budgets/actions.ts's applySuggestionAction and applyAllSuggestionsAction, are WRITE paths -- and v1.49.0 (review D1) closed a real leak in them: the MUST-7.6 check they leaned on fires only for scope 'personal', so a self-scoped member could post scope=household, have the suggestion computed over the whole household's history, and read the figure back out of the success message ('Budget set to $X from the suggestion'), one categoryId at a time. Both now refuse household scope outright for a self-scoped viewer, BEFORE suggestionsFor is called -- gate shape 1, the same one the pages use -- so no household figure is computed for them, let alone returned.",
-  },
-  {
-    file: 'src/lib/tax.ts',
-    fn: 'taxYearReport',
-    why: 'no viewer parameter at all -- rolls up every household member\'s spend with no owner scoping of its own. reports/page.tsx only calls it when showHouseholdTotals is true, and the Tax year card is dropped entirely (not scoped-to-zero) for a self viewer.',
-  },
-  {
-    file: 'src/lib/tax.ts',
-    fn: 'taxYears',
-    why: 'no viewer parameter at all -- lists every year with a non-transfer transaction across the whole household. reports/page.tsx only calls it when showHouseholdTotals is true.',
   },
   {
     file: 'src/lib/loans.ts',
@@ -219,8 +225,11 @@ describe('household-only readers gated at the page (item M-d)', () => {
   // Raised from 4 to 5 (S-18 fix, v1.13.0 ruling R2 review follow-up): budgetProgress joined
   // this list once its own fix landed, so a future deletion of any one of the five now trips
   // this rather than silently going unnoticed.
-  it('the list cannot shrink below 5 entries', () => {
-    expect(HOUSEHOLD_ONLY_AT_PAGE.length).toBeGreaterThanOrEqual(5);
+  //
+  // v1.63.0: lowered from 5 to 3, the actual count, because taxYearReport and taxYears LEFT this
+  // list for REQUIRE_VIEWER (they gained a viewer and scope themselves), not because a gate went.
+  it('the list cannot shrink below 3 entries', () => {
+    expect(HOUSEHOLD_ONLY_AT_PAGE.length).toBeGreaterThanOrEqual(3);
   });
 });
 
@@ -273,8 +282,9 @@ describe('ruling R2: every read-model helper takes a viewer', () => {
   // Spec 2026-10-21: raised from 42 to 43, the actual count with uncategorizedSpend added.
   // v1.59.0: raised from 43 to 44, the actual count with budgetIncomeLine added.
   // v1.60.0: raised from 44 to 45, the actual count with cashflowForRange added.
-  it('the named lists cannot shrink below 45 entries', () => {
-    expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(45);
+  // v1.63.0: raised from 45 to 53, the actual count with the eight tax and year-end reads added.
+  it('the named lists cannot shrink below 53 entries', () => {
+    expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(53);
   });
 });
 

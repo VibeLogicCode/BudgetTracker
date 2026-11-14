@@ -5,10 +5,12 @@ import { listCategories } from '@/lib/categories';
 import { debtOverTime, listLoanRows } from '@/lib/loans';
 import { netWorthOverTime } from '@/lib/networth';
 import {
+  cashflowForRange,
   cashflowTrend,
   categoryBreakdown,
   categoryMonthOverMonth,
   categoryYearOverYear,
+  largestPurchases,
   personSpendSplit,
   topMerchants,
 } from '@/lib/reports';
@@ -19,6 +21,8 @@ import { suggestionsFor } from '@/lib/predict/history';
 import type { BaselineRow } from '@/lib/predict/suggest';
 import { savingsTargetsFor } from '@/lib/savings-target';
 import { taxYearReport, taxYears } from '@/lib/tax';
+import { yearEndPackEstimate, yearEndPackLine } from '@/lib/year-end';
+import type { YearInReviewData } from '@/components/YearInReviewCard';
 import {
   ReportsClient,
   type CategoryBreakdownDisplayRow,
@@ -65,7 +69,8 @@ export default async function ReportsPage({
    * v1.13.0 ruling R2 (fix round 1, controller directive). R2 binds every page, not just the
    * dashboard: a self viewer gets NO account balances, NO net worth, and NO report of a
    * household total. Net worth, debt-over-time and the tax-year card are all household-scope
-   * (debtOverTime and taxYears/taxYearReport take no viewer at all; netWorthOverTime's own
+   * (debtOverTime takes no viewer at all -- taxYears/taxYearReport did not either until v1.63.0,
+   * see the Year in review comment below; netWorthOverTime's own
    * accounts are scoped to the viewer, but R2 is categorical here the same way the dashboard's
    * netWorthLatest already is -- no net worth for a self viewer, full stop, not merely one
    * restricted to their own accounts). The three household-wide queries below are skipped
@@ -148,7 +153,13 @@ export default async function ReportsPage({
   // four-digit number and one of the years taxYears() actually returned; anything else
   // (missing, malformed, or simply a year with no data) falls back to the newest year so the
   // <select>, the table and the Download CSV link can never desync from each other.
-  const taxYearOptions = showHouseholdTotals ? taxYears() : [];
+  //
+  // v1.63.0 (plan 2026-11-12, B1/B7, owner decision 1): computed for EVERY viewer now. Both reads
+  // take the viewer and scope themselves (a self viewer's years and tax rows are their own parts),
+  // and the Year in review card below shows them to every viewer. The Tax year card itself stays
+  // household-only (showHouseholdTotals, reports-client.tsx): its job is the per-person breakdown,
+  // a household comparison ruling R2 still keeps from a self viewer.
+  const taxYearOptions = taxYears(viewer);
   const taxYearRaw = one('taxYear');
   const requestedTaxYear = taxYearRaw && /^\d{4}$/.test(taxYearRaw) ? Number(taxYearRaw) : null;
   const selectedTaxYear =
@@ -157,7 +168,28 @@ export default async function ReportsPage({
   const taxRows: TaxYearDisplayRow[] =
     selectedTaxYear === null
       ? []
-      : taxYearReport(selectedTaxYear).map((row) => ({ ...row, parentId: categoryParentById.get(row.categoryId) ?? null }));
+      : taxYearReport(selectedTaxYear, viewer).map((row) => ({ ...row, parentId: categoryParentById.get(row.categoryId) ?? null }));
+
+  // v1.63.0 (B7): the Year in review card, over the selected year and the viewer's own scope. The
+  // household's current year stops at today and says "so far"; any other year runs to December 31.
+  let yearInReview: YearInReviewData | null = null;
+  if (selectedTaxYear !== null) {
+    const current = today.startsWith(`${selectedTaxYear}-`);
+    const window = { from: `${selectedTaxYear}-01-01`, to: current ? today : `${selectedTaxYear}-12-31` };
+    const estimate = yearEndPackEstimate(selectedTaxYear, viewer);
+    yearInReview = {
+      year: selectedTaxYear,
+      current,
+      through: window.to,
+      totals: cashflowForRange(window, {}, viewer),
+      topCategories: categoryBreakdown({ ...window, rollup: true }, viewer)
+        .filter((row) => row.spentCents > 0)
+        .slice(0, 5)
+        .map((row) => ({ categoryId: row.categoryId, categoryName: row.categoryName, spentCents: row.spentCents })),
+      largest: largestPurchases({ ...window, limit: 5 }, viewer),
+      pack: { line: yearEndPackLine(estimate), zipAvailable: !estimate.tooLarge },
+    };
+  }
 
   /**
    * F-08 (v1.31.0): the same breakdown over the same range shifted twelve months back, joined by
@@ -252,6 +284,7 @@ export default async function ReportsPage({
       taxYears={taxYearOptions}
       taxYear={selectedTaxYear}
       taxRows={taxRows}
+      yearInReview={yearInReview}
       // Ruling R2: a self viewer sees no person split at all -- there is no per-person
       // breakdown to show when the person scope is always and only themselves.
       showPersonSplit={!isSelfScoped(viewer)}

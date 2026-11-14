@@ -5,6 +5,8 @@ import { createSession } from '@/lib/auth/session';
 import { SESSION_COOKIE_NAME } from '@/lib/auth/session-constants';
 import { GET as exportGet } from '@/app/api/reports/export/route';
 import { GET as taxExportGet } from '@/app/api/reports/tax-export/route';
+import { GET as taxDetailGet } from '@/app/api/reports/tax-detail/route';
+import { GET as yearEndGet } from '@/app/api/reports/year-end/route';
 import { GET as backupGet } from '@/app/api/backup/download/route';
 
 let current: TestDb | null = null;
@@ -38,6 +40,21 @@ describe('v1.12.1: bulk exports honour the forced-password-change gate (item AD 
     const { cookie } = setup(true);
     const response = await taxExportGet(request('http://localhost/api/reports/tax-export?year=2026', cookie));
     expect(response.status).toBe(403);
+  });
+
+  // v1.63.0 (plan 2026-11-12, B5): the two year-end downloads carry the same gate.
+  it('the tax detail CSV returns 403 under the flag', async () => {
+    const { cookie } = setup(true);
+    const response = await taxDetailGet(request('http://localhost/api/reports/tax-detail?year=2026', cookie));
+    expect(response.status).toBe(403);
+    expect(await response.text()).toContain('Finish setting your password first.');
+  });
+
+  it('the year-end pack returns 403 under the flag, before any zip is planned', async () => {
+    const { cookie } = setup(true);
+    const response = await yearEndGet(request('http://localhost/api/reports/year-end?year=2026', cookie));
+    expect(response.status).toBe(403);
+    expect(await response.text()).toContain('Finish setting your password first.');
   });
 
   it('the backup download returns 403 under the flag, before any archive is built', async () => {

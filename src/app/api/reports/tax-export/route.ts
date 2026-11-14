@@ -1,8 +1,7 @@
 import { isSameOriginOrHeaderless } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
-import { isSelfScoped } from '@/lib/auth/viewer';
 import { mustChangePassword } from '@/lib/auth/users';
-import { taxYearCsv } from '@/lib/tax';
+import { parseTaxYear, taxYearCsv } from '@/lib/tax';
 
 /**
  * Tax-year CSV download (spec 2026-08-22, v1.7.0, Task 15b). Session required, and the origin
@@ -25,17 +24,14 @@ export async function GET(request: Request): Promise<Response> {
   // v1.12.1 (item AD / SEC-9): same guard, same reasoning, as /api/reports/export/route.ts.
   if (mustChangePassword(user.id)) return new Response('Finish setting your password first.', { status: 403 });
 
-  // v1.13.0 ruling R2. taxYearReport/taxYearCsv (src/lib/tax.ts) roll up EVERY household member's
-  // spend into one report with no owner scoping of its own -- unlike transactionsCsv, this file
-  // was not given a viewer parameter by any Wave A/B task. Rather than let a self viewer download
-  // the whole household's tax-year breakdown, this route refuses them outright, the same
-  // server-side-refusal pattern as /review, /import and /settings.
-  if (isSelfScoped(user)) return new Response('Not available on this account.', { status: 403 });
-
   const year = parseTaxYear(new URL(request.url).searchParams.get('year'));
   if (year === null) return new Response('Bad Request', { status: 400 });
 
-  const csv = taxYearCsv(year);
+  // v1.63.0 (plan 2026-11-12, B1, owner decision 1). This refused a self viewer outright from
+  // v1.13.0 (ruling R2), because taxYearReport had no owner scope of its own. It has one now: a
+  // self viewer's file holds their own parts and nothing else (src/lib/tax.ts), so they are served
+  // their own figures instead of a refusal.
+  const csv = taxYearCsv(year, user);
   return new Response(csv, {
     status: 200,
     headers: {
@@ -44,19 +40,4 @@ export async function GET(request: Request): Promise<Response> {
       'cache-control': 'no-store',
     },
   });
-}
-
-/**
- * Plainly four digits (so never negative, fractional or otherwise non-numeric), then the same
- * 1900-2999 bound src/lib/dates.ts's buildIso() already uses for a parsed statement date --
- * reused here rather than invented fresh. Anything outside this is rejected before it ever
- * reaches taxYearCsv()/taxYearReport()'s plain string date-range comparison, which has no format
- * validation of its own and would otherwise silently accept a nonsensical year instead of
- * erroring.
- */
-function parseTaxYear(value: string | null): number | null {
-  if (!value || !/^\d{4}$/.test(value)) return null;
-  const year = Number(value);
-  if (year < 1900 || year > 2999) return null;
-  return year;
 }

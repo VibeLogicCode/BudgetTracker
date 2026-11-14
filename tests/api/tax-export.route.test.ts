@@ -145,12 +145,21 @@ describe('GET /api/reports/tax-export', () => {
     expect(response.status).toBe(401);
   });
 
-  it('v1.13.0 ruling R2: refuses a self-scoped viewer -- taxYearReport has no owner scoping of its own', async () => {
+  // v1.63.0 (plan 2026-11-12, B1, owner decision 1): a deliberate change. This was a 403 from
+  // v1.13.0 (ruling R2), when taxYearReport had no owner scope; it has one now, so a self viewer is
+  // served their own lines and nothing of anyone else's.
+  it("v1.63.0: serves a self-scoped viewer their own rows only", async () => {
     setup();
-    const kid = insertTestUser(current!.db, { name: 'Kid', username: 'kid', role: 'member' });
-    setUserVisibility(kid, 'self');
-    const { token } = createSession(kid);
+    const sam = insertTestUser(current!.db, { name: 'Sam', username: 'sam', role: 'member' });
+    setUserVisibility(sam, 'self');
+    const account = insertTestAccount(current!.db, { name: 'Sam card' });
+    const groceries = categoryIdByName(current!.db, 'Groceries');
+    current!.db.run(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, category_id, categorization_source, is_transfer, attributed_user_id, created_by, created_at, updated_at)
+      values (${account}, '2026-04-02', 'MAPLE GROCER', 'MAPLE GROCER', -2317, ${groceries}, 'manual', 0, ${sam}, ${sam}, ${nowIso()}, ${nowIso()})`);
+    const { token } = createSession(sam);
     const response = await GET(taxExportRequest('http://nas.local:3000/api/reports/tax-export?year=2026', token));
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('Category,Person,Amount\r\nGroceries,Sam,23.17\r\n');
   });
 });

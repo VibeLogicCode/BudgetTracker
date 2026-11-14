@@ -9,6 +9,7 @@ import {
   trimLeadingEmptyMonths,
   categoryBreakdown,
   categoryMonthOverMonth,
+  largestPurchases,
   personSpendSplit,
   savingsRate,
   toCsv,
@@ -23,6 +24,7 @@ import { assignTransactionToLoan } from '@/lib/loans';
 import { setTransactionSplits } from '@/lib/splits';
 import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 import { buildSplitPersonFixture } from '../helpers/split-person-fixture';
+import { buildYearEndFixture, type YearEndFixture } from '../helpers/year-end-fixture';
 
 // v1.13.0 ruling R2: every aggregate under test here now takes a viewer as its last argument.
 // A household viewer's ownerScope() is always null, so passing this constant reproduces the
@@ -1088,5 +1090,46 @@ describe('loan principal movements are excluded from spend/income (item 8a, 2026
     assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: lentLoanId });
 
     expect(cashflowTrend(1, { endMonth: '2026-03' }, HOUSEHOLD)[0].spendCents).toBe(50_000);
+  });
+});
+
+/** v1.63.0 (plan 2026-11-12, B6). The Year in review card's largest purchases. */
+describe('largestPurchases (v1.63.0)', () => {
+  let fx: YearEndFixture | null = null;
+  afterEach(() => {
+    fx?.cleanup();
+    fx = null;
+  });
+  const YEAR = { from: '2026-01-01', to: '2026-12-31' };
+  const shape = (rows: ReturnType<typeof largestPurchases>) => rows.map((row) => [row.description, row.categoryName, row.spentCents]);
+
+  it('admin: one row per charge, largest first; no refund, transfer, income or other year', () => {
+    fx = buildYearEndFixture();
+    expect(shape(largestPurchases(YEAR, fx.viewers.admin))).toEqual([
+      ['CITY CLINIC', 'Medical', 12000],
+      ['COMMUNITY FUND', 'Split', 10000],
+      ['MAPLE GROCER', 'Groceries', 8000],
+      ['PHARMACY PLUS', 'Pharmacy', 4217],
+    ]);
+    expect(largestPurchases(YEAR, fx.viewers.admin)[0]).toMatchObject({ id: fx.txn.clinic, date: '2026-04-14' });
+  });
+
+  it("self viewer Alex: his own charges, and his part of a shared one", () => {
+    fx = buildYearEndFixture();
+    expect(shape(largestPurchases(YEAR, fx.viewers.self(fx.alex)))).toEqual([
+      ['MAPLE GROCER', 'Groceries', 8000],
+      ['COMMUNITY FUND', 'Charity', 6000],
+      ['PHARMACY PLUS', 'Pharmacy', 4217],
+    ]);
+  });
+
+  it('keeps the limit, and orders equal amounts by id', () => {
+    fx = buildYearEndFixture();
+    const second = fx.t.db.get<{ id: number }>(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, category_id,
+        categorization_source, is_transfer, attributed_user_id, created_by, created_at, updated_at)
+      values (${fx.account}, '2026-07-01', 'CITY CLINIC', 'CITY CLINIC', -12000, ${fx.medical}, 'manual', 0, ${fx.sam}, ${fx.admin}, ${nowIso()}, ${nowIso()})
+      returning id`).id;
+    expect(largestPurchases({ ...YEAR, limit: 2 }, fx.viewers.admin).map((row) => row.id)).toEqual([fx.txn.clinic, second]);
   });
 });
