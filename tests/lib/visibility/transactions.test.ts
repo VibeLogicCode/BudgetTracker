@@ -2,10 +2,15 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { createAccount } from '@/lib/accounts';
 import { createUser } from '@/lib/auth/users';
 import type { Viewer } from '@/lib/auth/viewer';
-import { createManualTransaction, getTransaction, getTransactionShare, listTransactions, updateTransactionNotes } from '@/lib/transactions';
+import { createManualTransaction, getTransaction, listTransactions, updateTransactionNotes, type TransactionRow } from '@/lib/transactions';
 import { createTestDb, type TestDb } from '../../helpers/db';
 import { buildSplitPersonFixture } from '../../helpers/split-person-fixture';
 import { setTransactionSplits } from '@/lib/splits';
+
+/** One row by id, read the way the list reads it (the read getTransactionShare gave until v1.64.1). */
+function shareOf(id: number, viewer: Viewer): TransactionRow | null {
+  return listTransactions({ id }, viewer).rows[0] ?? null;
+}
 
 const HOUSEHOLD: Viewer = { id: 1, role: 'member', visibility: 'household' };
 
@@ -107,16 +112,16 @@ describe('v1.63.0: a self viewer and a split part set to them', () => {
     expect(serialized).not.toContain('Alex');
   });
 
-  it('getTransactionShare returns the share for a charge holding their part, and null for an unrelated one', () => {
+  it('one row read through the list returns the share for a charge holding their part, and null for an unrelated one', () => {
     const fx = buildSplitPersonFixture();
     current = fx.t;
     const other = fx.add({ date: '2026-03-20', description: 'CITY CLINIC', amountCents: -2500, categoryId: fx.groceries, person: fx.alex });
-    expect(getTransactionShare(fx.maple, fx.self(fx.sam))).toMatchObject({ id: fx.maple, amountCents: -4000, partial: true, parentAmountCents: null });
-    expect(getTransactionShare(fx.maple, fx.self(fx.sam))?.attributedUserName).toBeNull();
-    expect(JSON.stringify(getTransactionShare(fx.maple, fx.self(fx.sam)))).not.toContain('-15000');
-    expect(getTransactionShare(other, fx.self(fx.sam))).toBeNull();
+    expect(shareOf(fx.maple, fx.self(fx.sam))).toMatchObject({ id: fx.maple, amountCents: -4000, partial: true, parentAmountCents: null });
+    expect(shareOf(fx.maple, fx.self(fx.sam))?.attributedUserName).toBeNull();
+    expect(JSON.stringify(shareOf(fx.maple, fx.self(fx.sam)))).not.toContain('-15000');
+    expect(shareOf(other, fx.self(fx.sam))).toBeNull();
     // A household viewer reads the whole charge.
-    expect(getTransactionShare(fx.maple, fx.admin)).toMatchObject({ amountCents: -15000, partial: false, parentAmountCents: -15000 });
+    expect(shareOf(fx.maple, fx.admin)).toMatchObject({ amountCents: -15000, partial: false, parentAmountCents: -15000 });
   });
 
   it('getTransaction stays the may-act gate: a part of a charge does not make the charge theirs to change', () => {
@@ -176,7 +181,7 @@ describe('v1.63.0 fix round: rows reached through a part, and the share in searc
     const rows = listTransactions({}, fx.self(fx.sam)).rows;
     expect(rows.find((row) => row.id === fx.maple)).toMatchObject({ notes: null, attributedUserId: null, attributedUserName: null, accountName: '—' });
     expect(rows.find((row) => row.id === fx.fuel)).toMatchObject({ notes: 'work trip', attributedUserId: fx.sam, accountName: 'Joint chequing' });
-    expect(getTransactionShare(fx.maple, fx.self(fx.sam))).toMatchObject({ notes: null, attributedUserId: null, accountName: '—' });
+    expect(shareOf(fx.maple, fx.self(fx.sam))).toMatchObject({ notes: null, attributedUserId: null, accountName: '—' });
     expect(JSON.stringify(rows)).not.toContain('trip fund');
     // A household viewer, person filter or not, still reads every field.
     expect(listTransactions({ attributedUserId: fx.sam }, fx.admin).rows.find((row) => row.id === fx.maple)).toMatchObject({

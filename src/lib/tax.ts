@@ -7,7 +7,7 @@ import { netSpentCents } from '@/lib/money';
 import { toCsv, UNATTRIBUTED_LABEL } from '@/lib/reports';
 import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY, EFFECTIVE_PERSON, partPersonClause, personRowClause } from '@/lib/splits';
 import { SPEND_ROW_WHERE } from '@/lib/spend-where';
-import { OTHER_ACCOUNT_LABEL } from '@/lib/transactions';
+import { descriptionFor, OTHER_ACCOUNT_LABEL } from '@/lib/transactions';
 
 /**
  * Tax-relevant categories + the tax-year report (spec 2026-08-22, v1.7.0, Task 15). Split out
@@ -304,14 +304,17 @@ export function taxDetailRows(year: number, viewer: Viewer): TaxDetailRow[] {
     return parent ? `${parent.name} > ${category.name}` : category.name;
   };
 
+  const own = ownerScope(viewer);
+
   const rows = getDb()
     .select({
       txnId: transactions.id,
       splitId: transactionSplits.id,
       date: transactions.date,
       accountName: accounts.name,
-      rawDescription: transactions.rawDescription,
-      displayDescription: transactions.displayDescription,
+      // v1.64.1: the shared description fragment (src/lib/transactions.ts): a self viewer's part of a
+      // charge that is not theirs reads as its bank text, here and in the year-end pack's file names.
+      description: descriptionFor(own),
       categoryId: EFFECTIVE_CATEGORY,
       personId: EFFECTIVE_PERSON,
       amountCents: EFFECTIVE_AMOUNT,
@@ -334,15 +337,12 @@ export function taxDetailRows(year: number, viewer: Viewer): TaxDetailRow[] {
     .orderBy(asc(transactions.date), asc(transactions.id), asc(transactionSplits.id))
     .all();
 
-  const own = ownerScope(viewer);
-
   // One people read for the whole year, not one per row.
   const names = new Map(getDb().select({ id: users.id, name: users.name }).from(users).all().map((user) => [user.id, user.name]));
 
   return rows.flatMap((row) => {
     const category = row.categoryId === null ? undefined : byId.get(row.categoryId);
     if (!category) return [];
-    const description = row.displayDescription !== null && row.displayDescription.length > 0 ? row.displayDescription : row.rawDescription;
     // A self viewer reaches a charge that is not theirs only through a part of theirs.
     const othersCharge = own !== null && row.ownerId !== own;
     return [
@@ -351,7 +351,7 @@ export function taxDetailRows(year: number, viewer: Viewer): TaxDetailRow[] {
         splitId: row.splitId,
         date: row.date,
         accountName: othersCharge ? OTHER_ACCOUNT_LABEL : row.accountName,
-        description,
+        description: row.description,
         categoryId: category.id,
         categoryPath: path(category),
         taxCategories: (flagsCovering.get(category.id) ?? []).map(path),

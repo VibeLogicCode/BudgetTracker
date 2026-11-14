@@ -47,7 +47,7 @@ const EXEMPT: Record<string, string> = {
     'it is the may-act gate, not a money read: the single-row actions and loans.ts refuse a self viewer ' +
     "when it returns null, and the transaction's own person decides who may act on a charge (plan A4, " +
     'transactionOwners unchanged). The row it returns is still read at the viewer share; the part-aware ' +
-    'read is getTransactionShare, which uses personRowClause.',
+    'read is listTransactions, which uses personRowClause.',
 };
 
 const JOINS_SPLITS = /\.(?:leftJoin|innerJoin|rightJoin|fullJoin)\(\s*transactionSplits\b|\bjoin\s+(?:\$\{transactionSplits\}|transaction_splits)\b/;

@@ -4,7 +4,9 @@ import { listAudit } from '@/lib/audit';
 import { NOT_YOURS_ERROR, type Viewer } from '@/lib/auth/viewer';
 import {
   BULK_UNDO_EXPIRED_ERROR,
+  BULK_UNDO_MAX_PATTERN_CHARS,
   BULK_UNDO_MAX_ROWS,
+  BULK_UNDO_MAX_TEXT_CHARS,
   BULK_UNDO_NOTHING_ERROR,
   BULK_UNDO_STALE_ERROR,
   captureBulkBefore,
@@ -18,7 +20,7 @@ import { confirmCategory, setTransferFlag } from '@/lib/categorize/engine';
 import { tokenize } from '@/lib/categorize/normalize';
 import { setRecurringMarks, setRuleDisabledFlag, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { saveLoanRule } from '@/lib/loans';
-import { getSetting } from '@/lib/settings';
+import { getSetting, setSetting } from '@/lib/settings';
 import { bulkSetAttribution } from '@/lib/transactions';
 
 let current: TestDb | null = null;
@@ -486,5 +488,61 @@ describe('bulk undo: a self-scoped viewer', () => {
     bulkSetAttribution([b], sam);
     expect(undoLastBulkAction({ viewer: self, now: SOON })).toEqual({ ok: false, error: NOT_YOURS_ERROR });
     expect([row(a).isTransfer, row(b).isTransfer, row(b).person]).toEqual([1, 1, sam]);
+  });
+});
+
+/** v1.64.1. A stored record is held to caps on every string and to real instants for its times. */
+describe('bulk undo: a stored record past its caps reads as no undo', () => {
+  function stored(): { alex: number; edit: (change: (record: Record<string, unknown>) => void) => void } {
+    const { alex, add, groceries } = setup();
+    const maple = add('MAPLE GROCER', -4217);
+    recorded(alex, 'categorize', 'Categorized 1 transaction as Groceries.', [maple], () => categorize([maple], groceries, alex));
+    expect(lastBulkUndo(alex, SOON)).not.toBeNull();
+    const edit = (change: (record: Record<string, unknown>) => void) => {
+      const record = JSON.parse(getSetting(`bulk_undo:${alex}`) ?? '{}') as Record<string, unknown>;
+      change(record);
+      setSetting(`bulk_undo:${alex}`, JSON.stringify(record));
+    };
+    return { alex, edit };
+  }
+
+  it('an over-long label', () => {
+    const { alex, edit } = stored();
+    edit((record) => {
+      record.label = 'x'.repeat(BULK_UNDO_MAX_TEXT_CHARS + 1);
+    });
+    expect(lastBulkUndo(alex, SOON)).toBeNull();
+    expect(undoLastBulkAction({ viewer: household(alex), now: SOON })).toEqual({ ok: false, error: BULK_UNDO_NOTHING_ERROR });
+  });
+
+  it('an over-long merchant or rule pattern', () => {
+    const merchant = stored();
+    merchant.edit((record) => {
+      (record.rows as Array<Record<string, unknown>>)[0].merchant = 'M'.repeat(BULK_UNDO_MAX_PATTERN_CHARS + 1);
+    });
+    expect(lastBulkUndo(merchant.alex, SOON)).toBeNull();
+    current?.cleanup();
+
+    const pattern = stored();
+    pattern.edit((record) => {
+      ((record.rules as { created: Array<Record<string, unknown>> }).created)[0].pattern = 'P'.repeat(BULK_UNDO_MAX_PATTERN_CHARS + 1);
+    });
+    expect(lastBulkUndo(pattern.alex, SOON)).toBeNull();
+  });
+
+  it('a time that is not an instant', () => {
+    const { alex, edit } = stored();
+    edit((record) => {
+      record.expiresAt = 'later';
+    });
+    expect(lastBulkUndo(alex, SOON)).toBeNull();
+  });
+
+  it('a long label is cut to the cap when written, so the change can still be undone', () => {
+    const { alex, add, groceries } = setup();
+    const maple = add('MAPLE GROCER', -4217);
+    const label = `Categorized 1 transaction from ${'M'.repeat(BULK_UNDO_MAX_TEXT_CHARS)} as Groceries.`;
+    expect(recorded(alex, 'categorize', label, [maple], () => categorize([maple], groceries, alex))).toBe('recorded');
+    expect(lastBulkUndo(alex, SOON)?.label).toBe(label.slice(0, BULK_UNDO_MAX_TEXT_CHARS));
   });
 });

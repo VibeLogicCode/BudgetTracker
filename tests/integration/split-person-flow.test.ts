@@ -4,7 +4,7 @@ import type { SessionUser } from '@/lib/auth/session';
 import { getSplits } from '@/lib/splits';
 import { personSpendSplit } from '@/lib/reports';
 import { budgetProgress } from '@/lib/budgets';
-import { getTransactionShare, bulkSetAttribution } from '@/lib/transactions';
+import { listTransactions, bulkSetAttribution } from '@/lib/transactions';
 import { captureBulkBefore, recordBulkUndo, undoLastBulkAction } from '@/lib/bulk-undo';
 
 /**
@@ -61,7 +61,7 @@ describe('split person, end to end (v1.63.0)', () => {
     const dining = budgetProgress('2026-03', 'personal', f.sam).find((row) => row.categoryId === f!.dining);
     expect(dining?.spentCents).toBe(4000);
 
-    const share = getTransactionShare(f.maple, f.self(f.sam));
+    const share = listTransactions({ id: f.maple }, f.self(f.sam)).rows[0];
     expect(share).toMatchObject({ amountCents: -4000, partial: true, parentAmountCents: null });
   });
 

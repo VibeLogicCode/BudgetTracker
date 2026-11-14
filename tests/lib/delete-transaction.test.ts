@@ -536,3 +536,84 @@ describe('importedTransactionIds', () => {
     expect(importedTransactionIds([])).toEqual([]);
   });
 });
+
+/**
+ * v1.64.1. Who may delete a typed row: the same canActOnOwner rule as an imported one, and a row
+ * linked to a loan the viewer cannot open is refused. A refusal changes nothing and writes no audit.
+ */
+describe('deleteTransaction: who may delete a typed row (v1.64.1)', () => {
+  const AT = new Date('2026-03-12T15:00:00.000Z');
+
+  function setup() {
+    current = createSeededTestDb();
+    const admin = insertTestUser(current.db, { name: 'Admin', username: 'admin', role: 'admin' });
+    const alex = insertTestUser(current.db, { name: 'Alex', username: 'alex', role: 'member' });
+    const sam = insertTestUser(current.db, { name: 'Sam', username: 'sam', role: 'member' });
+    const account = insertTestAccount(current.db, { name: 'Joint chequing' });
+    const typed = (person: number | null, description = 'CORNER BAKERY') =>
+      createManualTransaction({
+        accountId: account,
+        date: '2026-03-10',
+        description,
+        amountCents: -850,
+        categoryId: null,
+        attributedUserId: person,
+        userId: admin,
+        actorRole: 'admin',
+      });
+    const exists = (id: number) => current!.db.get<{ c: number }>(sql`select count(*) as c from transactions where id = ${id}`).c === 1;
+    const deletes = () => listAudit(50).filter((row) => row.action === 'delete_transaction').length;
+    return { admin, alex, sam, typed, exists, deletes };
+  }
+
+  it("a household member cannot delete another member's typed row", () => {
+    const s = setup();
+    const alexRow = s.typed(s.alex);
+    const result = deleteTransaction({ txnId: alexRow, userId: s.sam, viewer: { id: s.sam, role: 'member', visibility: 'household' }, at: AT });
+    expect(result).toEqual({ error: NOT_YOURS_ERROR });
+    expect(s.exists(alexRow)).toBe(true);
+    expect(s.deletes()).toBe(0);
+  });
+
+  it('a household member still deletes their own and a shared typed row, and an admin anyone’s', () => {
+    const s = setup();
+    const sam = { id: s.sam, role: 'member' as const, visibility: 'household' as const };
+    const own = s.typed(s.sam);
+    const shared = s.typed(null);
+    const alexRow = s.typed(s.alex);
+    expect(deleteTransaction({ txnId: own, userId: s.sam, viewer: sam, at: AT })).toEqual({ ok: true });
+    expect(deleteTransaction({ txnId: shared, userId: s.sam, viewer: sam, at: AT })).toEqual({ ok: true });
+    expect(deleteTransaction({ txnId: alexRow, userId: s.admin, viewer: { id: s.admin, role: 'admin', visibility: 'household' }, at: AT })).toEqual({
+      ok: true,
+    });
+  });
+
+  it("refuses a self viewer's own row linked to a loan they cannot open, and leaves the link", () => {
+    const s = setup();
+    const samLoan = seedItem('loan', 'Sam car loan', s.sam);
+    current!.db.run(sql`update warranty_items set loan_direction = 'owed', principal_cents = 500000, current_balance_cents = 500000 where id = ${samLoan}`);
+    const alexRow = s.typed(s.alex, 'AUTO LENDER');
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: alexRow, itemId: samLoan }).linked).toBe(true);
+
+    const result = deleteTransaction({ txnId: alexRow, userId: s.alex, viewer: { id: s.alex, role: 'member', visibility: 'self' }, at: AT });
+
+    expect(result).toEqual({ error: NOT_YOURS_ERROR });
+    expect(s.exists(alexRow)).toBe(true);
+    expect(current!.db.get<{ c: number }>(sql`select count(*) as c from loan_payments where txn_id = ${alexRow}`).c).toBe(1);
+    expect(s.deletes()).toBe(0);
+  });
+
+  it('a self viewer deletes their own unlinked typed row, and one linked to their own loan', () => {
+    const s = setup();
+    const self = { id: s.alex, role: 'member' as const, visibility: 'self' as const };
+    const plain = s.typed(s.alex);
+    expect(deleteTransaction({ txnId: plain, userId: s.alex, viewer: self, at: AT })).toEqual({ ok: true });
+
+    const alexLoan = seedItem('loan', 'Alex car loan', s.alex);
+    current!.db.run(sql`update warranty_items set loan_direction = 'owed', principal_cents = 500000, current_balance_cents = 500000 where id = ${alexLoan}`);
+    const linked = s.typed(s.alex, 'AUTO LENDER');
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: linked, itemId: alexLoan }).linked).toBe(true);
+    expect(deleteTransaction({ txnId: linked, userId: s.alex, viewer: self, at: AT })).toEqual({ ok: true });
+    expect(s.exists(linked)).toBe(false);
+  });
+});

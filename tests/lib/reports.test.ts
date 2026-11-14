@@ -866,6 +866,11 @@ describe('csv export', () => {
     expect(lines[5]).toBe(`'\tleading tab`);
   });
 
+  it('guards a cell that starts with a carriage return', () => {
+    const csv = toCsv([{ v: '\r=SUM(1)' }], [{ key: 'v', header: 'V' }]);
+    expect(csv.split('\r\n')[1]).toBe(`"'\r=SUM(1)"`);
+  });
+
   it('keeps RFC quoting on top of the guard when the field also needs quoting', () => {
     const csv = toCsv([{ v: '=SUM(1,2)' }], [{ key: 'v', header: 'V' }]);
     expect(csv.trim().split('\r\n')[1]).toBe(`"'=SUM(1,2)"`);

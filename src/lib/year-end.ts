@@ -5,6 +5,7 @@ import { billInstallments, users, warrantyItems, warrantyReceipts } from '@/db/s
 import { canActOnOwner, ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { toCsv, type CsvColumn } from '@/lib/reports';
 import { taxDetailRows, taxYearCsv, type TaxDetailRow } from '@/lib/tax';
+import { transactionOwners } from '@/lib/transactions';
 import { resolveReceiptPath } from '@/lib/warranty/receipts';
 import { extForMime, RECEIPT_MIMES, type ReceiptMime } from '@/lib/warranty/sniff';
 import type { ZipEntry } from '@/lib/zip-stream';
@@ -29,6 +30,43 @@ export const YEAR_END_MAX_RECEIPT_BYTES = 2 * 1024 * 1024 * 1024;
 export const YEAR_END_MAX_RECEIPTS = 5000;
 
 const ID_CHUNK = 400;
+
+/** v1.64.1. How many year-end packs one member may have streaming at once. */
+export const YEAR_END_PACKS_PER_MEMBER = 1;
+
+/** The refusal for a member who asks for a second pack while one is still streaming. */
+export const YEAR_END_BUSY_MESSAGE = 'Your year-end pack is still downloading. Try again when it has finished.';
+
+/**
+ * Members' packs in flight, by user id. Kept on globalThis under a Symbol.for key so every copy of
+ * this module in one server process counts the same packs.
+ */
+const SLOTS_KEY = Symbol.for('budget-tracker.year-end-pack-slots');
+function slots(): Map<number, number> {
+  const holder = globalThis as unknown as Record<symbol, Map<number, number> | undefined>;
+  holder[SLOTS_KEY] ??= new Map<number, number>();
+  return holder[SLOTS_KEY];
+}
+
+/**
+ * v1.64.1. Takes one of the member's pack slots, or null when they already hold
+ * YEAR_END_PACKS_PER_MEMBER. The returned release frees it, once, however often it is called: the
+ * route calls it when the stream closes, which covers a finished download, an error and a client
+ * that went away.
+ */
+export function claimYearEndSlot(userId: number): (() => void) | null {
+  const held = slots().get(userId) ?? 0;
+  if (held >= YEAR_END_PACKS_PER_MEMBER) return null;
+  slots().set(userId, held + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const now = (slots().get(userId) ?? 1) - 1;
+    if (now <= 0) slots().delete(userId);
+    else slots().set(userId, now);
+  };
+}
 
 interface LinkedReceipt {
   txnId: number;
@@ -119,7 +157,18 @@ function gather(year: number, viewer: Viewer, stat: boolean): Gathered {
   const rows = taxDetailRows(year, viewer);
   const firstRow = new Map<number, TaxDetailRow>();
   for (const row of rows) if (!firstRow.has(row.txnId)) firstRow.set(row.txnId, row);
-  const txnIds = [...firstRow.keys()];
+  // v1.64.1: a self viewer's receipts come from their own rows only. A charge they reach through a
+  // part of theirs carries no receipt, no count and no "held by someone else" line: what is linked
+  // to it is its own person's.
+  const own = ownerScope(viewer);
+  const allIds = [...firstRow.keys()];
+  const owners = new Map<number, number | null>();
+  if (own !== null) {
+    for (let offset = 0; offset < allIds.length; offset += ID_CHUNK) {
+      for (const [id, owner] of transactionOwners(allIds.slice(offset, offset + ID_CHUNK))) owners.set(id, owner);
+    }
+  }
+  const txnIds = own === null ? allIds : allIds.filter((id) => owners.get(id) === own);
   const order = new Map(txnIds.map((id, index) => [id, index]));
 
   const links = linkedReceipts(txnIds).sort(

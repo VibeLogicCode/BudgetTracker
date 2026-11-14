@@ -5,6 +5,7 @@ import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { nowIso } from '@/lib/clock';
 import { formatCents } from '@/lib/money';
 import { getSplits } from '@/lib/splits';
+import { MAX_SPLIT_PARTS, TRANSACTION_NOTE_MAX_CHARS } from '@/lib/transactions';
 import type { SessionUser } from '@/lib/auth/session';
 
 let currentUser: SessionUser = { id: 1, name: 'Admin', username: 'admin', role: 'admin', visibility: 'household' };
@@ -438,5 +439,43 @@ describe('saveSplitsAction: keep (v1.63.0 fix round)', () => {
       { categoryId: f.dining, amountCents: -15000, person: 'keep', splitId: f.parts.dining },
     ]) }));
     expect(refused.error).toBe(NOT_YOURS_ERROR);
+  });
+});
+
+describe('saveSplitsAction: part count and note length (v1.64.1)', () => {
+  it(`refuses more than ${MAX_SPLIT_PARTS} parts and writes nothing`, async () => {
+    const { db } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const id = addTxn(addAccount(null), -(MAX_SPLIT_PARTS + 1) * 100);
+    const parts = Array.from({ length: MAX_SPLIT_PARTS + 1 }, () => ({ categoryId: groceries, amountCents: -100 }));
+
+    const result = await saveSplitsAction({}, formData({ txnId: String(id), parts: JSON.stringify(parts) }));
+
+    expect(result.error).toBe('Invalid split parts.');
+    expect(getSplits(id)).toHaveLength(0);
+  });
+
+  it('refuses a part note longer than the transaction note cap, and keeps one at the cap', async () => {
+    const { db } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const coffee = categoryIdByName(db, 'Coffee');
+    const id = addTxn(addAccount(null), -5000);
+    const post = (note: string) =>
+      saveSplitsAction(
+        {},
+        formData({
+          txnId: String(id),
+          parts: JSON.stringify([
+            { categoryId: groceries, amountCents: -3000, note },
+            { categoryId: coffee, amountCents: -2000 },
+          ]),
+        }),
+      );
+
+    expect((await post('n'.repeat(TRANSACTION_NOTE_MAX_CHARS + 1))).error).toBe('Invalid split parts.');
+    expect(getSplits(id)).toHaveLength(0);
+
+    expect((await post(`  ${'n'.repeat(TRANSACTION_NOTE_MAX_CHARS)}  `)).error).toBeUndefined();
+    expect(getSplits(id).find((part) => part.categoryId === groceries)?.note).toBe('n'.repeat(TRANSACTION_NOTE_MAX_CHARS));
   });
 });

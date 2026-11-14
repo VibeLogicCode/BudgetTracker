@@ -40,6 +40,18 @@ import { z } from '@/lib/zod';
 export const BULK_UNDO_MINUTES = 15;
 export const BULK_UNDO_MAX_ROWS = 2000;
 
+/**
+ * v1.64.1. The longest pattern or merchant an undo record carries: a merchant is cut from a row's
+ * bank text, which an import holds to 500 characters, and a rule pattern typed in a form is shorter.
+ */
+export const BULK_UNDO_MAX_PATTERN_CHARS = 500;
+/** v1.64.1. The longest other text a record carries: its label, a rename, a pack's names. */
+export const BULK_UNDO_MAX_TEXT_CHARS = 1000;
+/** v1.64.1. The longest stored rule timestamp a record carries. */
+export const BULK_UNDO_MAX_TIME_CHARS = 40;
+/** An instant exactly as nowIso writes it: the record's own two times, which expiry reads. */
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
+
 export type BulkUndoKind = 'categorize' | 'transfer' | 'person' | 'recurring' | 'transfer_pair';
 
 /** One wording, one place: a record older than the window. */
@@ -76,36 +88,40 @@ type RowColumns = z.infer<typeof rowColumnsSchema>;
  */
 const ruleRowSchema: z.ZodType<ExactRuleRow> = z.object({
   id: z.number().int(),
-  pattern: z.string(),
+  pattern: z.string().max(BULK_UNDO_MAX_PATTERN_CHARS),
   matchType: z.enum(['exact', 'contains', 'word']),
   ruleKind: z.enum(['category', 'transfer', 'rename', 'not_transfer', 'attribution', 'recurring', 'not_recurring', 'always_ask']),
   categoryId: z.number().int().nullable(),
-  renameTo: z.string().nullable(),
+  renameTo: z.string().max(BULK_UNDO_MAX_TEXT_CHARS).nullable(),
   createdBy: z.number().int().nullable(),
   hitCount: z.number().int(),
-  lastUsedAt: z.string().nullable(),
-  createdAt: z.string(),
+  lastUsedAt: z.string().max(BULK_UNDO_MAX_TIME_CHARS).nullable(),
+  createdAt: z.string().max(BULK_UNDO_MAX_TIME_CHARS),
   lastModifiedBy: z.number().int().nullable(),
-  disabledAt: z.string().nullable(),
-  packSource: z.string().nullable(),
+  disabledAt: z.string().max(BULK_UNDO_MAX_TIME_CHARS).nullable(),
+  packSource: z.string().max(BULK_UNDO_MAX_TEXT_CHARS).nullable(),
   packVersion: z.number().int().nullable(),
-  installedAt: z.string().nullable(),
-  packOriginKey: z.string().nullable(),
+  installedAt: z.string().max(BULK_UNDO_MAX_TIME_CHARS).nullable(),
+  packOriginKey: z.string().max(BULK_UNDO_MAX_TEXT_CHARS).nullable(),
   amountMinCents: z.number().int().nullable(),
   amountMaxCents: z.number().int().nullable(),
   attributedUserId: z.number().int().nullable(),
 });
 
+/**
+ * v1.64.1: every string is capped and the record's own times must be instants, so a stored record
+ * past a cap, or with a time expiry cannot read, fails to parse and reads as no undo at all.
+ */
 const recordSchema = z.object({
   v: z.literal(1),
   kind: z.enum(['categorize', 'transfer', 'person', 'recurring', 'transfer_pair']),
-  label: z.string(),
-  at: z.string(),
-  expiresAt: z.string(),
+  label: z.string().max(BULK_UNDO_MAX_TEXT_CHARS),
+  at: z.string().regex(ISO_INSTANT),
+  expiresAt: z.string().regex(ISO_INSTANT),
   rows: z.array(
     z.object({
       id: z.number().int(),
-      merchant: z.string(),
+      merchant: z.string().max(BULK_UNDO_MAX_PATTERN_CHARS),
       before: rowColumnsSchema,
       after: rowColumnsSchema,
       /** The category confirmCategory trained for this row, which the undo untrains. */
@@ -305,7 +321,8 @@ export function recordBulkUndo(input: {
   const record: BulkUndoRecord = {
     v: 1,
     kind: input.kind,
-    label: input.label,
+    // Cut to the cap the reader holds a record to, so a long merchant in the sentence never costs the undo.
+    label: input.label.slice(0, BULK_UNDO_MAX_TEXT_CHARS),
     at: nowIso(input.at),
     expiresAt: nowIso(new Date(input.at.getTime() + BULK_UNDO_MINUTES * 60_000)),
     rows,

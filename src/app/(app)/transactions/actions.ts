@@ -33,8 +33,11 @@ import {
   deleteTransaction,
   getTransaction,
   listTransactions,
+  MAX_SPLIT_PARTS,
   merchantRowIds,
   merchantsOfTransactions,
+  RuleOwnedRefusal,
+  TRANSACTION_NOTE_MAX_CHARS,
   transactionOwners,
   updateTransactionNotes,
   type TransactionFilter,
@@ -172,11 +175,11 @@ function allTransactionsVisible(ids: number[], viewer: SessionUser): boolean {
  */
 const SPLIT_ROW_ERROR = 'That transaction has splits and cannot be recategorized this way.';
 
-function guardedWriteError(result: RuleGuardedWriteResult | CategoryMatchResult): string {
+function guardedWriteError(result: RuleGuardedWriteResult | CategoryMatchResult, viewer: SessionUser): string {
   return result.ok
     ? ''
     : result.reason === 'owned_by_another'
-      ? ruleOwnedError(result.ownerName)
+      ? ruleOwnedError(result.ownerName, viewer)
       : SPLIT_ROW_ERROR;
 }
 
@@ -264,6 +267,8 @@ export async function manualEntryAction(_prev: ActionState, formData: FormData):
       actorRole: user.role,
     });
   } catch (error) {
+    // v1.64.1: the rule-owner refusal in this viewer's wording (ruleOwnedError).
+    if (error instanceof RuleOwnedRefusal) return { error: ruleOwnedError(error.ownerName, user) };
     return { error: errorText(error, 'Could not save the transaction.') };
   }
   // Ruling R7 / micro-ruling M5: remembered per person, so the next quick-add starts where this
@@ -328,7 +333,7 @@ export async function setCategoryAction(_prev: ActionState, formData: FormData):
       return {
         error:
           result.reason === 'owned_by_another'
-            ? ruleOwnedError(result.ownerName)
+            ? ruleOwnedError(result.ownerName, user)
             : 'This transaction is split — clear its split first, then change its category.',
       };
     }
@@ -373,7 +378,7 @@ export async function acceptGuessAction(_prev: ActionState, formData: FormData):
   // every call site that can author a merchant rule to say so at the call, and an omitted
   // optional flag is exactly the silence that made the loan bug invisible.
   const result = confirmCategory({ transactionId, categoryId: row.categoryId, userId: user.id, createRule: true, actorRole: user.role });
-  if (!result.ok) return { error: guardedWriteError(result) };
+  if (!result.ok) return { error: guardedWriteError(result, user) };
   revalidatePath('/transactions');
   return { message: `Accepted.${archivedNoRuleNote(row.categoryId, true)}${alwaysAskNoRuleNote([row.normalizedMerchant], true)}` };
 }
@@ -444,7 +449,7 @@ export async function applyToAllMatchingAction(_prev: ActionState, formData: For
   // v1.62.0 (plan item 3): every row applyCategoryToMatching may write, plus the merchant whose rule it writes.
   const before = captureBulkBefore({ ids: merchantRowIds(normalizedMerchant), merchants: [normalizedMerchant] });
   const result = applyCategoryToMatching({ normalizedMerchant, categoryId, userId: user.id, actorRole: user.role });
-  if (!result.ok) return { error: guardedWriteError(result) };
+  if (!result.ok) return { error: guardedWriteError(result, user) };
   revalidatePath('/transactions');
   const note = `${archivedNoRuleNote(categoryId, true)}${alwaysAskNoRuleNote([normalizedMerchant], true)}`;
   const lead = note !== '' ? `Applied to ${result.count} transactions.` : `Applied to ${result.count} transactions and created a rule.`;
@@ -487,7 +492,7 @@ export async function setRowTransferAction(_prev: ActionState, formData: FormDat
       // v1.14.1, and nothing about it changes in this release. The loan path is what changed.
       learnRule: true,
     });
-    if (!result.ok) return { error: guardedWriteError(result) };
+    if (!result.ok) return { error: guardedWriteError(result, user) };
   } catch (error) {
     return { error: error instanceof Error ? error.message : 'Could not update that transaction.' };
   }
@@ -539,7 +544,7 @@ export async function bulkCategorizeAction(_prev: ActionState, formData: FormDat
   // refuses the WHOLE batch (writes nothing) rather than silently overwriting a rule someone
   // else in the household owns.
   const result = bulkSetCategory(ids, categoryId, user.id, createRules, user.role);
-  if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
+  if (!result.ok) return { error: ruleOwnedError(result.ownerName, user) };
   revalidatePath('/transactions');
   revalidatePath('/review');
   // v1.62.0: the category is named, so the Undo bar can say what it would take back.
@@ -562,7 +567,7 @@ export async function bulkTransferAction(_prev: ActionState, formData: FormData)
   // refuses the WHOLE batch (writes nothing) rather than silently overwriting a rule someone
   // else in the household owns.
   const result = bulkSetTransfer(ids, isTransfer, user.id, user.role);
-  if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
+  if (!result.ok) return { error: ruleOwnedError(result.ownerName, user) };
   revalidatePath('/transactions');
   const verb = isTransfer ? 'Marked' : 'Unmarked';
   const noun = result.changed === 1 ? 'transaction' : 'transactions';
@@ -597,7 +602,7 @@ export async function setRecurringMarkAction(_prev: ActionState, formData: FormD
   const merchants = merchantsOfTransactions([parsed.data.transactionId]).filter((merchant) => merchant.trim().length > 0);
   if (merchants.length === 0) return { error: 'There is no merchant on this row to mark.' };
   const result = setRecurringMarks({ merchants, mark: markOf(parsed.data.mark), userId: user.id, actorRole: user.role });
-  if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
+  if (!result.ok) return { error: ruleOwnedError(result.ownerName, user) };
   if (result.merchants === 0) {
     if (parsed.data.mark === 'recurring') return { message: 'Already marked as recurring.' };
     if (parsed.data.mark === 'not_recurring') return { message: 'Already marked as not recurring.' };
@@ -628,7 +633,7 @@ export async function bulkRecurringMarkAction(_prev: ActionState, formData: Form
   // snapshot is of the merchants' rules alone.
   const before = captureBulkBefore({ ids: [], merchants });
   const result = setRecurringMarks({ merchants, mark: markOf(mark.data), userId: user.id, actorRole: user.role });
-  if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
+  if (!result.ok) return { error: ruleOwnedError(result.ownerName, user) };
   if (result.merchants === 0) {
     if (mark.data === 'recurring') return { message: 'Already marked as recurring.' };
     if (mark.data === 'not_recurring') return { message: 'Already marked as not recurring.' };
@@ -869,7 +874,7 @@ export async function bulkConfirmGroupAction(_prev: ActionState, formData: FormD
 
   const before = captureBulkBefore({ ids });
   const result = bulkSetCategory(ids, Number(parsed.data.groupCategoryId), user.id, false, user.role);
-  if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
+  if (!result.ok) return { error: ruleOwnedError(result.ownerName, user) };
   revalidatePath('/transactions');
   revalidatePath('/review');
   const lead = `Confirmed ${transactionCount(result.changed)}.`;
@@ -925,7 +930,7 @@ export async function bulkRecategorizeGroupAction(_prev: ActionState, formData: 
   const createRules = formData.get('createRules') === 'on';
   const before = captureBulkBefore({ ids });
   const result = bulkSetCategory(ids, categoryId, user.id, createRules, user.role);
-  if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
+  if (!result.ok) return { error: ruleOwnedError(result.ownerName, user) };
   revalidatePath('/transactions');
   revalidatePath('/review');
   // v1.62.0: the destination is named, so the Undo bar can say what it would take back.
@@ -1015,11 +1020,17 @@ export async function bulkConfirmViewAction(_prev: ActionState, formData: FormDa
  * those two decisions are refused for it; a category is still filed (confirmCategory writes no rule
  * for an empty merchant). Each decision records an undo, as every bulk change does.
  */
+/**
+ * v1.64.1. The longest category id the merchant group's picker posts. A 'use server' file exports
+ * only async functions, so this limit is named here, beside the schema that enforces it.
+ */
+const CATEGORY_ID_INPUT_MAX_CHARS = 12;
+
 const merchantDecisionSchema = z.object({
   scope: z.string().max(2000),
   merchant: z.string().max(200),
   decision: z.enum(['category', 'person', 'transfer', 'recurring']),
-  categoryId: z.string(),
+  categoryId: z.string().max(CATEGORY_ID_INPUT_MAX_CHARS),
   attributedUserId: attributedUserIdField,
   createRules: z.boolean(),
 });
@@ -1063,7 +1074,7 @@ export async function reviewMerchantGroupAction(_prev: ActionState, formData: Fo
   if (decision === 'category') {
     const createRules = parsed.data.createRules && merchant !== '';
     const result = bulkSetCategory(ids, categoryId, user.id, createRules, user.role);
-    if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
+    if (!result.ok) return { error: ruleOwnedError(result.ownerName, user) };
     kind = 'categorize';
     lead = `Categorized ${transactionCount(result.changed)}${from} as ${categoryName(categoryId)}.`;
     const notes = `${archivedNoRuleNote(categoryId, createRules)}${alwaysAskNoRuleNote(createRules ? [merchant] : [], createRules)}`;
@@ -1078,14 +1089,14 @@ export async function reviewMerchantGroupAction(_prev: ActionState, formData: Fo
     message = lead;
   } else if (decision === 'transfer') {
     const result = bulkSetTransfer(ids, true, user.id, user.role);
-    if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
+    if (!result.ok) return { error: ruleOwnedError(result.ownerName, user) };
     kind = 'transfer';
     lead = `Marked ${transactionCount(result.changed)}${from} as ${result.changed === 1 ? 'a transfer' : 'transfers'}.`;
     const skipSentence = splitSkipSentence(result.skipped);
     message = skipSentence ? `${lead} ${skipSentence}` : lead;
   } else {
     const result = setRecurringMarks({ merchants: [merchant], mark: 'recurring', userId: user.id, actorRole: user.role });
-    if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
+    if (!result.ok) return { error: ruleOwnedError(result.ownerName, user) };
     if (result.merchants === 0) return { message: 'Already marked as recurring.' };
     kind = 'recurring';
     lead = `${merchant} is marked recurring.`;
@@ -1182,7 +1193,7 @@ export async function renameTransactionAction(_prev: ActionState, formData: Form
     userId: user.id,
     actorRole: user.role,
   });
-  if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
+  if (!result.ok) return { error: ruleOwnedError(result.ownerName, user) };
   revalidatePath('/transactions');
   revalidatePath('/review');
   revalidatePath('/settings/managers');
@@ -1269,7 +1280,7 @@ export async function assignToLoanAction(formData: FormData): Promise<ActionStat
       actorRole: user.role,
       learnRule: false,
     });
-    if (!transferResult.ok) return { error: guardedWriteError(transferResult) };
+    if (!transferResult.ok) return { error: guardedWriteError(transferResult, user) };
   }
 
   if (!result.linked) return { message: 'That transaction is already linked to this loan.' };
@@ -1389,6 +1400,9 @@ export async function unassignFromLoanAction(formData: FormData): Promise<Action
   });
   if (!parsed.success) return { error: 'Invalid request.' };
 
+  // v1.64.1: the loan must be one this viewer can open, before anything about the link is read.
+  if (getWarrantyItem(parsed.data.itemId, user) === null) return { error: NOT_YOURS_ERROR };
+
   // Read BEFORE unassigning: amount_cents is immutable (src/db/schema.ts), so this still
   // reflects the link's direction after the loan_payments row is gone (NEW-3).
   //
@@ -1456,7 +1470,8 @@ export async function unassignFromLoanAction(formData: FormData): Promise<Action
 const splitPartSchema = z.object({
   categoryId: z.number().int().positive(),
   amountCents: z.number().int(),
-  note: z.string().nullable().optional(),
+  // v1.64.1: trimmed and held to the transaction note's own cap.
+  note: z.string().trim().max(TRANSACTION_NOTE_MAX_CHARS).nullable().optional(),
   /**
    * v1.63.0. Omitted is follow, so a client from before this release keeps working. Fix round:
    * `keep` (with `splitId`) is what an editor that cannot choose a person posts for a stored part --
@@ -1466,7 +1481,7 @@ const splitPartSchema = z.object({
   person: z.union([z.literal('follow'), z.literal('household'), z.literal('keep'), z.number().int().positive()]).optional(),
   splitId: z.number().int().positive().optional(),
 });
-const splitPartsSchema = z.array(splitPartSchema);
+const splitPartsSchema = z.array(splitPartSchema).max(MAX_SPLIT_PARTS);
 
 /**
  * setTransactionSplits (src/lib/splits.ts) owns every business rule for a split -- part
@@ -1695,11 +1710,19 @@ function rowWord(count: number, word: string): string {
   return count === 1 ? word : `${word}s`;
 }
 
+/**
+ * v1.64.1. The longest amount bound the Create a rule dialog posts, checked before the amount is
+ * read. Named here, beside its schema, because a 'use server' file exports only async functions.
+ */
+const RULE_AMOUNT_INPUT_MAX_CHARS = 32;
+
+const ruleAmountField = z.string().max(RULE_AMOUNT_INPUT_MAX_CHARS, { error: 'That amount is not a number.' }).trim();
+
 const ruleFromRowFields = z.object({
   normalizedMerchant: z.string().trim().min(1).max(200),
   /** '' on either side is "open on that side"; the checkbox being off sends both empty. */
-  amountMin: z.string().trim(),
-  amountMax: z.string().trim(),
+  amountMin: ruleAmountField,
+  amountMax: ruleAmountField,
   /** '' means "leave the category as it is" -- distinct from any category id. */
   categoryId: z.string().trim().refine((v) => v === '' || /^\d+$/.test(v), { error: 'Pick a category.' }),
   /**
@@ -1788,7 +1811,7 @@ export async function createRulesFromRowAction(_prev: ActionState, formData: For
   } catch (error) {
     return { error: error instanceof Error ? error.message : 'Could not create that rule.' };
   }
-  if (!result.ok) return { error: guardedWriteError(result) };
+  if (!result.ok) return { error: guardedWriteError(result, user) };
 
   revalidatePath('/transactions');
   revalidatePath('/settings/merchant-rules');
@@ -1847,7 +1870,7 @@ export async function setAlwaysAskAction(_prev: AlwaysAskState, formData: FormDa
   if (pattern.length === 0) return { error: 'Type the text to match.' };
 
   const result = setAlwaysAskRule({ pattern, matchType: parsed.data.matchType, userId: user.id, actorRole: user.role });
-  if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
+  if (!result.ok) return { error: ruleOwnedError(result.ownerName, user) };
 
   revalidatePath('/transactions');
   revalidatePath('/settings/merchant-rules');

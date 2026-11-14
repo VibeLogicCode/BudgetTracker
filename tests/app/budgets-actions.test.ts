@@ -7,6 +7,7 @@ import { runEngine } from '@/lib/categorize/engine';
 import { setAlwaysAskRule, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { setTransactionSplits } from '@/lib/splits';
 import { setUserVisibility } from '@/lib/auth/users';
+import { NOT_YOURS_ERROR } from '@/lib/auth/viewer';
 
 let currentUser: {
   id: number;
@@ -444,7 +445,8 @@ describe('rolloverIdsFor (page.tsx)', () => {
  * would show them their own spending under someone else's name.
  */
 describe('categoryTransactionsAction — task-3 (S-01): a self-scoped member could read any member\'s transactions', () => {
-  it('a self-scoped member asking for scope "household" receives only their own rows', async () => {
+  // v1.64.1: refused outright rather than answered over a narrowed scope (the request is parsed first).
+  it('a self-scoped member asking for scope "household" is refused, and receives no row', async () => {
     const { alice, bob, groceries, spend } = seedWithTransactions();
     spend({ attributedUserId: alice, amountCents: -1200, merchant: 'ALICE COFFEE' });
     spend({ attributedUserId: bob, amountCents: -9900, merchant: 'BOB ELECTRONICS' });
@@ -452,34 +454,46 @@ describe('categoryTransactionsAction — task-3 (S-01): a self-scoped member cou
     currentUser = { id: alice, name: 'Alice', username: 'alice', role: 'member', visibility: 'self' };
 
     const result = await categoryTransactionsAction({ scope: 'household', userId: null, month: '2026-03', categoryId: groceries });
-    if (!('rows' in result)) throw new Error(`expected rows, got error: ${result.error}`);
-    expect(result.rows.map((r) => ({ merchant: r.merchant, amountCents: r.amountCents }))).toEqual([
-      { merchant: 'ALICE COFFEE', amountCents: -1200 },
-    ]);
-    // The leak this task fixes: Bob's row must not be in Alice's "household" breakdown.
-    expect(result.rows.some((r) => r.merchant === 'BOB ELECTRONICS')).toBe(false);
+    expect(result).toEqual({ error: NOT_YOURS_ERROR });
   });
 
-  it('a self-scoped member asking for another member by id receives zero rows', async () => {
+  it('a self-scoped member asking for another member by id is refused, and receives no row', async () => {
     const { alice, bob, groceries, spend } = seedWithTransactions();
-    // task-3 fix round 1 (Important 1). Alice's OWN row is seeded here on purpose, not unused
-    // fixture data -- without it, an implementation that REWROTE attributedUserId to Alice's own
-    // id (instead of appending an unsatisfiable AND) would also return [] here, since only Bob's
-    // row existed and it would still be filtered out. With Alice's own row present, a rewrite
-    // would return exactly this row (her own spending, mislabelled as the answer to "give me
-    // Bob's"), while a correct append still returns []. Do not delete this line: it is the one
-    // thing that makes the two implementations diverge in this test.
     spend({ attributedUserId: alice, amountCents: -1200, merchant: 'ALICE COFFEE' });
     spend({ attributedUserId: bob, amountCents: -9900, merchant: 'BOB ELECTRONICS' });
     setUserVisibility(alice, 'self');
     currentUser = { id: alice, name: 'Alice', username: 'alice', role: 'member', visibility: 'self' };
 
     const result = await categoryTransactionsAction({ scope: 'personal', userId: bob, month: '2026-03', categoryId: groceries });
+    expect(result).toEqual({ error: NOT_YOURS_ERROR });
+  });
+
+  it('a self-scoped member still reads their own personal card', async () => {
+    const { alice, bob, groceries, spend } = seedWithTransactions();
+    spend({ attributedUserId: alice, amountCents: -1200, merchant: 'ALICE COFFEE' });
+    spend({ attributedUserId: bob, amountCents: -9900, merchant: 'BOB ELECTRONICS' });
+    setUserVisibility(alice, 'self');
+    currentUser = { id: alice, name: 'Alice', username: 'alice', role: 'member', visibility: 'self' };
+
+    const result = await categoryTransactionsAction({ scope: 'personal', userId: alice, month: '2026-03', categoryId: groceries });
     if (!('rows' in result)) throw new Error(`expected rows, got error: ${result.error}`);
-    // Zero rows, not Bob's real rows, not Alice's own rows relabelled, and not "not yours" --
-    // see getTransaction's own documented choice in src/lib/transactions.ts: an out-of-scope row
-    // reads exactly like no such row.
-    expect(result.rows).toEqual([]);
+    expect(result.rows.map((r) => ({ merchant: r.merchant, amountCents: r.amountCents }))).toEqual([{ merchant: 'ALICE COFFEE', amountCents: -1200 }]);
+  });
+
+  it('a request outside the schema is refused before anything is read', async () => {
+    const { groceries } = seedWithTransactions();
+    const bad = [
+      { scope: 'everyone', userId: null, month: '2026-03', categoryId: groceries },
+      { scope: 'personal', userId: null, month: '2026-03', categoryId: groceries },
+      { scope: 'household', userId: null, month: '2026-03-01', categoryId: groceries },
+      { scope: 'household', userId: null, month: '2026-03', categoryId: 1.5 },
+      { scope: 'household', userId: 'x', month: '2026-03', categoryId: groceries },
+    ];
+    for (const input of bad) {
+      expect(await categoryTransactionsAction(input as unknown as Parameters<typeof categoryTransactionsAction>[0]), JSON.stringify(input)).toEqual({
+        error: 'Invalid request.',
+      });
+    }
   });
 
   it('a household-visibility member is unaffected -- still sees every row, both scopes', async () => {

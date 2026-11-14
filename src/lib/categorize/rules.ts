@@ -1,6 +1,7 @@
 import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { merchantRules, users } from '@/db/schema';
+import { isSelfScoped, type Viewer } from '@/lib/auth/viewer';
 import { amountWithinBounds, boundsProblem, boundsWidth, isBounded } from '@/lib/categorize/amount-bounds';
 import { wordBoundaryTokens } from '@/lib/categorize/normalize';
 import { archivedCategoryIds } from '@/lib/categories';
@@ -483,9 +484,18 @@ export type RuleUpsertResult =
   | { ok: true; ruleId: number }
   | { ok: false; reason: 'owned_by_another'; ownerName: string };
 
-/** One wording, one place (MUST-19.11). */
-export const ruleOwnedError = (ownerName: string) =>
-  `${ownerName} set up this rule. Ask an admin to change it under Settings → Categories & rules.`;
+/** v1.64.1. What a self-scoped viewer is told instead: the rule's owner is not named to them. */
+export const RULE_OWNED_BY_ANOTHER_ERROR = "Another person's rule already covers this merchant.";
+
+/**
+ * One wording, one place (MUST-19.11). A household viewer is told whose rule it is; a self-scoped
+ * viewer (v1.64.1) is told only that it is someone else's, so no other person's name reaches them.
+ * Callers with a viewer pass it; the admin-only settings pages, which have no self viewer, need not.
+ */
+export const ruleOwnedError = (ownerName: string, viewer?: Viewer): string =>
+  viewer !== undefined && isSelfScoped(viewer)
+    ? RULE_OWNED_BY_ANOTHER_ERROR
+    : `${ownerName} set up this rule. Ask an admin to change it under Settings → Categories & rules.`;
 
 /**
  * Who owns the exact rule on (pattern, kind), or null if there is none.

@@ -4,7 +4,7 @@ import { GET as yearEndGet } from '@/app/api/reports/year-end/route';
 import { GET as taxDetailGet } from '@/app/api/reports/tax-detail/route';
 import { createSession, SESSION_COOKIE_NAME } from '@/lib/auth/session';
 import { setUserVisibility } from '@/lib/auth/users';
-import { planYearEndPack } from '@/lib/year-end';
+import { planYearEndPack, YEAR_END_BUSY_MESSAGE } from '@/lib/year-end';
 import { buildYearEndFixture, type YearEndFixture } from '../helpers/year-end-fixture';
 import { readZip } from '../helpers/zip-read';
 
@@ -69,7 +69,10 @@ describe.each(['year-end', 'tax-detail'] as const)('GET /api/reports/%s guards',
 
   it('serves a header-less request, the plain-HTTP LAN default', async () => {
     fx = buildYearEndFixture();
-    expect((await get(route, '?year=2026', tokenFor(fx.admin), null)).status).toBe(200);
+    const response = await get(route, '?year=2026', tokenFor(fx.admin), null);
+    expect(response.status).toBe(200);
+    // Read to the end, so the pack's slot is free for the next test.
+    await response.arrayBuffer();
   });
 });
 
@@ -173,5 +176,57 @@ describe('GET /api/reports/tax-detail', () => {
     expect(body).not.toContain('2025-11-20');
     fx.t.db.run(sql`update transactions set date = '2026-12-31' where id = ${fx.txn.lastYear}`);
     expect(await (await get('tax-detail', '?year=2026', tokenFor(fx.alex))).text()).toContain('2026-12-31');
+  });
+});
+
+/** v1.64.1. One year-end pack per member at a time. */
+describe('GET /api/reports/year-end: one pack per member at a time', () => {
+  /** Lets a finished or cancelled stream emit 'close', which frees its slot. */
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+  it('a second request while the first is streaming answers 429; the slot frees when it ends', async () => {
+    fx = buildYearEndFixture();
+    const token = tokenFor(fx.admin);
+    const first = await get('year-end', '?year=2026', token);
+    expect(first.status).toBe(200);
+
+    const second = await get('year-end', '?year=2026', token);
+    expect(second.status).toBe(429);
+    expect(second.headers.get('content-type')).toContain('text/plain');
+    expect(await second.text()).toBe(YEAR_END_BUSY_MESSAGE);
+
+    // Another member is not held up by it.
+    const other = await get('year-end', '?year=2026', tokenFor(fx.alex));
+    expect(other.status).toBe(200);
+    await other.arrayBuffer();
+
+    await first.arrayBuffer();
+    await settle();
+    const third = await get('year-end', '?year=2026', token);
+    expect(third.status).toBe(200);
+    await third.arrayBuffer();
+  });
+
+  it('the slot frees when the client goes away', async () => {
+    fx = buildYearEndFixture();
+    const token = tokenFor(fx.admin);
+    const first = await get('year-end', '?year=2026', token);
+    expect(first.status).toBe(200);
+    await first.body?.cancel();
+    await settle();
+    const next = await get('year-end', '?year=2026', token);
+    expect(next.status).toBe(200);
+    await next.arrayBuffer();
+  });
+
+  it('a pack refused as too large holds no slot', async () => {
+    fx = buildYearEndFixture();
+    const token = tokenFor(fx.admin);
+    cap.value = 1;
+    expect((await get('year-end', '?year=2026', token)).status).toBe(413);
+    cap.value = null;
+    const next = await get('year-end', '?year=2026', token);
+    expect(next.status).toBe(200);
+    await next.arrayBuffer();
   });
 });

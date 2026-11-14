@@ -5,7 +5,7 @@ import { mustChangePassword } from '@/lib/auth/users';
 import { todayIso } from '@/lib/dates';
 import { readEnv } from '@/lib/env';
 import { parseTaxYear } from '@/lib/tax';
-import { planYearEndPack } from '@/lib/year-end';
+import { claimYearEndSlot, planYearEndPack, YEAR_END_BUSY_MESSAGE } from '@/lib/year-end';
 import { zipLength, zipStream } from '@/lib/zip-stream';
 
 export const dynamic = 'force-dynamic';
@@ -24,6 +24,9 @@ export const dynamic = 'force-dynamic';
  * every size was read before the response starts, so content-length is exact; a file that changes
  * while streaming errors the body, and the browser marks the download failed rather than keeping a
  * broken zip.
+ *
+ * v1.64.1: one pack per member at a time (claimYearEndSlot). A second request while the first is
+ * still streaming answers 429; the slot frees when the stream closes, finished, failed or abandoned.
  */
 export async function GET(request: Request): Promise<Response> {
   if (!isSameOriginOrHeaderless(request.headers)) return new Response('Forbidden', { status: 403 });
@@ -36,16 +39,35 @@ export async function GET(request: Request): Promise<Response> {
   const year = parseTaxYear(new URL(request.url).searchParams.get('year'));
   if (year === null) return new Response('Bad Request', { status: 400 });
 
-  const plan = planYearEndPack(year, user, { today: todayIso(new Date(), readEnv().tz) });
-  if (plan.tooLargeMessage !== null) {
-    return new Response(plan.tooLargeMessage, {
-      status: 413,
+  const release = claimYearEndSlot(user.id);
+  if (release === null) {
+    return new Response(YEAR_END_BUSY_MESSAGE, {
+      status: 429,
       headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
     });
   }
 
-  const length = zipLength(plan.entries);
-  const body = Readable.toWeb(zipStream(plan.entries)) as ReadableStream<Uint8Array>;
+  let stream: Readable;
+  let length: number;
+  try {
+    const plan = planYearEndPack(year, user, { today: todayIso(new Date(), readEnv().tz) });
+    if (plan.tooLargeMessage !== null) {
+      release();
+      return new Response(plan.tooLargeMessage, {
+        status: 413,
+        headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
+      });
+    }
+    length = zipLength(plan.entries);
+    stream = zipStream(plan.entries);
+  } catch (error) {
+    release();
+    throw error;
+  }
+  // 'close' follows the end of the stream, an error and a destroy (a cancelled body), so the slot
+  // frees whichever way the download stops.
+  stream.once('close', release);
+  const body = Readable.toWeb(stream) as ReadableStream<Uint8Array>;
   return new Response(body, {
     status: 200,
     headers: {

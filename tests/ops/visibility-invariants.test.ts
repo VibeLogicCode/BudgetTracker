@@ -112,6 +112,17 @@ const REQUIRE_VIEWER: { file: string; fn: string }[] = [
   // v1.64.0: Ask in words' lists (accounts and people) are what the model is told about, so they
   // are this viewer's own: a self viewer's accounts only, and no person.
   { file: 'src/lib/ai/ask.ts', fn: 'askChoices' },
+  /*
+    v1.64.1. Six reads a page already calls with the viewer, listed so the parameter can never
+    become optional: the two grouped views of the transactions list, Review's transfer pairs, the
+    month check-in, the setup suggestions and the recurring charges of this month.
+  */
+  { file: 'src/lib/transactions.ts', fn: 'groupTransactionsByCategory' },
+  { file: 'src/lib/transactions.ts', fn: 'groupTransactionsByMerchant' },
+  { file: 'src/lib/transfer-pairs.ts', fn: 'suggestTransferPairs' },
+  { file: 'src/lib/month-checkin.ts', fn: 'monthCheckIn' },
+  { file: 'src/lib/setup-suggestions.ts', fn: 'setupSuggestions' },
+  { file: 'src/lib/recurring.ts', fn: 'recurringThisMonth' },
 ];
 
 /** Exempt, WITH the reason. Nothing is exempt without one. */
@@ -290,8 +301,9 @@ describe('ruling R2: every read-model helper takes a viewer', () => {
   // v1.60.0: raised from 44 to 45, the actual count with cashflowForRange added.
   // v1.63.0: raised from 45 to 53, the actual count with the eight tax and year-end reads added.
   // v1.64.0: raised from 53 to 55, the actual count with aiSuggestionsForMerchants and askChoices added.
-  it('the named lists cannot shrink below 55 entries', () => {
-    expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(55);
+  // v1.64.1: raised from 55 to 61, the actual count with the six reads above added.
+  it('the named lists cannot shrink below 61 entries', () => {
+    expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(61);
   });
 });
 

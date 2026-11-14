@@ -11,7 +11,7 @@ import { savingsRate, type SavingsRate } from '@/lib/savings-rate';
 import { effectivePartPerson } from '@/lib/split-person';
 import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY, EFFECTIVE_PERSON, partPersonClause, splitsForTransactions } from '@/lib/splits';
 import { SPEND_ROW_WHERE } from '@/lib/spend-where';
-import { listTransactions, type TransactionFilter } from '@/lib/transactions';
+import { descriptionFor, listTransactions, type TransactionFilter } from '@/lib/transactions';
 
 export interface DateRange {
   from: string;
@@ -668,8 +668,9 @@ export function largestPurchases(input: DateRange & { limit?: number }, viewer: 
     .select({
       id: transactions.id,
       date: transactions.date,
-      rawDescription: transactions.rawDescription,
-      displayDescription: transactions.displayDescription,
+      // v1.64.1: the shared description fragment (src/lib/transactions.ts), so a self viewer's row
+      // reached only through a part reads as its bank text.
+      description: descriptionFor(ownerScope(viewer)),
       parts: sql<number>`count(*)`,
       categoryId: sql<number | null>`min(${EFFECTIVE_CATEGORY})`,
       total,
@@ -688,7 +689,7 @@ export function largestPurchases(input: DateRange & { limit?: number }, viewer: 
   return rows.map((row) => ({
     id: row.id,
     date: row.date,
-    description: row.displayDescription !== null && row.displayDescription.length > 0 ? row.displayDescription : row.rawDescription,
+    description: row.description,
     categoryName:
       row.parts > 1 ? 'Split' : row.categoryId === null ? 'Uncategorized' : (names.get(row.categoryId) ?? 'Uncategorized'),
     spentCents: netSpentCents(row.total ?? 0),
@@ -702,12 +703,12 @@ export interface CsvColumn<T> {
 
 /**
  * Fields a spreadsheet would execute rather than display. Excel/Sheets/LibreOffice all
- * treat a leading =, +, - or @ as the start of a formula, and a leading tab as a cell
- * separator that shifts the payload into the next cell — so a transaction note reading
+ * treat a leading =, +, - or @ as the start of a formula, and a leading tab or carriage return
+ * (v1.64.1) as a cell separator that shifts the payload into the next cell — so a transaction note reading
  * `=SUM(1)` (or worse, a WEBSERVICE/HYPERLINK call) would run on open. Bank descriptions
  * are attacker-influenced text in exactly the way this attack needs.
  */
-const FORMULA_TRIGGER = /^[=+\-@\t]/;
+const FORMULA_TRIGGER = /^[=+\-@\t\r]/;
 
 /**
  * ...except a plain number. Spend is stored negative, so the Amount column is full of

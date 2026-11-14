@@ -3406,6 +3406,17 @@ describe('reviewMerchantGroupAction (v1.62.0 B3)', () => {
     expect(await decide({ merchant: 'MAPLE GROCER', decision: 'category', categoryId: '' })).toEqual({ error: 'Pick a category first.' });
     expect(lastBulkUndo(s.alex, ACTED)).toBeNull();
   });
+
+  it('refuses an over-long category id and writes nothing (v1.64.1)', async () => {
+    const s = reviewSetup();
+    const before = s.rows();
+    const padded = `${'0'.repeat(20)}${s.groceries}`;
+    expect(await decide({ merchant: 'MAPLE GROCER', decision: 'category', categoryId: padded, createRules: 'on' })).toEqual({
+      error: 'Invalid request.',
+    });
+    expect(s.rows()).toEqual(before);
+    expect(lastBulkUndo(s.alex, ACTED)).toBeNull();
+  });
 });
 
 describe('undo around every bulk change (v1.62.0 B4)', () => {

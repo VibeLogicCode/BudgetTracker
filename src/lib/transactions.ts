@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, or, sql, type SQL, type SQLWrapper } from 'drizzle-orm';
 import { z } from '@/lib/zod';
 import { getDb } from '@/db/client';
-import { accounts, categories, imports, transactions, transactionSplits, users } from '@/db/schema';
+import { accounts, categories, imports, loanPayments, transactions, transactionSplits, users, warrantyItems } from '@/db/schema';
 import { getAccount } from '@/lib/accounts';
 import { canActOnOwner, NOT_YOURS_ERROR, ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { recordSetAside, reopenSetAsideFor } from '@/lib/import/set-aside';
@@ -28,6 +28,7 @@ import {
 import { untrain } from '@/lib/categorize/bayes';
 import { tokenize } from '@/lib/categorize/normalize';
 import { appendAudit } from '@/lib/audit';
+import { getWarrantyItem } from '@/lib/warranty/items';
 import { transactionImports } from '@/db/schema';
 // F-07 (v1.31.0). See buildWhere's search clause below for why this is the ONLY new import the
 // feature needs -- the split editor already proved this parser handles a person's typed amount.
@@ -318,6 +319,12 @@ export interface TransactionPage {
   inCents: number;
 }
 
+/** The longest note a transaction, or a part of a split, keeps. */
+export const TRANSACTION_NOTE_MAX_CHARS = 500;
+
+/** v1.64.1. The most parts one split may be saved with (the split editor's posted parts). */
+export const MAX_SPLIT_PARTS = 50;
+
 export const manualTransactionSchema = z.object({
   accountId: z.number().int().positive(),
   date: z.string().refine(isIsoDate, 'Date must be YYYY-MM-DD'),
@@ -325,7 +332,7 @@ export const manualTransactionSchema = z.object({
   amountCents: z.number().int(),
   categoryId: z.number().int().positive().nullable(),
   attributedUserId: z.number().int().positive().nullable(),
-  notes: z.string().trim().max(500).nullable().optional(),
+  notes: z.string().trim().max(TRANSACTION_NOTE_MAX_CHARS).nullable().optional(),
 });
 
 /** Spec v1.4: display_description when set, raw_description otherwise. */
@@ -352,6 +359,61 @@ function ownRowOnly<T>(ownView: number, value: SQLWrapper, otherwise: SQL): SQL<
 }
 
 /**
+ * v1.64.1. True when the row's display name is one this self viewer may read on their own row: any
+ * name but a loan label, and a loan label only while every loan the row is linked to is theirs
+ * (the items getWarrantyItem resolves for them). A loan label names its loan, so a row of theirs
+ * that a household loan rule linked to someone else's loan reads as its bank text.
+ */
+function loanLabelReadable(ownView: number): SQL {
+  return sql`(coalesce(${transactions.displaySource}, '') <> 'loan' or (
+    exists (select 1 from ${loanPayments} where ${loanPayments.txnId} = ${transactions.id})
+    and not exists (
+      select 1 from ${loanPayments}
+      inner join ${warrantyItems} on ${warrantyItems.id} = ${loanPayments.itemId}
+      where ${loanPayments.txnId} = ${transactions.id} and ${warrantyItems.ownerUserId} <> ${ownView}
+    )
+  ))`;
+}
+
+/**
+ * v1.64.1. The one description fragment every reader of a row's name shares (the transactions list
+ * and its previews, merchant groups, Budgets' category rows, the largest purchases, the tax detail
+ * rows and so the year-end pack). `ownView` is the self viewer's own id, or null for a household
+ * viewer, who reads every name as stored.
+ *
+ * Built on ownRowOnly: on a row a self viewer reaches only through a part of theirs, no display name
+ * at all -- no loan label and no name someone typed -- so the row reads as its bank text, and its
+ * display source reads null. On their own row, everything but a loan label for a loan they do not
+ * hold (loanLabelReadable).
+ */
+export function displayDescriptionFor(ownView: number | null): SQL<string | null> {
+  if (ownView === null) return sql<string | null>`${transactions.displayDescription}`;
+  return ownRowOnly<string | null>(
+    ownView,
+    sql`(case when ${loanLabelReadable(ownView)} then ${transactions.displayDescription} else null end)`,
+    sql`null`,
+  );
+}
+
+/** v1.64.1. The display source beside displayDescriptionFor: null wherever that name reads null. */
+export function displaySourceFor(ownView: number | null): SQL<TransactionRow['displaySource']> {
+  if (ownView === null) return sql<TransactionRow['displaySource']>`${transactions.displaySource}`;
+  return ownRowOnly<TransactionRow['displaySource']>(
+    ownView,
+    sql`(case when ${loanLabelReadable(ownView)} then ${transactions.displaySource} else null end)`,
+    sql`null`,
+  );
+}
+
+/**
+ * v1.64.1. The text a row is shown by, as displayNameOf reads it: the readable display name when it
+ * has one, else the bank's own wording.
+ */
+export function descriptionFor(ownView: number | null): SQL<string> {
+  return sql<string>`coalesce(nullif(${displayDescriptionFor(ownView)}, ''), ${transactions.rawDescription})`;
+}
+
+/**
  * v1.63.0 (plan 2026-11-12, S3). The row read model, for one person scope.
  *
  * `person` is whose share the row is read at (sharePerson: a self viewer's own id, else the person
@@ -371,8 +433,10 @@ function selectionFor(person: SplitPersonScope | null, ownView: number | null) {
     accountId: transactions.accountId,
     accountName: ownView === null ? accounts.name : ownRowOnly<string>(ownView, accounts.name, sql`${OTHER_ACCOUNT_LABEL}`),
     rawDescription: transactions.rawDescription,
-    displayDescription: transactions.displayDescription,
-    displaySource: transactions.displaySource,
+    // v1.64.1: the shared description fragment, so a self viewer reads no loan label and no typed
+    // name on a row they reach only through a part (displayDescriptionFor).
+    displayDescription: ownView === null ? transactions.displayDescription : displayDescriptionFor(ownView),
+    displaySource: ownView === null ? transactions.displaySource : displaySourceFor(ownView),
     normalizedMerchant: transactions.normalizedMerchant,
     amountCents: person === null ? sql<number>`${transactions.amountCents}` : scopedAmountSql(person),
     parentAmountCents: ownView === null ? sql<number | null>`${transactions.amountCents}` : sql<number | null>`null`,
@@ -549,16 +613,22 @@ function buildWhere(filter: TransactionFilter, viewer: Viewer): SQL | undefined 
     // v1.63.0 fix round: under a person scope the amount searched is the share the row shows
     // (rowAmountSql), so "30.00" finds Sam's $30 part of a $300 charge and "300" does not.
     const shownAmount = rowAmountSql(filter, viewer);
+    // v1.64.1: a self viewer searches the display name and the note only where the list shows them
+    // -- the name through the shared description fragment, the note on their own rows -- so a row
+    // they reach only through a part is found by its bank text and amount alone.
+    const own = ownerScope(viewer);
     const clause = or(
       sql`upper(${transactions.rawDescription}) like ${needle} escape ${LIKE_ESCAPE}`,
       sql`upper(${transactions.normalizedMerchant}) like ${needle} escape ${LIKE_ESCAPE}`,
       // Search what the user can actually see, too (spec v1.4 display names).
-      sql`upper(coalesce(${transactions.displayDescription}, '')) like ${needle} escape ${LIKE_ESCAPE}`,
+      sql`upper(coalesce(${displayDescriptionFor(own)}, '')) like ${needle} escape ${LIKE_ESCAPE}`,
       // v1.13.0 ruling R13. The merchant half of that ruling needed no edit -- normalizedMerchant is
       // already in this OR, one line above, and a second clause over the same column would be a
       // duplicate rather than a fix. No FTS5 index: ruling R13 says LIKE, and the warranty side's
       // index exists because it also covers OCR'd receipt text, which has no analogue here.
-      sql`upper(coalesce(${transactions.notes}, '')) like ${needle} escape ${LIKE_ESCAPE}`,
+      own === null
+        ? sql`upper(coalesce(${transactions.notes}, '')) like ${needle} escape ${LIKE_ESCAPE}`
+        : sql`(${transactions.attributedUserId} = ${own} and upper(coalesce(${transactions.notes}, '')) like ${needle} escape ${LIKE_ESCAPE})`,
       // or() drops `undefined` arms silently (drizzle-orm), so a non-money query adds nothing here.
       amountCents === null ? undefined : sql`abs(${shownAmount}) = ${amountCents}`,
     );
@@ -703,7 +773,7 @@ export function listTransactions(filter: TransactionFilter, viewer: Viewer): Tra
 export interface CategoryPreviewRow {
   id: number;
   date: string;
-  /** `coalesce(display_description, raw_description)` -- the same text the flat list renders. */
+  /** descriptionFor -- the same text the flat list renders, for the same viewer. */
   description: string;
   /**
    * The EFFECTIVE amount, so a split part previews at the part's own amount and therefore sums
@@ -883,7 +953,12 @@ export interface CategoryGroupPage {
  * amount is looking at clusters now, and a preview whose order changes under a control that is
  * folded away on this view would be unexplainable.
  */
-function attachPreviews(pageGroups: Omit<CategoryGroupRow, 'preview'>[], where: SQL | undefined): CategoryGroupRow[] {
+function attachPreviews(
+  pageGroups: Omit<CategoryGroupRow, 'preview'>[],
+  where: SQL | undefined,
+  /** v1.64.1: the self viewer's own id, or null -- whose description fragment the previews read. */
+  ownView: number | null,
+): CategoryGroupRow[] {
   if (pageGroups.length === 0) return [];
 
   const ids = pageGroups.map((group) => group.categoryId).filter((id): id is number => id !== null);
@@ -901,7 +976,7 @@ function attachPreviews(pageGroups: Omit<CategoryGroupRow, 'preview'>[], where: 
       categoryId: sql<number | null>`${EFFECTIVE_CATEGORY}`.as('preview_category_id'),
       id: transactions.id,
       date: transactions.date,
-      description: sql<string>`coalesce(${transactions.displayDescription}, ${transactions.rawDescription})`.as('preview_description'),
+      description: sql<string>`${descriptionFor(ownView)}`.as('preview_description'),
       amountCents: sql<number>`${EFFECTIVE_AMOUNT}`.as('preview_amount_cents'),
       rank: sql<number>`row_number() over (partition by ${EFFECTIVE_CATEGORY} order by ${transactions.date} desc, ${transactions.id} desc)`.as('preview_rank'),
     })
@@ -1059,7 +1134,7 @@ export function groupTransactionsByCategory(
   const pageGroups = groups.slice((page - 1) * pageSize, page * pageSize);
 
   return {
-    groups: attachPreviews(pageGroups, partWhere),
+    groups: attachPreviews(pageGroups, partWhere, ownerScope(viewer)),
     page,
     pageSize,
     pageCount: Math.max(1, Math.ceil(groupCount / pageSize)),
@@ -1195,7 +1270,7 @@ export function groupTransactionsByMerchant(
         merchant: sql<string>`${transactions.normalizedMerchant}`.as('merchant_preview_merchant'),
         id: transactions.id,
         date: transactions.date,
-        description: sql<string>`coalesce(${transactions.displayDescription}, ${transactions.rawDescription})`.as('merchant_preview_description'),
+        description: sql<string>`${descriptionFor(ownerScope(viewer))}`.as('merchant_preview_description'),
         amountCents: sql<number>`${amount}`.as('merchant_preview_amount'),
         rank: sql<number>`row_number() over (partition by ${transactions.normalizedMerchant} order by ${transactions.date} desc, ${transactions.id} desc)`.as('merchant_preview_rank'),
       })
@@ -1276,31 +1351,19 @@ export function merchantRowIds(normalizedMerchant: string): number[] {
  * exactly when this returns null, and the transaction's own person still decides who may act on it
  * (plan 2026-11-12, A4: transactionOwners is unchanged). Reaching a row through a part set to the
  * viewer would let them rename, annotate or link somebody else's charge. What a self viewer may
- * READ of such a row is getTransactionShare's answer below.
+ * READ of such a row is listTransactions' answer.
  *
  * v1.63.0 fix round: `amountCents` is the WHOLE charge, for every viewer. This is a server-side
  * read, and its callers need the charge itself: a loan opened from the row is seeded from it and
  * assignTransactionToLoan applies the whole of it, the over-link warning compares the links with
  * it, and a warranty's price is what the purchase cost. Reading it at a self viewer's share opened a
  * loan from a half-shared -$500 payment at $0. Anything shown in a list reads
- * getTransactionShare (or listTransactions) instead.
+ * listTransactions instead.
  */
 export function getTransaction(id: number, viewer: Viewer): TransactionRow | null {
   const scope = ownerScope(viewer);
   const where = scope === null ? eq(transactions.id, id) : and(eq(transactions.id, id), eq(transactions.attributedUserId, scope));
   return baseQuery(selectionFor(null, scope)).where(where).get() ?? null;
-}
-
-/**
- * v1.63.0 (plan 2026-11-12, A4). One row by id, read the way listTransactions reads it: a self
- * viewer reaches it through personRowClause -- their own and not wholly given away, or holding a
- * part of theirs -- at their share, with no whole amount and no other person's name. A read, never
- * a permission: a caller about to WRITE the row gates on getTransaction.
- */
-export function getTransactionShare(id: number, viewer: Viewer): TransactionRow | null {
-  const scope = ownerScope(viewer);
-  const where = scope === null ? eq(transactions.id, id) : and(eq(transactions.id, id), personRowClause(scope));
-  return baseQuery(selectionFor(scope, scope)).where(where).get() ?? null;
 }
 
 /**
@@ -1816,7 +1879,8 @@ export function importedTransactionIds(ids: number[]): number[] {
  * Undo import, which removes the whole statement. One wrong row can now go on its own:
  *   - who: an admin, the row's person, or anyone for a shared row (canActOnOwner). A self-scoped
  *     member deletes only rows they typed in themselves; an imported row is refused them, as
- *     import and undo already are.
+ *     import and undo already are. v1.64.1: the same canActOnOwner rule for a typed row, and a row
+ *     linked to a loan the viewer cannot open is refused.
  *   - the tombstone: a dismissed `deleted` record in set_aside_rows, keyed exactly as the row was
  *     (provider id, else CSV hash). Every import path and the sync read that table after the
  *     exact-duplicate check, so importing the same statement again, or the sync's overlap, leaves
@@ -1838,6 +1902,20 @@ export function importedTransactionIds(ids: number[]): number[] {
  * exists; and neither of them untrains the classifier for a category somebody confirmed. Splits
  * need no line here -- transaction_splits cascades, and a split describes only its own parent.
  */
+/**
+ * v1.64.1. True when every loan this transaction is linked to resolves for the viewer through
+ * getWarrantyItem -- every loan for a household viewer, their own for a self viewer.
+ */
+function loanLinksResolveFor(txnId: number, viewer: Viewer): boolean {
+  const itemIds = getDb()
+    .selectDistinct({ itemId: loanPayments.itemId })
+    .from(loanPayments)
+    .where(eq(loanPayments.txnId, txnId))
+    .all()
+    .map((row) => row.itemId);
+  return itemIds.every((itemId) => getWarrantyItem(itemId, viewer) !== null);
+}
+
 export function deleteTransaction(input: {
   txnId: number;
   userId: number;
@@ -1881,10 +1959,13 @@ export function deleteTransaction(input: {
     .where(eq(transactionImports.transactionId, input.txnId))
     .all();
   const imported = row.importId !== null || associations.length > 0 || row.origin !== 'manual';
-  if (imported) {
-    if (scope !== null) return { error: IMPORTED_ROW_SELF_ERROR };
-    if (!canActOnOwner(row.attributedUserId, input.viewer)) return { error: NOT_YOURS_ERROR };
-  }
+  if (imported && scope !== null) return { error: IMPORTED_ROW_SELF_ERROR };
+  // v1.64.1: who may delete is the same rule for a typed row as for an imported one -- an admin,
+  // the row's person, or anyone for a shared row.
+  if (!canActOnOwner(row.attributedUserId, input.viewer)) return { error: NOT_YOURS_ERROR };
+  // v1.64.1: a delete reverses the row's loan links, so every loan it is linked to must be one the
+  // viewer can open (getWarrantyItem's rule), or nothing changes.
+  if (!loanLinksResolveFor(input.txnId, input.viewer)) return { error: NOT_YOURS_ERROR };
 
   const label = row.displayDescription ?? row.rawDescription;
   // The statement the row came from, for the tombstone and the audit line: its own import first,

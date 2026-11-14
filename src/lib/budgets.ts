@@ -9,6 +9,7 @@ import { addMonths, isMonthKey, monthEnd, monthRange, monthStart } from '@/lib/d
 import { netSpentCents, pctOf } from '@/lib/money';
 import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY, partPersonClause, scopedAmountSql } from '@/lib/splits';
 import { SPEND_ROW_WHERE, SPENDING_OUT_WHERE } from '@/lib/spend-where';
+import { descriptionFor } from '@/lib/transactions';
 
 export type BudgetScope = 'household' | 'personal';
 
@@ -293,7 +294,9 @@ export function categoryTransactions(
     .select({
       id: transactions.id,
       date: transactions.date,
-      merchant: sql<string>`coalesce(${transactions.displayDescription}, ${transactions.rawDescription})`,
+      // v1.64.1: the shared description fragment, so a self viewer's row reached only through a
+      // part reads as its bank text (displayDescriptionFor, src/lib/transactions.ts).
+      merchant: descriptionFor(viewerScope),
       amountCents: EFFECTIVE_AMOUNT,
       normalizedMerchant: transactions.normalizedMerchant,
       source: transactions.categorizationSource,
