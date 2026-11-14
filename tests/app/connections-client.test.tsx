@@ -305,8 +305,9 @@ describe('ConnectionsClient — choose the start date, then link', () => {
     const posts: Record<string, unknown>[] = [];
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (url: string, init?: { body?: string }) => {
+      vi.fn(async (url: string, init?: { body?: string; method?: string }) => {
         if (url === '/api/simplefin/accounts') {
+          if (init?.method !== 'POST') throw new Error('the accounts call must be a POST');
           return {
             ok: true,
             status: 200,

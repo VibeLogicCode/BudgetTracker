@@ -38,6 +38,35 @@ import {
 export const RESTORE_STORED_NAME_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|png|webp|pdf)$/;
 
+/** An archive lists at most this many entries (budget.db, receipts/ and the receipt files). */
+export const MAX_ARCHIVE_ENTRIES = 200_000;
+/** Free space that must remain on the data volume after an archive is unpacked. */
+export const RESTORE_HEADROOM_BYTES = 100 * 1024 * 1024;
+/** A refusal names at most this many entries, each cut to this many characters. */
+export const MAX_LISTED_PROBLEMS = 5;
+export const MAX_LISTED_NAME_CHARS = 100;
+/** Operator-readable restore text is cut to this many characters. */
+export const MAX_RESTORE_TEXT_CHARS = 1000;
+
+/** Control characters removed (line breaks included), then cut to `max` characters. */
+export function cleanRestoreText(text: string, max: number = MAX_RESTORE_TEXT_CHARS): string {
+  // eslint-disable-next-line no-control-regex
+  const cleaned = text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ');
+  return cleaned.length > max ? `${cleaned.slice(0, max)}...` : cleaned;
+}
+
+/** Free bytes on the volume holding `dir`, using the nearest directory that exists. */
+export function freeBytesAt(dir: string): number {
+  let probe = path.resolve(dir);
+  while (!fs.existsSync(probe)) {
+    const parent = path.dirname(probe);
+    if (parent === probe) break;
+    probe = parent;
+  }
+  const stats = fs.statfsSync(probe);
+  return stats.bavail * stats.bsize;
+}
+
 export type ArtifactKind = 'archive' | 'sqlite' | 'unknown';
 
 export class RestoreError extends Error {
@@ -88,37 +117,60 @@ export function detectArtifactKind(filePath: string): ArtifactKind {
  *
  * MUST-20.4: this is the same function, moved — not a second copy of the tar-slip defence.
  */
-export function assertArchiveEntriesAreSafe(artifactPath: string): void {
+export function assertArchiveEntriesAreSafe(artifactPath: string, opts: { freeBytes?: number; maxEntries?: number } = {}): void {
   const problems: string[] = [];
+  let problemCount = 0;
+  const flag = (text: string): void => {
+    problemCount += 1;
+    if (problems.length < MAX_LISTED_PROBLEMS) problems.push(cleanRestoreText(text, MAX_LISTED_NAME_CHARS));
+  };
+  const seen = new Set<string>();
+  let entryCount = 0;
+  let expandedBytes = 0;
   tar.list({
     file: artifactPath,
     sync: true,
     onReadEntry: (entry) => {
+      entryCount += 1;
+      if (entry.type === 'File') expandedBytes += Number(entry.size ?? 0);
       const name = entry.path.replace(/\/+$/, '');
       if (entry.type !== 'File' && entry.type !== 'Directory') {
-        problems.push(`${entry.path} (${entry.type})`);
+        flag(`${entry.path} (${entry.type})`);
         return;
       }
       if (path.isAbsolute(name) || name.split('/').includes('..')) {
-        problems.push(entry.path);
+        flag(entry.path);
         return;
       }
+      if (seen.has(name)) {
+        flag(`${entry.path} (repeated)`);
+        return;
+      }
+      seen.add(name);
       if (name === 'budget.db') {
-        if (entry.type !== 'File') problems.push(`${entry.path} (expected a file)`);
+        if (entry.type !== 'File') flag(`${entry.path} (expected a file)`);
         return;
       }
       if (name === 'receipts') {
-        if (entry.type !== 'Directory') problems.push(`${entry.path} (expected a directory)`);
+        if (entry.type !== 'Directory') flag(`${entry.path} (expected a directory)`);
         return;
       }
       const match = /^receipts\/(.+)$/.exec(name);
       if (match === null || !RESTORE_STORED_NAME_RE.test(match[1]) || entry.type !== 'File') {
-        problems.push(entry.path);
+        flag(entry.path);
       }
     },
   });
-  if (problems.length > 0) {
-    throw new RestoreError(`Refusing to extract unexpected archive entries: ${problems.join(', ')}`);
+  if (problemCount > 0) {
+    const more = problemCount > problems.length ? `, and ${problemCount - problems.length} more` : '';
+    throw new RestoreError(`Refusing to extract unexpected archive entries: ${problems.join(', ')}${more}`);
+  }
+  if (entryCount > (opts.maxEntries ?? MAX_ARCHIVE_ENTRIES)) {
+    throw new RestoreError('That archive holds too many entries to restore. Nothing was changed.');
+  }
+  const free = opts.freeBytes ?? freeBytesAt(path.dirname(path.resolve(artifactPath)));
+  if (expandedBytes + RESTORE_HEADROOM_BYTES > free) {
+    throw new RestoreError('That archive would not fit on the data volume once unpacked. Nothing was changed.');
   }
 }
 
@@ -300,6 +352,69 @@ function appliedMigrationsFor(databasePath: string, migrationsFolder: string, al
   return assertNotNewerThanCode(databasePath, migrationsFolder);
 }
 
+const schemaObjectKey = (type: string, name: string, sqlText: string | null): string =>
+  `${type}:${name}:${(sqlText ?? '').replace(/\s+/g, ' ').trim()}`;
+
+const referenceObjectCache = new Map<string, Set<string>>();
+
+/**
+ * Every trigger and view (type, name, SQL) that the local migrations create at ANY step: the
+ * migrations are applied one at a time to an in-memory database and what exists after each step is
+ * collected, so a backup made at an older step still matches. Cached per folder for the process.
+ */
+function referenceTriggersAndViews(migrationsFolder: string): Set<string> {
+  const cached = referenceObjectCache.get(migrationsFolder);
+  if (cached !== undefined) return cached;
+  const found = new Set<string>();
+  let tags: string[];
+  try {
+    const journal = JSON.parse(fs.readFileSync(path.join(migrationsFolder, 'meta', '_journal.json'), 'utf8')) as {
+      entries?: { tag: string }[];
+    };
+    tags = (journal.entries ?? []).map((entry) => entry.tag);
+  } catch {
+    throw new RestoreError('Could not read the local migrations journal. The installation may be corrupted.');
+  }
+  const memory = new Database(':memory:');
+  try {
+    for (const tag of tags) {
+      let text: string;
+      try {
+        text = fs.readFileSync(path.join(migrationsFolder, `${tag}.sql`), 'utf8');
+      } catch {
+        throw new RestoreError('Could not read a local migration. The installation may be corrupted.');
+      }
+      for (const statement of text.split('--> statement-breakpoint')) memory.exec(statement);
+      const rows = memory
+        .prepare("select type, name, sql from sqlite_master where type in ('trigger', 'view')")
+        .all() as { type: string; name: string; sql: string | null }[];
+      for (const row of rows) found.add(schemaObjectKey(row.type, row.name, row.sql));
+    }
+  } finally {
+    memory.close();
+  }
+  referenceObjectCache.set(migrationsFolder, found);
+  return found;
+}
+
+/** Refuses an incoming database holding a trigger or view that no local migration creates. */
+function assertOnlyKnownTriggersAndViews(db: Database.Database, migrationsFolder: string): void {
+  const rows = db.prepare("select type, name, sql from sqlite_master where type in ('trigger', 'view')").all() as {
+    type: string;
+    name: string;
+    sql: string | null;
+  }[];
+  if (rows.length === 0) return;
+  const known = referenceTriggersAndViews(migrationsFolder);
+  const unknown = rows.filter((row) => !known.has(schemaObjectKey(row.type, row.name, row.sql)));
+  if (unknown.length === 0) return;
+  const listed = unknown.slice(0, MAX_LISTED_PROBLEMS).map((row) => cleanRestoreText(`${row.type} ${row.name}`, MAX_LISTED_NAME_CHARS));
+  const more = unknown.length > listed.length ? `, and ${unknown.length - listed.length} more` : '';
+  throw new RestoreError(
+    `That backup's database holds triggers or views this version does not create (${listed.join(', ')}${more}). Nothing was changed.`,
+  );
+}
+
 const REQUIRED_TABLES = ['users', 'accounts', 'transactions'] as const;
 
 /**
@@ -310,7 +425,7 @@ const REQUIRED_TABLES = ['users', 'accounts', 'transactions'] as const;
  *   3. three tables that have existed since 0000_init and will not be renamed — i.e. this is
  *      A BUDGET TRACKER DATABASE, not some other SQLite file that got renamed budget.db.
  */
-export function preflightSqliteFile(databasePath: string): void {
+export function preflightSqliteFile(databasePath: string, migrationsFolder?: string): void {
   if (detectArtifactKind(databasePath) !== 'sqlite') {
     throw new RestoreError("The archive's budget.db is not a valid SQLite database. Nothing was changed.");
   }
@@ -330,6 +445,7 @@ export function preflightSqliteFile(databasePath: string): void {
         `That file is a SQLite database but not a usable Budget Tracker database (missing: ${missing.join(', ')}). Nothing was changed.`,
       );
     }
+    if (migrationsFolder !== undefined) assertOnlyKnownTriggersAndViews(db, migrationsFolder);
   } finally {
     db.close();
   }
@@ -351,7 +467,7 @@ export interface ValidationReport {
  */
 export function validateArtifact(
   artifactPath: string,
-  opts: { scratchDir: string; migrationsFolder: string; allowNewerMigrations?: boolean },
+  opts: { scratchDir: string; migrationsFolder: string; allowNewerMigrations?: boolean; freeBytes?: number },
 ): ValidationReport {
   let stats: fs.Stats;
   try {
@@ -370,7 +486,7 @@ export function validateArtifact(
   }
 
   if (kind === 'sqlite') {
-    preflightSqliteFile(artifactPath);
+    preflightSqliteFile(artifactPath, opts.migrationsFolder);
     return {
       kind,
       bytes: stats.size,
@@ -380,7 +496,9 @@ export function validateArtifact(
     };
   }
 
-  assertArchiveEntriesAreSafe(artifactPath); // MUST-12.6, before a byte is written
+  // MUST-12.6, before a byte is written. The space check is against the volume the scratch
+  // directory lives on, unless the caller passes the free bytes it already measured.
+  assertArchiveEntriesAreSafe(artifactPath, { freeBytes: opts.freeBytes ?? freeBytesAt(opts.scratchDir) });
   fs.mkdirSync(opts.scratchDir, { recursive: true });
   const probe = path.join(opts.scratchDir, 'validate');
   try {
@@ -389,7 +507,7 @@ export function validateArtifact(
     tar.extract({ file: artifactPath, cwd: probe, sync: true, preservePaths: false, strip: 0 });
     const inner = path.join(probe, 'budget.db');
     if (!fs.existsSync(inner)) throw new RestoreError('The archive contains no budget.db.');
-    preflightSqliteFile(inner);
+    preflightSqliteFile(inner, opts.migrationsFolder);
     const receipts = path.join(probe, 'receipts');
     const receiptCount = fs.existsSync(receipts)
       ? fs.readdirSync(receipts).filter((name) => RESTORE_STORED_NAME_RE.test(name)).length
@@ -421,7 +539,8 @@ export function verifyArchive(artifactPath: string, scratchDir: string): void {
     if (detectArtifactKind(artifactPath) !== 'archive') {
       throw new RestoreError('The file is not a gzip archive.');
     }
-    assertArchiveEntriesAreSafe(artifactPath);
+    // Only budget.db is written out here, so the unpacked-size gate does not apply.
+    assertArchiveEntriesAreSafe(artifactPath, { freeBytes: Number.POSITIVE_INFINITY });
     fs.rmSync(scratchDir, { recursive: true, force: true });
     fs.mkdirSync(scratchDir, { recursive: true });
     tar.extract({

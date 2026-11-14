@@ -8,6 +8,9 @@ const requireAdmin = vi.fn(async () => ({ id: 3, username: 'meena', role: 'admin
 vi.mock('@/lib/auth/session', () => ({ requireAdmin: () => requireAdmin() }));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 
+const appendAudit = vi.fn();
+vi.mock('@/lib/audit', () => ({ appendAudit: (...args: unknown[]) => appendAudit(...args) }));
+
 const stageRestore = vi.fn();
 vi.mock('@/lib/backup/restore', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/backup/restore')>()),
@@ -42,6 +45,7 @@ beforeEach(() => {
   requireAdmin.mockClear();
   stageRestore.mockReset();
   armRestartCalls.mockClear();
+  appendAudit.mockClear();
   stageRestore.mockReturnValue({
     sourceName: 'budget-2026-08-16.tar.gz',
     kind: 'archive',
@@ -132,6 +136,25 @@ describe('MUST-20.28: the restart is armed once, after the response', () => {
       expect(() => vi.advanceTimersByTime(2000)).toThrowError('exit:75');
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it('writes one stage_restore audit row after the restore is staged', async () => {
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    vi.useFakeTimers();
+    try {
+      await stageRestoreAction({}, form({ name: 'budget-2026-08-16.tar.gz', confirm: 'on' }));
+      expect(appendAudit).toHaveBeenCalledTimes(1);
+      expect(appendAudit).toHaveBeenCalledWith({
+        userId: 3,
+        action: 'stage_restore',
+        entity: 'settings',
+        entityId: 0,
+        detail: 'restore staged from budget-2026-08-16.tar.gz',
+      });
+    } finally {
+      vi.useRealTimers();
+      exit.mockRestore();
     }
   });
 

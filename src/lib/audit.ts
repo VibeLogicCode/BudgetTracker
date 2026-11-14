@@ -31,7 +31,21 @@ import { nowIso } from '@/lib/clock';
  * 'forget_ai_suggestions'. Both name `settings` with entity id 0, and the detail names the model and
  * the server's host and port only, never a full address (src/lib/ai/config.ts).
  */
+/**
+ * v1.64.1: the admin changes that were not recorded. 'reset_password', 'reset_mfa', 'set_user_active',
+ * 'set_visibility' and 'set_can_sign_in' name `users` and the affected person's id; 'forget_connection'
+ * names `simplefin_connections`; 'stage_restore' and 'set_retention' name `settings` with entity id 0.
+ * Each detail is a short phrase with no secret, and appendAudit cuts it to AUDIT_DETAIL_MAX.
+ */
 export type AuditAction =
+  | 'reset_password'
+  | 'reset_mfa'
+  | 'set_user_active'
+  | 'set_visibility'
+  | 'set_can_sign_in'
+  | 'forget_connection'
+  | 'stage_restore'
+  | 'set_retention'
   | 'delete_item'
   | 'delete_receipt'
   | 'undo_import'
@@ -41,6 +55,9 @@ export type AuditAction =
   | 'undo_bulk_action'
   | 'set_local_ai'
   | 'forget_ai_suggestions';
+
+/** The longest detail a row keeps; the rest is cut. */
+export const AUDIT_DETAIL_MAX = 200;
 
 export function appendAudit(input: {
   userId: number;
@@ -58,7 +75,7 @@ export function appendAudit(input: {
       action: input.action,
       entity: input.entity,
       entityId: input.entityId,
-      detail: input.detail ?? null,
+      detail: input.detail === undefined || input.detail === null ? null : input.detail.slice(0, AUDIT_DETAIL_MAX),
     })
     .returning({ id: auditLog.id })
     .get();

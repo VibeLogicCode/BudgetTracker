@@ -5,6 +5,7 @@ import { todayIso } from '@/lib/dates';
 import { postAllDueInterest } from '@/lib/loans';
 import { purgeExpiredSessions } from '@/lib/auth/session';
 import { purgeStagedFiles } from '@/lib/import/staging';
+import { isRestorePending } from '@/lib/backup/restore';
 import { purgeOldOutboxRows } from '@/lib/notify/outbox';
 import {
   SETTING_BACKUP_LAST_FAILURE_AT,
@@ -145,26 +146,44 @@ export interface SweepResult {
   receiptOrphansPurged: number;
   preRestoreCopiesPurged: number;
   outboxRowsPurged: number;
+  /** Names of the purges that threw; empty when every one ran. Separate from the backup's outcome. */
+  failures: string[];
 }
 
+/**
+ * v1.64.1: each purge runs in its own try/catch. A purge that throws is logged and named in
+ * `failures` (its count stays 0); the others still run, and the backup's own outcome is never
+ * touched by it.
+ */
 export function runMaintenanceSweep(at: Date = new Date()): SweepResult {
+  const failures: string[] = [];
+  const guarded = (name: string, purge: () => number): number => {
+    try {
+      return purge();
+    } catch (error) {
+      failures.push(name);
+      console.error(`[sweep] ${name} purge failed`, error);
+      return 0;
+    }
+  };
   return {
-    sessionsPurged: purgeExpiredSessions(at),
-    loginAttemptsPurged: purgeOldLoginAttempts(at),
-    stagedFilesPurged: purgeStagedFiles(undefined, at),
+    sessionsPurged: guarded('sessions', () => purgeExpiredSessions(at)),
+    loginAttemptsPurged: guarded('login attempts', () => purgeOldLoginAttempts(at)),
+    stagedFilesPurged: guarded('staged files', () => purgeStagedFiles(undefined, at)),
     // MUST-4.9: files in receipts/ with no matching stored_filename row AND an mtime older
     // than 24 h. The age guard prevents a race with an in-flight upload.
     // E9: a thunk, so the table is read after the directory listing rather than before it.
-    receiptOrphansPurged: purgeOrphanReceipts(() => new Set(listStoredFilenames()), undefined, at),
+    receiptOrphansPurged: guarded('orphan receipts', () => purgeOrphanReceipts(() => new Set(listStoredFilenames()), undefined, at)),
     // MUST-20.33: budget.pre-restore-*.db (+ -wal/-shm), receipts.pre-restore-*/ and
     // restore-failed-*/ older than 30 days, except the most recent of each kind.
-    preRestoreCopiesPurged: purgePreRestoreCopies(at),
+    preRestoreCopiesPurged: guarded('pre-restore copies', () => purgePreRestoreCopies(at)),
     // MUST-3.14: sent/failed notification_outbox rows older than OUTBOX_RETENTION_DAYS = 400.
     // Retention must exceed the longest coming_due window (365 days, the top of the
     // notification_user_settings range) with margin, or the sweep could delete a 'sent'
     // coming_due row while the item is still inside the user's lookahead window,
     // resurrecting its dedup key and re-alerting on the same item.
-    outboxRowsPurged: purgeOldOutboxRows(at),
+    outboxRowsPurged: guarded('notification history', () => purgeOldOutboxRows(at)),
+    failures,
   };
 }
 
@@ -213,11 +232,15 @@ export function runNightlyJob(at: Date = new Date()): NightlyJobResult {
     and the next sweep will try again.
   */
   try {
-    const swept = postAllDueInterest(todayIso(at), at);
-    if (swept.posted > 0 || swept.adjusted > 0) {
-      console.log(`[loans] posted ${swept.posted} period(s) and ${swept.adjusted} adjustment(s) across ${swept.items} loan(s)`);
+    // v1.64.1: nothing is posted while a restore is staged or applying; the restored database
+    // gets its own catch-up at the next boot.
+    if (!isRestorePending()) {
+      const swept = postAllDueInterest(todayIso(at), at);
+      if (swept.posted > 0 || swept.adjusted > 0) {
+        console.log(`[loans] posted ${swept.posted} period(s) and ${swept.adjusted} adjustment(s) across ${swept.items} loan(s)`);
+      }
+      if (swept.failed > 0) console.error(`[loans] ${swept.failed} loan(s) could not be posted; see the errors above`);
     }
-    if (swept.failed > 0) console.error(`[loans] ${swept.failed} loan(s) could not be posted; see the errors above`);
   } catch (error) {
     console.error('[loans] posting due interest failed; the backup still runs', error);
   }
@@ -235,6 +258,7 @@ export function runNightlyJob(at: Date = new Date()): NightlyJobResult {
   recordNightlyOutcome(at, backupError);
 
   const sweep = runMaintenanceSweep(at);
+  if (sweep.failures.length > 0) console.error(`[sweep] ${sweep.failures.length} purge(s) failed: ${sweep.failures.join(', ')}`);
 
   if (backupError !== undefined) throw backupError;
 

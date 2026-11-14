@@ -210,6 +210,16 @@ describe('suggestTransferPairs', () => {
     expect(getSetting(dismissalKey(out, first))).toBeNull();
     expect(getSetting(dismissalKey(out, other))).toBe('2026-03-12');
   });
+
+  it('stores nothing for ids that are missing or rows that are not a pair candidate', () => {
+    const { t, add, chequing, savings, viewer } = setup();
+    const out = add(chequing, -50000, { date: '2026-03-09' });
+    const unequal = add(savings, 40000, { date: '2026-03-09' });
+    const before = t.sqlite.prepare('select count(*) as n from settings').get();
+    expect(dismissTransferPair({ outId: out, inId: unequal, viewer, on: '2026-03-12' })).toEqual({ ok: false, error: TRANSFER_PAIR_STALE_ERROR });
+    expect(dismissTransferPair({ outId: out, inId: 99999, viewer, on: '2026-03-12' })).toEqual({ ok: false, error: TRANSFER_PAIR_STALE_ERROR });
+    expect(t.sqlite.prepare('select count(*) as n from settings').get()).toEqual(before);
+  });
 });
 
 describe('confirmTransferPair', () => {

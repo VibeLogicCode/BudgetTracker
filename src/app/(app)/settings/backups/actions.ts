@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from '@/lib/zod';
 import { CROSS_ORIGIN_ERROR, isSameOrigin } from '@/lib/auth/csrf';
 import { requireAdmin } from '@/lib/auth/session';
+import { appendAudit } from '@/lib/audit';
 import { pruneBackups, runNightlyJob, setBackupRetention } from '@/lib/backup';
 import { ARCHIVE_NAME_RE, LEGACY_NAME_RE } from '@/lib/backup/archive';
 import { stageRestore } from '@/lib/backup/restore';
@@ -18,12 +19,13 @@ export interface BackupActionState {
 
 export async function setRetentionAction(_prev: BackupActionState, formData: FormData): Promise<BackupActionState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
-  await requireAdmin();
+  const admin = await requireAdmin();
 
   const count = Number(formData.get('retention'));
   if (!Number.isInteger(count) || count < 1 || count > 365) return { error: 'Keep between 1 and 365 backups.' };
   setBackupRetention(count);
   const pruned = pruneBackups(count);
+  appendAudit({ userId: admin.id, action: 'set_retention', entity: 'settings', entityId: 0, detail: `retention ${count}` });
   revalidatePath('/settings/backups');
   return { message: `Retention set to ${count}. Removed ${pruned.length} old backups.` };
 }
@@ -84,6 +86,7 @@ export async function stageRestoreAction(
     return { error: error instanceof Error ? error.message : 'That backup could not be staged.' };
   }
 
+  appendAudit({ userId: user.id, action: 'stage_restore', entity: 'settings', entityId: 0, detail: `restore staged from ${request.sourceName}` });
   armRestart();
   revalidatePath('/settings/backups');
   return {

@@ -6,6 +6,9 @@ import { createHash } from 'node:crypto';
 import Database from 'better-sqlite3';
 import {
   RestoreError,
+  assertArchiveEntriesAreSafe,
+  cleanRestoreText,
+  preflightSqliteFile,
   commitRestore,
   prepareRestore,
   readAppliedMigrations,
@@ -628,5 +631,136 @@ describe('sha256File streams the file', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe('archive size and shape', () => {
+  const tarDuplicate = async (names: string[], rename: Record<string, string>): Promise<string> => {
+    const tar = await import('tar');
+    const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'restore-core-dup-'));
+    try {
+      for (const name of names) {
+        if (name.includes('/')) fs.mkdirSync(path.join(stage, path.dirname(name)), { recursive: true });
+        if (name.endsWith('.db')) buildDbFile(path.join(stage, name), [1000]);
+        else fs.writeFileSync(path.join(stage, name), JPEG);
+      }
+      const artifact = path.join(work, `dup-${Math.random().toString(36).slice(2)}.tar.gz`);
+      tar.create(
+        {
+          file: artifact,
+          cwd: stage,
+          gzip: true,
+          sync: true,
+          onWriteEntry: (entry) => {
+            const to = rename[entry.path];
+            if (to !== undefined) entry.path = to;
+          },
+        },
+        names,
+      );
+      return artifact;
+    } finally {
+      fs.rmSync(stage, { recursive: true, force: true });
+    }
+  };
+
+  it('refuses an archive whose declared sizes exceed the free space, extracting nothing', async () => {
+    const artifact = await makeArchive(work);
+    const scratch = path.join(work, 'scratch-free');
+    expect(() =>
+      validateArtifact(artifact, { scratchDir: scratch, migrationsFolder: fakeJournal(2, 'free'), freeBytes: 1000 }),
+    ).toThrow(/would not fit/);
+    expect(fs.existsSync(path.join(scratch, 'validate'))).toBe(false);
+  });
+
+  it('accepts an archive when there is room, and refuses too many entries', async () => {
+    const artifact = await makeArchive(work);
+    expect(() => assertArchiveEntriesAreSafe(artifact, { freeBytes: 10 ** 12 })).not.toThrow();
+    expect(() => assertArchiveEntriesAreSafe(artifact, { freeBytes: 10 ** 12, maxEntries: 1 })).toThrow(/too many entries/);
+  });
+
+  it('refuses a second budget.db and a repeated receipt name', async () => {
+    const name = '11111111-2222-3333-4444-555555555555.jpg';
+    const twoDb = await tarDuplicate(['budget.db', 'second.db'], { 'second.db': 'budget.db' });
+    expect(() => assertArchiveEntriesAreSafe(twoDb, { freeBytes: 10 ** 12 })).toThrow(/repeated/);
+    const twoReceipts = await tarDuplicate([`receipts/${name}`, 'receipts/other.jpg'], { 'receipts/other.jpg': `receipts/${name}` });
+    expect(() => assertArchiveEntriesAreSafe(twoReceipts, { freeBytes: 10 ** 12 })).toThrow(/repeated/);
+  });
+
+  it('lists at most five cleaned names, then the count of the rest', async () => {
+    const tar = await import('tar');
+    const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'restore-core-names-'));
+    try {
+      const names = Array.from({ length: 8 }, (_, i) => `bad${i}-${'x'.repeat(150)}`);
+      for (const name of names) fs.writeFileSync(path.join(stage, name), 'x');
+      const artifact = path.join(work, 'names.tar.gz');
+      tar.create(
+        {
+          file: artifact,
+          cwd: stage,
+          gzip: true,
+          sync: true,
+          onWriteEntry: (entry) => {
+            entry.path = `${entry.path.slice(0, 5)}\nline\r${entry.path.slice(5)}`;
+          },
+        },
+        names,
+      );
+      let message = '';
+      try {
+        assertArchiveEntriesAreSafe(artifact, { freeBytes: 10 ** 12 });
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      expect(message).toMatch(/and 3 more$/);
+      expect(message).not.toMatch(/[\r\n]/);
+      expect(message.length).toBeLessThan(5 * 105 + 120);
+    } finally {
+      fs.rmSync(stage, { recursive: true, force: true });
+    }
+  });
+
+  it('cleans control characters and caps long restore text', () => {
+    expect(cleanRestoreText('a\nb\tc')).toBe('a b c');
+    expect(cleanRestoreText('x'.repeat(2000)).length).toBeLessThan(1010);
+  });
+});
+
+describe('triggers and views on restore', () => {
+  const migrations = (): string => {
+    const folder = fakeJournal(2, 'trg');
+    fs.writeFileSync(path.join(folder, '0000_x.sql'), 'create table t0 (id integer primary key);');
+    fs.writeFileSync(
+      path.join(folder, '0001_x.sql'),
+      'create table t1 (id integer primary key);\n--> statement-breakpoint\n' +
+        'create trigger t1_guard before insert on t1 begin select 1; end;',
+    );
+    return folder;
+  };
+  const dbWith = (name: string, extra: string): string => {
+    const file = fakeDb(name, [1000]);
+    const db = new Database(file);
+    db.exec(extra);
+    db.close();
+    return file;
+  };
+
+  it('refuses a database with a trigger or a view the migrations never create', () => {
+    const folder = migrations();
+    const withTrigger = dbWith('trg.db', 'create table t1 (id integer primary key); create trigger evil after insert on t1 begin select 2; end;');
+    expect(() => preflightSqliteFile(withTrigger, folder)).toThrow(/triggers or views/);
+    const withView = dbWith('view.db', 'create view sneaky as select id from users;');
+    expect(() => preflightSqliteFile(withView, folder)).toThrow(/triggers or views/);
+  });
+
+  it('accepts a database at an older step and one at the current step', () => {
+    const folder = migrations();
+    const older = dbWith('old.db', 'create table t0 (id integer primary key);');
+    const current = dbWith(
+      'cur.db',
+      'create table t1 (id integer primary key); create trigger t1_guard before insert on t1 begin select 1; end;',
+    );
+    expect(() => preflightSqliteFile(older, folder)).not.toThrow();
+    expect(() => preflightSqliteFile(current, folder)).not.toThrow();
   });
 });

@@ -24,10 +24,12 @@ import {
   createUserAction,
   resetMfaAction,
   resetPasswordAction,
+  setActiveAction,
   setCanSignInAction,
   setVisibilityAction,
 } from '@/app/(app)/settings/users/actions';
 import { CROSS_ORIGIN_ERROR } from '@/lib/auth/csrf';
+import { listAudit } from '@/lib/audit';
 import { createSession } from '@/lib/auth/session';
 import { createUser, findUserById, findUserByUsername, listUsers, mustChangePassword } from '@/lib/auth/users';
 import { enableTotpForUser, generateTotpSecret } from '@/lib/auth/totp';
@@ -239,5 +241,41 @@ describe('setCanSignInAction (item BI)', () => {
     const result = await setCanSignInAction({}, formData({ userId: String(bob.id), canSignIn: '0' }));
     expect(result.error).toBe(CROSS_ORIGIN_ERROR);
     expect(listUsers().find((u) => u.id === bob.id)?.canSignIn).toBe(true);
+  });
+});
+
+describe('audit rows for admin changes', () => {
+  const seed = async () => {
+    current = createTestDb();
+    const admin = await createUser({ name: 'Alice', username: 'alice', password: 'correct horse battery', role: 'admin' });
+    expect(admin.id).toBe(ADMIN.id);
+    const bob = await createUser({ name: 'Bob', username: 'bob', password: 'correct horse battery', role: 'member' });
+    return bob;
+  };
+  const rows = () => listAudit().map((row) => [row.action, row.entity, row.entityId, row.detail, row.userId]);
+
+  it('records a password reset, a two-factor reset, and an activation change, each with the affected id', async () => {
+    const bob = await seed();
+    await resetPasswordAction({}, formData({ userId: String(bob.id), password: 'another long passphrase' }));
+    await resetMfaAction({}, formData({ userId: String(bob.id) }));
+    await setActiveAction({}, formData({ userId: String(bob.id), active: '0' }));
+    await setActiveAction({}, formData({ userId: String(bob.id), active: '1' }));
+    expect(rows().reverse()).toEqual([
+      ['reset_password', 'users', bob.id, 'password reset', ADMIN.id],
+      ['reset_mfa', 'users', bob.id, 'two-factor cleared', ADMIN.id],
+      ['set_user_active', 'users', bob.id, 'deactivated', ADMIN.id],
+      ['set_user_active', 'users', bob.id, 'reactivated', ADMIN.id],
+    ]);
+  });
+
+  it('records visibility and sign-in changes, and nothing for a refused change', async () => {
+    const bob = await seed();
+    await setVisibilityAction({}, formData({ userId: String(bob.id), visibility: 'self' }));
+    await setCanSignInAction({}, formData({ userId: String(bob.id), canSignIn: '0' }));
+    await setVisibilityAction({}, formData({ userId: String(ADMIN.id), visibility: 'self' }));
+    expect(rows().reverse()).toEqual([
+      ['set_visibility', 'users', bob.id, 'visibility self', ADMIN.id],
+      ['set_can_sign_in', 'users', bob.id, 'sign-in withdrawn', ADMIN.id],
+    ]);
   });
 });

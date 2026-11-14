@@ -11,16 +11,7 @@ function stubFetch(response: { status: number; body: unknown }): void {
     'fetch',
     vi.fn(async (url: string, init: RequestInit) => {
       calls.push({ url, init });
-      return {
-        ok: response.status >= 200 && response.status < 300,
-        status: response.status,
-        async json() {
-          return response.body;
-        },
-        async text() {
-          return JSON.stringify(response.body);
-        },
-      } as unknown as Response;
+      return new Response(JSON.stringify(response.body), { status: response.status });
     }),
   );
 }

@@ -122,7 +122,7 @@ export function ConnectionsClient({
   async function loadRemote() {
     setBusy(true);
     setError(null);
-    const response = await fetch('/api/simplefin/accounts');
+    const response = await fetch('/api/simplefin/accounts', { method: 'POST' });
     const payload = await response.json();
     setBusy(false);
     if (!response.ok) {

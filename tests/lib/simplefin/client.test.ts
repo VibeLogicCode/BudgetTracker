@@ -230,3 +230,13 @@ describe('v1.58.1: the real fetch path is bounded', () => {
     expect(cancelled).toBe(true);
   });
 });
+
+describe('error list bounds', () => {
+  it('keeps at most 10 entries of 200 characters', async () => {
+    const errlist = Array.from({ length: 25 }, (_, i) => `${i}-${'e'.repeat(500)}`);
+    const fetcher = fetcherReturning(JSON.stringify({ accounts: [], errlist }));
+    const set = await fetchAccounts({ accessUrl: ACCESS_URL, startDate: 1, endDate: 2, fetcher });
+    expect(set.errlist).toHaveLength(10);
+    expect(set.errlist.every((entry) => entry.length === 200)).toBe(true);
+  });
+});

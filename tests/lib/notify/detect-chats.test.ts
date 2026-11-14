@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NotifyError } from '@/lib/notify/send';
 import {
   MAX_DETECTED_CHATS,
+  TELEGRAM_MAX_RESPONSE_BYTES,
   TELEGRAM_NO_MESSAGES,
   TELEGRAM_TOKEN_REJECTED,
   fetchTelegramChats,
@@ -18,13 +19,7 @@ function stubUpdates(status: number, body: unknown): void {
     vi.fn(async (url: string, init?: RequestInit) => {
       urls.push(url);
       inits.push(init);
-      return {
-        ok: status >= 200 && status < 300,
-        status,
-        async json() {
-          return body;
-        },
-      } as unknown as Response;
+      return new Response(JSON.stringify(body), { status });
     }),
   );
 }
@@ -206,5 +201,15 @@ describe('MUST-8.9: the token never escapes', () => {
     const error = await fetchTelegramChats(TOKEN).catch((e) => e as Error);
     expect((error as Error).message).not.toContain('AAHk3f');
     expect((error as Error).message).toContain('[redacted]');
+  });
+});
+
+describe('answer size cap', () => {
+  it('fails with a plain NotifyError on an oversize getUpdates answer', async () => {
+    stubUpdates(200, { ok: true, result: [], padding: 'x'.repeat(TELEGRAM_MAX_RESPONSE_BYTES + 1) });
+    const error = await fetchTelegramChats(TOKEN).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(NotifyError);
+    expect((error as Error).message).toMatch(/larger than/);
+    expect((error as Error).message).not.toContain(TOKEN);
   });
 });

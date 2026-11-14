@@ -3,7 +3,7 @@ import { createAccount } from '@/lib/accounts';
 import { createUser } from '@/lib/auth/users';
 import type { Viewer } from '@/lib/auth/viewer';
 import { INSIGHTS_MAX_ROWS, householdInsights } from '@/lib/insights';
-import { dismissInsight, isDismissalKey, listDismissedKeys, pruneInsightDismissals } from '@/lib/insight-dismissals';
+import { dismissInsight, dismissalIsInScope, isDismissalKey, listDismissedKeys, pruneInsightDismissals } from '@/lib/insight-dismissals';
 import { createManualTransaction } from '@/lib/transactions';
 import { createTestDb, type TestDb } from '../helpers/db';
 
@@ -177,5 +177,16 @@ describe('the dismissal store keeps itself small', () => {
     expect(isDismissalKey('dupe:3')).toBe(false);
     expect(isDismissalKey("unusual:1'; drop table settings; --")).toBe(false);
     expect(isDismissalKey('something:12')).toBe(false);
+  });
+
+  it('requires every id in the key to exist for a household viewer too', async () => {
+    current = createTestDb();
+    const adultId = (await createUser({ name: 'Person One', username: 'user-1', password: 'correct horse 9', role: 'admin' })).id;
+    const accountId = createAccount({ name: 'Chequing', type: 'chequing', ownerUserId: adultId });
+    const real = createManualTransaction({ accountId, date: '2026-08-20', description: 'GROCERY STORE', amountCents: -4200, categoryId: null, attributedUserId: adultId, userId: adultId, actorRole: 'admin' });
+    const viewer: Viewer = { id: adultId, role: 'admin', visibility: 'household' };
+    expect(dismissalIsInScope(`unusual:${real}`, viewer)).toBe(true);
+    expect(dismissalIsInScope('unusual:9999', viewer)).toBe(false);
+    expect(dismissalIsInScope(`dupe:${real}:9999`, viewer)).toBe(false);
   });
 });

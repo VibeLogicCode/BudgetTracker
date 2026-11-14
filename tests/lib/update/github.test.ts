@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
+  GITHUB_MAX_RESPONSE_BYTES,
   MAX_CHANGELOG_BYTES,
   MAX_CHANGELOG_GROUPS,
   MAX_CHANGELOG_ITEMS,
@@ -304,5 +305,15 @@ describe('MUST-4.8: the remote changelog is untrusted text and is bounded', () =
       expect(group.title.length).toBeLessThanOrEqual(60);
       for (const item of group.items) expect(item.length).toBeLessThanOrEqual(500);
     }
+  });
+});
+
+describe('answer size cap', () => {
+  it('fails plainly and permanently on an oversize release answer', async () => {
+    stub(() => new Response('x'.repeat(GITHUB_MAX_RESPONSE_BYTES + 1), { status: 200 }));
+    const error = await fetchLatestRelease().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(UpdateCheckError);
+    expect((error as UpdateCheckError).permanent).toBe(true);
+    expect((error as UpdateCheckError).message).toMatch(/more than this app will read/);
   });
 });

@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from '@/lib/zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireAdmin } from '@/lib/auth/session';
+import { appendAudit } from '@/lib/audit';
 import { getAccount } from '@/lib/accounts';
 import {
   AUTO_SYNC_INTERVALS,
@@ -12,6 +13,7 @@ import {
   SETTING_AUTO_SYNC_USER_ID,
   type AutoSyncInterval,
   deleteConnection,
+  getConnection,
   listLinks,
 } from '@/lib/simplefin/connection';
 import { deleteSetting, setSetting } from '@/lib/settings';
@@ -26,7 +28,7 @@ const CROSS_ORIGIN_ERROR = 'Cross-origin request rejected';
 export async function forgetConnectionAction(): Promise<ConnectionsState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
 
-  await requireAdmin();
+  const admin = await requireAdmin();
 
   // Capture the affected account names BEFORE deleting: deleteConnection()
   // also clears every account link (they revert to CSV-managed), so this is
@@ -35,7 +37,15 @@ export async function forgetConnectionAction(): Promise<ConnectionsState> {
     .map((link) => getAccount(link.accountId)?.name)
     .filter((name): name is string => Boolean(name));
 
+  const connectionId = getConnection()?.id ?? 0;
   deleteConnection();
+  appendAudit({
+    userId: admin.id,
+    action: 'forget_connection',
+    entity: 'simplefin_connections',
+    entityId: connectionId,
+    detail: `${affectedNames.length} ${affectedNames.length === 1 ? 'account' : 'accounts'} reverted to CSV import`,
+  });
   revalidatePath('/settings/connections');
   revalidatePath('/import');
 

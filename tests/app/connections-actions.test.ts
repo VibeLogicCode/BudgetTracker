@@ -11,6 +11,7 @@ import {
   saveClaimedConnection,
 } from '@/lib/simplefin/connection';
 import { getSetting, setSetting } from '@/lib/settings';
+import { listAudit } from '@/lib/audit';
 
 let currentUser = { id: 1, name: 'Admin', username: 'admin', role: 'admin' as const };
 let requestHeaders = new Headers({ origin: 'http://nas.local:3000', host: 'nas.local:3000' });
@@ -59,6 +60,26 @@ describe('forgetConnectionAction', () => {
     expect(isSimplefinManaged(accountId)).toBe(false);
     expect(result.message).toMatch(/Bridge Chequing/);
     expect(result.message).toMatch(/CSV import/i);
+  });
+
+  it('writes one forget_connection audit row naming the connection and no access URL', async () => {
+    const { db } = setup();
+    const accountId = insertTestAccount(db, { name: 'Bridge Chequing' });
+    const connection = saveClaimedConnection(ACCESS_URL);
+    linkAccount({ simplefinAccountId: 'remote-1', accountId, currency: 'CAD' });
+
+    await forgetConnectionAction();
+
+    const rows = listAudit();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      action: 'forget_connection',
+      entity: 'simplefin_connections',
+      entityId: connection.id,
+      userId: currentUser.id,
+      detail: '1 account reverted to CSV import',
+    });
+    expect(JSON.stringify(rows)).not.toMatch(/s3cr3t/);
   });
 
   it('names every affected account when more than one was linked', async () => {

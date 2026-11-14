@@ -98,8 +98,6 @@ export function pruneInsightDismissals(today: string): void {
  */
 export function dismissalIsInScope(key: string, viewer: Viewer): boolean {
   if (!isDismissalKey(key)) return false;
-  const scope = ownerScope(viewer);
-  if (scope === null) return true;
   const ids = key
     .split(':')
     .slice(1)
@@ -109,6 +107,9 @@ export function dismissalIsInScope(key: string, viewer: Viewer): boolean {
     .from(transactions)
     .where(and(inArray(transactions.id, ids)))
     .all();
-  if (rows.length !== ids.length) return false;
+  // Every id the key names must exist, for every viewer, before the scope test.
+  if (rows.length !== new Set(ids).size) return false;
+  const scope = ownerScope(viewer);
+  if (scope === null) return true;
   return rows.every((row) => row.attributedUserId === scope);
 }

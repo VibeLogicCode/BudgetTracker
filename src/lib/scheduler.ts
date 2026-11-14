@@ -88,7 +88,7 @@ export function runNotifyTick(now: Date = new Date(), options?: { atBoot?: boole
       five-minute tick must not sweep every loan, and the nightly job already owns the routine
       case.
     */
-    if (options?.atBoot === true) {
+    if (options?.atBoot === true && !isRestorePending()) {
       try {
         postAllDueInterest(todayIso(now), now);
       } catch (error) {

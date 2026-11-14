@@ -21,6 +21,7 @@ import {
   setUserVisibility,
 } from '@/lib/auth/users';
 import { passwordSchema } from '@/lib/auth/password';
+import { appendAudit } from '@/lib/audit';
 
 export interface UsersFormState {
   error?: string;
@@ -56,7 +57,7 @@ export async function createUserAction(_prev: UsersFormState, formData: FormData
 export async function setActiveAction(_prev: UsersFormState, formData: FormData): Promise<UsersFormState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
 
-  await requireAdmin();
+  const admin = await requireAdmin();
   const parsed = z.object({ userId: z.coerce.number().int().positive(), active: z.enum(['0', '1']) }).safeParse({
     userId: formData.get('userId'),
     active: formData.get('active'),
@@ -68,6 +69,13 @@ export async function setActiveAction(_prev: UsersFormState, formData: FormData)
   } catch (error) {
     return { error: error instanceof Error ? error.message : 'Could not update the user.' };
   }
+  appendAudit({
+    userId: admin.id,
+    action: 'set_user_active',
+    entity: 'users',
+    entityId: parsed.data.userId,
+    detail: parsed.data.active === '1' ? 'reactivated' : 'deactivated',
+  });
   revalidatePath('/settings/users');
   return { message: 'User updated.' };
 }
@@ -75,7 +83,7 @@ export async function setActiveAction(_prev: UsersFormState, formData: FormData)
 export async function resetPasswordAction(_prev: UsersFormState, formData: FormData): Promise<UsersFormState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
 
-  await requireAdmin();
+  const admin = await requireAdmin();
   const parsed = z.object({ userId: z.coerce.number().int().positive(), password: passwordSchema }).safeParse({
     userId: formData.get('userId'),
     password: formData.get('password') ?? '',
@@ -87,6 +95,7 @@ export async function resetPasswordAction(_prev: UsersFormState, formData: FormD
   destroyAllSessionsForUser(parsed.data.userId);
   const target = findUserById(parsed.data.userId);
   if (target) clearAttemptsFor(target.username);
+  appendAudit({ userId: admin.id, action: 'reset_password', entity: 'users', entityId: parsed.data.userId, detail: 'password reset' });
   revalidatePath('/settings/users');
   return { message: 'Password reset. All their sessions were signed out, and they must choose a new password to sign in.' };
 }
@@ -94,7 +103,7 @@ export async function resetPasswordAction(_prev: UsersFormState, formData: FormD
 export async function resetMfaAction(_prev: UsersFormState, formData: FormData): Promise<UsersFormState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
 
-  await requireAdmin();
+  const admin = await requireAdmin();
   const parsed = z.object({ userId: z.coerce.number().int().positive() }).safeParse({ userId: formData.get('userId') });
   if (!parsed.success) return { error: 'Invalid request.' };
   clearTotpEnrollment(parsed.data.userId);
@@ -102,6 +111,7 @@ export async function resetMfaAction(_prev: UsersFormState, formData: FormData):
   // authentication bar must not leave already-open sessions running behind it —
   // a live session on a lost phone would otherwise outlive the MFA it was granted under.
   destroyAllSessionsForUser(parsed.data.userId);
+  appendAudit({ userId: admin.id, action: 'reset_mfa', entity: 'users', entityId: parsed.data.userId, detail: 'two-factor cleared' });
   revalidatePath('/settings/users');
   return { message: 'MFA cleared and their sessions were signed out. They can enroll a new authenticator at their next sign-in.' };
 }
@@ -138,7 +148,7 @@ export async function createPersonAction(_prev: UsersFormState, formData: FormDa
 export async function setVisibilityAction(_prev: UsersFormState, formData: FormData): Promise<UsersFormState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
 
-  await requireAdmin();
+  const admin = await requireAdmin();
   const parsed = z
     .object({ userId: z.coerce.number().int().positive(), visibility: z.enum(['household', 'self']) })
     .safeParse({ userId: formData.get('userId'), visibility: formData.get('visibility') });
@@ -148,6 +158,13 @@ export async function setVisibilityAction(_prev: UsersFormState, formData: FormD
   } catch (error) {
     return { error: error instanceof Error ? error.message : 'Could not update that person.' };
   }
+  appendAudit({
+    userId: admin.id,
+    action: 'set_visibility',
+    entity: 'users',
+    entityId: parsed.data.userId,
+    detail: `visibility ${parsed.data.visibility}`,
+  });
   revalidatePath('/settings/users');
   return { message: 'Updated.' };
 }
@@ -162,7 +179,7 @@ export async function setVisibilityAction(_prev: UsersFormState, formData: FormD
 export async function setCanSignInAction(_prev: UsersFormState, formData: FormData): Promise<UsersFormState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
 
-  await requireAdmin();
+  const admin = await requireAdmin();
   const userIdParsed = z.coerce.number().int().positive().safeParse(formData.get('userId'));
   if (!userIdParsed.success) return { error: 'Invalid request.' };
   // Accepts both an explicit '0'/'1' (this action's own test contract, and setActiveAction's
@@ -178,6 +195,13 @@ export async function setCanSignInAction(_prev: UsersFormState, formData: FormDa
   } catch (error) {
     return { error: error instanceof Error ? error.message : 'Could not update the user.' };
   }
+  appendAudit({
+    userId: admin.id,
+    action: 'set_can_sign_in',
+    entity: 'users',
+    entityId: userIdParsed.data,
+    detail: canSignIn ? 'sign-in allowed' : 'sign-in withdrawn',
+  });
   revalidatePath('/settings/users');
   return { message: 'Updated.' };
 }

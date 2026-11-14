@@ -371,12 +371,14 @@ export function dismissTransferPair(input: {
 }): { ok: true } | { ok: false; error: string } {
   if (isSelfScoped(input.viewer)) return { ok: false, error: NOT_YOURS_ERROR };
   if (!ISO_DAY.test(input.on) || input.outId === input.inId) return { ok: false, error: TRANSFER_PAIR_STALE_ERROR };
-  const found = getDb()
-    .select({ id: transactions.id })
-    .from(transactions)
-    .where(inArray(transactions.id, [input.outId, input.inId]))
-    .all();
-  if (found.length !== 2) return { ok: false, error: TRANSFER_PAIR_STALE_ERROR };
+  const rows = new Map(readRowsById([input.outId, input.inId]).map((row) => [row.id, row]));
+  const out = rows.get(input.outId);
+  const inc = rows.get(input.inId);
+  // Only a pair the suggester could have offered is remembered; an earlier dismissal does not count against it.
+  const ctx: PairContext = { accounts: readAccounts(), dismissed: new Set() };
+  if (out === undefined || inc === undefined || !isPairCandidate(out, inc, ctx)) {
+    return { ok: false, error: TRANSFER_PAIR_STALE_ERROR };
+  }
   setSetting(dismissalKey(input.outId, input.inId), input.on);
   pruneTransferPairDismissals();
   return { ok: true };

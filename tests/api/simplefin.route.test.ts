@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
-import { GET as accountsRoute } from '@/app/api/simplefin/accounts/route';
+import { GET as accountsGet, POST as accountsRoute } from '@/app/api/simplefin/accounts/route';
 import { POST as claimRoute } from '@/app/api/simplefin/claim/route';
 import { POST as linkRoute } from '@/app/api/simplefin/link/route';
 import { POST as syncRoute } from '@/app/api/simplefin/sync/route';
@@ -38,29 +38,6 @@ function jsonRequest(url: string, body: unknown, token: string | null, origin = 
       ...(token ? { cookie: `${SESSION_COOKIE_NAME}=${token}` } : {}),
     },
     body: JSON.stringify(body),
-  });
-}
-
-function getRequest(url: string, token: string | null, origin = 'http://nas.local:3000') {
-  return new Request(url, {
-    method: 'GET',
-    headers: {
-      origin,
-      host: 'nas.local:3000',
-      ...(token ? { cookie: `${SESSION_COOKIE_NAME}=${token}` } : {}),
-    },
-  });
-}
-
-/**
- * A GET with neither Origin nor Sec-Fetch-Site — what a plain-HTTP LAN install
- * actually sends. Allowed on this read-only route by controller ruling; a
- * present-but-mismatched header is still refused.
- */
-function headerlessGetRequest(url: string, token: string | null) {
-  return new Request(url, {
-    method: 'GET',
-    headers: { host: 'nas.local:3000', ...(token ? { cookie: `${SESSION_COOKIE_NAME}=${token}` } : {}) },
   });
 }
 
@@ -339,30 +316,43 @@ describe('POST /api/simplefin/sync', () => {
   });
 });
 
-describe('GET /api/simplefin/accounts', () => {
-  it('403s cross-origin even for an authenticated admin (a GET makes the generic assertSameOrigin a no-op, so this route checks explicitly)', async () => {
+describe('POST /api/simplefin/accounts', () => {
+  const url = 'http://nas.local:3000/api/simplefin/accounts';
+  const post = (token: string | null, origin?: string) => accountsRoute(jsonRequest(url, {}, token, origin));
+  const headerlessPost = (token: string | null) =>
+    accountsRoute(
+      new Request(url, {
+        method: 'POST',
+        headers: { host: 'nas.local:3000', ...(token ? { cookie: `${SESSION_COOKIE_NAME}=${token}` } : {}) },
+      }),
+    );
+
+  it('answers a GET with 405 and spends nothing', async () => {
     const { adminToken } = setup();
     saveClaimedConnection(ACCESS_URL);
-    const response = await accountsRoute(getRequest('http://nas.local:3000/api/simplefin/accounts', adminToken, 'http://evil.local'));
-    expect(response.status).toBe(403);
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const response = await accountsGet();
+    expect(response.status).toBe(405);
+    expect(response.headers.get('allow')).toBe('POST');
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(adminToken).toBeTruthy();
+  });
+
+  it('403s cross-origin even for an authenticated admin, and a header-less POST', async () => {
+    const { adminToken } = setup();
+    saveClaimedConnection(ACCESS_URL);
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    expect((await post(adminToken, 'http://evil.local')).status).toBe(403);
+    expect((await headerlessPost(adminToken)).status).toBe(403);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('401s an anonymous caller and 403s a member', async () => {
     const { memberToken } = setup();
-    expect((await accountsRoute(getRequest('http://nas.local:3000/api/simplefin/accounts', null))).status).toBe(401);
-    expect((await accountsRoute(getRequest('http://nas.local:3000/api/simplefin/accounts', memberToken))).status).toBe(403);
-  });
-
-  it('serves a header-less GET (plain-HTTP LAN) with an admin session, and still enforces auth on one', async () => {
-    const { adminToken, memberToken } = setup();
-    saveClaimedConnection(ACCESS_URL);
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => new Response(JSON.stringify({ accounts: [], errlist: [] }), { status: 200 })),
-    );
-    expect((await accountsRoute(headerlessGetRequest('http://nas.local:3000/api/simplefin/accounts', adminToken))).status).toBe(200);
-    expect((await accountsRoute(headerlessGetRequest('http://nas.local:3000/api/simplefin/accounts', null))).status).toBe(401);
-    expect((await accountsRoute(headerlessGetRequest('http://nas.local:3000/api/simplefin/accounts', memberToken))).status).toBe(403);
+    expect((await post(null)).status).toBe(401);
+    expect((await post(memberToken)).status).toBe(403);
   });
 
   it('lists remote accounts and consumes a request against the budget on a same-origin admin call', async () => {
@@ -378,7 +368,7 @@ describe('GET /api/simplefin/accounts', () => {
           ),
       ),
     );
-    const response = await accountsRoute(getRequest('http://nas.local:3000/api/simplefin/accounts', adminToken));
+    const response = await post(adminToken);
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.accounts).toEqual([{ id: 'remote-1', name: 'Bridge Chequing', currency: 'CAD', balance: '10.00' }]);
@@ -387,8 +377,7 @@ describe('GET /api/simplefin/accounts', () => {
 
   it('409s when nothing is configured', async () => {
     const { adminToken } = setup();
-    const response = await accountsRoute(getRequest('http://nas.local:3000/api/simplefin/accounts', adminToken));
-    expect(response.status).toBe(409);
+    expect((await post(adminToken)).status).toBe(409);
   });
 });
 

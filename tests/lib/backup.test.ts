@@ -189,6 +189,7 @@ describe('maintenance sweep', () => {
       receiptOrphansPurged: 0,
       preRestoreCopiesPurged: 0,
       outboxRowsPurged: 0,
+      failures: [],
     });
     expect((current!.sqlite.prepare('select count(*) as c from sessions').get() as { c: number }).c).toBe(1);
     expect((current!.sqlite.prepare('select count(*) as c from login_attempts').get() as { c: number }).c).toBe(1);
@@ -236,6 +237,28 @@ describe('runNightlyJob', () => {
     expect(fs.existsSync(result.backup.path)).toBe(true);
     expect(result.sweep.sessionsPurged).toBe(1);
     expect(Array.isArray(result.pruned)).toBe(true);
+  });
+});
+
+describe('v1.64.1: a failing purge does not stop the others', () => {
+  it('names the failed purge, keeps the other purges running and leaves the backup health line alone', () => {
+    const userId = insertTestUser(current!.db);
+    createSession(userId, { at: new Date('2026-01-01T00:00:00.000Z') }); // expired by the sweep date
+    const at = new Date('2026-08-15T06:00:00.000Z');
+    const planted = path.join(dataDir, 'restore-result.json.partial');
+    fs.mkdirSync(planted);
+    const old = new Date('2026-08-10T00:00:00.000Z');
+    fs.utimesSync(planted, old, old);
+
+    const result = runNightlyJob(at);
+
+    expect(result.sweep.failures).toEqual(['pre-restore copies']);
+    expect(result.sweep.sessionsPurged).toBe(1);
+    expect(result.sweep.outboxRowsPurged).toBe(0);
+    expect(fs.existsSync(result.backup.path)).toBe(true);
+    const health = backupHealth(at);
+    expect(health.state).toBe('ok');
+    expect(health.failureReason).toBeNull();
   });
 });
 

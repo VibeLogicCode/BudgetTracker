@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { appendAudit, listAudit } from '@/lib/audit';
+import { AUDIT_DETAIL_MAX, appendAudit, listAudit } from '@/lib/audit';
 import { createUser } from '@/lib/auth/users';
 import { createTestDb, type TestDb } from '../helpers/db';
 
@@ -95,5 +95,12 @@ describe('audit_log (ruling R3)', () => {
     const user = await createUser({ name: 'Alice', username: 'alice', password: 'correct horse battery', role: 'admin' });
     appendAudit({ userId: user.id, action: 'delete_receipt', entity: 'warranty_receipts', entityId: 9 });
     expect(listAudit()[0]?.detail).toBeNull();
+  });
+
+  it('cuts a long detail to the cap', async () => {
+    current = createTestDb();
+    const user = await createUser({ name: 'Alex', username: 'alex', password: 'correct horse battery', role: 'admin' });
+    appendAudit({ userId: user.id, action: 'delete_item', entity: 'warranty_items', entityId: 1, detail: 'x'.repeat(AUDIT_DETAIL_MAX + 300) });
+    expect(listAudit()[0]?.detail).toHaveLength(AUDIT_DETAIL_MAX);
   });
 });

@@ -1,3 +1,4 @@
+import { readJsonCapped } from '@/lib/http/read-capped';
 import { scrubSecrets } from '@/lib/notify/crypto';
 import { TELEGRAM_API_ORIGIN, assertTelegramUrl } from '@/lib/notify/egress';
 import { NotifyError } from '@/lib/notify/send';
@@ -5,6 +6,9 @@ import { NotifyError } from '@/lib/notify/send';
 /** §19.16 / MUST-8.3: the API limit is 4096; a truncated digest beats a rejected one. */
 export const TELEGRAM_MAX_CHARS = 4000;
 export const TELEGRAM_TIMEOUT_MS = 15_000;
+/** The most bytes read from a getUpdates answer, and from an error answer. */
+export const TELEGRAM_MAX_RESPONSE_BYTES = 1024 * 1024;
+export const TELEGRAM_FAILURE_MAX_BYTES = 64 * 1024;
 export const MAX_DETECTED_CHATS = 20;
 export const CHAT_TITLE_MAX = 80;
 
@@ -39,7 +43,7 @@ interface TelegramFailure {
 
 async function readFailure(response: Response): Promise<TelegramFailure> {
   try {
-    return (await response.json()) as TelegramFailure;
+    return (await readJsonCapped(response, TELEGRAM_FAILURE_MAX_BYTES)) as TelegramFailure;
   } catch {
     return {};
   }
@@ -149,7 +153,7 @@ export async function fetchTelegramChats(botToken: string): Promise<TelegramChat
 
   let payload: { result?: { message?: { date?: unknown; chat?: RawChat } }[] };
   try {
-    payload = (await response.json()) as { result?: { message?: { date?: unknown; chat?: RawChat } }[] };
+    payload = (await readJsonCapped(response, TELEGRAM_MAX_RESPONSE_BYTES)) as { result?: { message?: { date?: unknown; chat?: RawChat } }[] };
   } catch (error) {
     // This helper is also invoked directly by a server action (the Detect chat IDs
     // button), outside the pump's own re-scrub net, so a malformed 200 body must become a

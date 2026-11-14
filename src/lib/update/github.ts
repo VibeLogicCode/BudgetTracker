@@ -1,4 +1,5 @@
 import { parseChangelog, type ChangelogRelease } from '@/lib/changelog';
+import { ResponseTooLargeError, readJsonCapped } from '@/lib/http/read-capped';
 import { truncateText } from '@/lib/notify/render';
 import { GITHUB_API_ORIGIN, GITHUB_CHANGELOG_PATH, GITHUB_RELEASES_PATH, assertGithubUrl } from '@/lib/update/egress';
 import { COULD_NOT_REACH_GITHUB, describeNetworkFailure } from '@/lib/update/network-error';
@@ -39,6 +40,9 @@ export const CHANGELOG_ITEM_MAX = 500;
 export const CHANGELOG_TITLE_MAX = 60;
 
 export const UNPARSEABLE_TAG_ERROR = 'That release tag is not a version this app can compare.';
+/** The most bytes read from one GitHub answer; the changelog file itself is capped at MAX_CHANGELOG_BYTES. */
+export const GITHUB_MAX_RESPONSE_BYTES = 1024 * 1024;
+const TOO_LARGE_ERROR = 'GitHub returned more than this app will read.';
 const MALFORMED_ERROR = 'GitHub returned something this app could not read.';
 const CHANGELOG_UNREADABLE = 'The release notes could not be read.';
 
@@ -129,8 +133,9 @@ function requestFailure(error: unknown, timeoutMs: number): UpdateCheckError {
 
 async function readJson(response: Response): Promise<unknown> {
   try {
-    return await response.json();
-  } catch {
+    return await readJsonCapped(response, GITHUB_MAX_RESPONSE_BYTES);
+  } catch (error) {
+    if (error instanceof ResponseTooLargeError) throw new UpdateCheckError(TOO_LARGE_ERROR, { permanent: true });
     throw new UpdateCheckError(MALFORMED_ERROR, { permanent: true });
   }
 }

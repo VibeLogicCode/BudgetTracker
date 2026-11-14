@@ -19,6 +19,7 @@ import { APP_VERSION } from '@/lib/version';
 import { ARCHIVE_NAME_RE, LEGACY_NAME_RE, PARTIAL_MAX_AGE_MS, backupsDir, resolveSafeTarget, tempDir } from '@/lib/backup/archive';
 import {
   RestoreError,
+  cleanRestoreText,
   commitRestore,
   prepareRestore,
   sha256File,
@@ -250,7 +251,7 @@ export function writeJsonAtomically(target: string, value: unknown): void {
  * every caller of this function already — this is only what reaches the JSON file.
  */
 function describeError(error: unknown): string {
-  if (error instanceof RestoreError) return error.message;
+  if (error instanceof RestoreError) return cleanRestoreText(error.message);
   return 'An unexpected error interrupted the restore. Check the container logs for details.';
 }
 
@@ -343,7 +344,9 @@ function failedOutcome(marker: MarkerFields, error: string, now: Date, plan: Res
     receiptsRestored: 0,
     missingReceiptRows: 0,
     receiptsTouched: 0,
-    error,
+    // Control characters out; no cut here, because the recovery commands this text carries must stay whole.
+    // describeError already capped whatever came from an archive.
+    error: cleanRestoreText(error, Number.MAX_SAFE_INTEGER),
   };
 }
 

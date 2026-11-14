@@ -46,8 +46,7 @@ export function isSameOrigin(headers: Headers, env: AppEnv = readEnv()): boolean
 
 /**
  * Origin check for **read-only, auth-gated download GETs** only
- * (api/backup/download, api/reports/export, the two api/packs export routes,
- * api/simplefin/accounts).
+ * (api/backup/download, api/reports/export, the two api/packs export routes).
  *
  * Controller ruling (supersedes the earlier "ruling (a)" pattern on those
  * routes): reject only when Origin or Sec-Fetch-Site is PRESENT and does not

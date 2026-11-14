@@ -1,3 +1,5 @@
+import { ResponseTooLargeError, readCapped } from '@/lib/http/read-capped';
+
 /**
  * Pre-buffer content-length cap for the SimpleFIN route handlers' JSON bodies
  * (house pattern — same authenticated-memory-DoS defence as the CSV/pack
@@ -53,6 +55,10 @@ export const SIMPLEFIN_TIMEOUT_MS = 60_000;
 /** v1.58.1: the most bytes read from one answer. A 90-day window is a few hundred KB at most. */
 export const SIMPLEFIN_MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
 
+/** The bridge's error list is shown in the page and sent in notifications, so its size is bounded here. */
+export const SIMPLEFIN_MAX_ERRLIST_ENTRIES = 10;
+export const SIMPLEFIN_ERRLIST_ENTRY_MAX = 200;
+
 const TIMEOUT_MESSAGE = 'SimpleFIN did not answer within 60 seconds.';
 const REDIRECT_MESSAGE = 'SimpleFIN tried to redirect the request, which is not allowed.';
 const TOO_LARGE_MESSAGE = "SimpleFIN's answer was larger than 10 MB.";
@@ -67,33 +73,19 @@ function mentionsRedirect(error: unknown): boolean {
 }
 
 /** v1.58.1: reads at most SIMPLEFIN_MAX_RESPONSE_BYTES, cancelling the stream once past it. */
-async function readCapped(response: Response): Promise<string> {
-  const declared = Number(response.headers.get('content-length'));
-  if (Number.isFinite(declared) && declared > SIMPLEFIN_MAX_RESPONSE_BYTES) {
-    await response.body?.cancel().catch(() => undefined);
-    throw new SimplefinError('bad_response', TOO_LARGE_MESSAGE, 502);
+async function readCappedBody(response: Response): Promise<string> {
+  try {
+    return await readCapped(response, SIMPLEFIN_MAX_RESPONSE_BYTES);
+  } catch (error) {
+    if (error instanceof ResponseTooLargeError) throw new SimplefinError('bad_response', TOO_LARGE_MESSAGE, 502);
+    throw error;
   }
-  if (response.body === null) return '';
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > SIMPLEFIN_MAX_RESPONSE_BYTES) {
-      await reader.cancel().catch(() => undefined);
-      throw new SimplefinError('bad_response', TOO_LARGE_MESSAGE, 502);
-    }
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks).toString('utf8');
 }
 
 const defaultFetcher: Fetcher = async (url, init) => {
   try {
     const response = await fetch(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(SIMPLEFIN_TIMEOUT_MS) });
-    const body = await readCapped(response);
+    const body = await readCappedBody(response);
     return { ok: response.ok, status: response.status, text: async () => body };
   } catch (error) {
     if (error instanceof SimplefinError) throw error;
@@ -199,6 +191,8 @@ export async function fetchAccounts(input: {
   }
   const record = parsed as { accounts?: unknown; errlist?: unknown };
   const accounts = Array.isArray(record.accounts) ? (record.accounts as SimplefinAccount[]) : [];
-  const errlist = Array.isArray(record.errlist) ? record.errlist.map((entry) => String(entry)) : [];
+  const errlist = Array.isArray(record.errlist)
+    ? record.errlist.slice(0, SIMPLEFIN_MAX_ERRLIST_ENTRIES).map((entry) => String(entry).slice(0, SIMPLEFIN_ERRLIST_ENTRY_MAX))
+    : [];
   return { accounts, errlist };
 }
