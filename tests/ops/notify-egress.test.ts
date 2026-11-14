@@ -9,6 +9,9 @@ import { fileURLToPath } from 'node:url';
  * src/lib/notify/ and, as of the update feature, src/lib/update/ — is scanned here, by the
  * same table-driven, comment-stripped, line-scoped checks. A third opt-in tree added later
  * extends the tables below; it does not get its own copy of this file.
+ *
+ * v1.64.0: the third tree is src/lib/ai/, the optional local AI helper, which may talk only to a
+ * model server on the household's own network. Its checks are at the end of this file.
  */
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -24,6 +27,8 @@ function filesUnder(dir: string, acc: string[] = []): string[] {
 const notifyDir = path.join(root, 'src/lib/notify');
 const updateDir = path.join(root, 'src/lib/update');
 const predictDir = path.join(root, 'src/lib/predict');
+const aiDir = path.join(root, 'src/lib/ai');
+const srcDir = path.join(root, 'src');
 const pageDir = path.join(root, 'src/app/(app)/settings/notifications');
 const rel = (file: string) => path.relative(root, file).replace(/\\/g, '/');
 
@@ -157,10 +162,10 @@ describe('MUST-1.1 and MUST-16.1: the predictive tree and the date-range files l
   });
 });
 
-describe('no file under src/lib/notify/ or src/lib/update/ imports an HTTP client library', () => {
-  it('neither tree pulls in a second way to make an outbound request', () => {
+describe('no file under src/lib/notify/, src/lib/update/ or src/lib/ai/ imports an HTTP client library', () => {
+  it('no tree pulls in a second way to make an outbound request', () => {
     const banned = /from\s+['"](axios|node-fetch|got|undici|superagent|ky|request)['"]/;
-    for (const dir of [notifyDir, updateDir, predictDir]) {
+    for (const dir of [notifyDir, updateDir, predictDir, aiDir]) {
       for (const file of filesUnder(dir)) {
         expect(fs.readFileSync(file, 'utf8')).not.toMatch(banned);
       }
@@ -214,6 +219,12 @@ describe('MUST-2.1: the pure modules stay pure', () => {
     { dir: predictDir, name: 'pace.ts' },
     { dir: predictDir, name: 'anomalies.ts' },
     { dir: path.join(root, 'src/lib'), name: 'date-range.ts' },
+    // v1.64.0: the local AI's policy, schemas, prompts and types, and the shared private-address test.
+    { dir: aiDir, name: 'lan.ts' },
+    { dir: aiDir, name: 'schemas.ts' },
+    { dir: aiDir, name: 'prompts.ts' },
+    { dir: aiDir, name: 'types.ts' },
+    { dir: path.join(root, 'src/lib/net'), name: 'private-address.ts' },
   ];
   for (const { dir, name } of pureModules) {
     it(`${rel(path.join(dir, name))} imports no @/db, no @/lib/env and no node builtin`, () => {
@@ -286,5 +297,165 @@ describe('MUST-9.5: the scheduler never reaches a transport directly', () => {
     expect(source).not.toMatch(/notify\/send/);
     expect(source).toContain('hasAnyEnabledTarget');
     expect(source).toContain('countPendingOutbox');
+  });
+});
+
+/**
+ * v1.64.0 (plan 2026-11-12, L2, L3 and A12). The local AI tree: one network file, LAN only, the
+ * configured address checked on the line above its one request call, no credential, nothing logged
+ * from a prompt or an answer, and no way in from a client component or the scheduler.
+ */
+const AI_CLIENT = 'src/lib/ai/client.ts';
+/** Every module that can open a socket or resolve a name. Only the AI client may import one. */
+const NETWORK_IMPORT = /(?:from\s+|import\s*\(\s*|require\s*\(\s*)['"](?:node:)?(?:http|https|http2|dns|net|tls|dgram)(?:\/promises)?['"]/;
+/**
+ * A real request call: `.request(`, a bare `request(` or `x['request'](`, never `sendRequest(` and
+ * never the word inside a sentence (string contents are blanked before the first match).
+ */
+const REQUEST_CALL = /(?<![\w$])request\s*\(/;
+const REQUEST_BY_KEY = /\[\s*['"`]request['"`]\s*\]\s*\(/;
+const STRING_LITERAL = /(['"`])(?:\\.|(?!\1).)*\1/g;
+const isRequestCall = (line: string) => REQUEST_CALL.test(line.replace(STRING_LITERAL, "''")) || REQUEST_BY_KEY.test(line);
+const AI_CONSOLE_LEAK = /console\.[a-z]+\([^)]*\b(content|body|prompt|text|description|merchant|answer|fields|row|ocr)\b/i;
+const AI_SERVER_ONLY = /from\s+['"]@\/lib\/ai\/(client|config|queue|suggestions|receipt)['"]/;
+const AI_CREDENTIAL = /authorization|cookie|bearer/i;
+
+function codeLines(source: string): { line: string; index: number }[] {
+  return source
+    .split('\n')
+    .map((line, index) => ({ line, index }))
+    .filter(({ line }) => {
+      const trimmed = line.trim();
+      return !trimmed.startsWith('//') && !trimmed.startsWith('*') && !trimmed.startsWith('/*');
+    });
+}
+
+/** Each request call site and the line immediately above it. */
+function requestSites(source: string): { previous: string }[] {
+  const lines = source.split('\n');
+  return codeLines(source)
+    .filter(({ line }) => isRequestCall(line))
+    .map(({ index }) => ({ previous: (lines[index - 1] ?? '').trim() }));
+}
+
+function isClientComponent(file: string, source: string): boolean {
+  if (file.endsWith('-client.tsx')) return true;
+  const first = stripComments(source).trimStart().split('\n')[0]?.trim() ?? '';
+  return /^['"]use client['"];?$/.test(first);
+}
+
+describe('v1.64.0: src/lib/ai/ talks only to the configured LAN address', () => {
+  const aiFiles = filesUnder(aiDir);
+
+  it('has the tree to scan, so a rename cannot make these checks vacuous', () => {
+    expect(aiFiles.map(rel)).toContain(AI_CLIENT);
+    expect(aiFiles.length).toBeGreaterThanOrEqual(9);
+  });
+
+  it('holds no fetch( call site anywhere', () => {
+    const offenders = aiFiles.filter((file) => /(?<![.\w])fetch\s*\(/.test(stripComments(fs.readFileSync(file, 'utf8')))).map(rel);
+    expect(offenders).toEqual([]);
+  });
+
+  it('holds no :// literal, and no :// outside a comment at all', () => {
+    for (const file of aiFiles) {
+      expect({ file: rel(file), literals: urlLiterals(file) }).toEqual({ file: rel(file), literals: [] });
+      const scheme = stripComments(fs.readFileSync(file, 'utf8')).includes('://');
+      expect({ file: rel(file), scheme }).toEqual({ file: rel(file), scheme: false });
+    }
+  });
+
+  it('imports node:http, node:https, node:dns, node:net or node:tls in client.ts and in no other file under src/', () => {
+    const importers = filesUnder(srcDir)
+      .filter((file) => NETWORK_IMPORT.test(stripComments(fs.readFileSync(file, 'utf8'))))
+      .map(rel);
+    expect(importers).toEqual([AI_CLIENT]);
+  });
+
+  it('has assertLocalAiUrl( on the line immediately above its one request call', () => {
+    const sites = requestSites(fs.readFileSync(path.join(root, AI_CLIENT), 'utf8'));
+    expect(sites).toHaveLength(1);
+    for (const site of sites) expect(site.previous).toContain('assertLocalAiUrl(');
+    // And no other file in the tree makes a request call at all.
+    const others = aiFiles
+      .filter((file) => rel(file) !== AI_CLIENT && requestSites(stripComments(fs.readFileSync(file, 'utf8'))).length > 0)
+      .map(rel);
+    expect(others).toEqual([]);
+  });
+
+  it('carries no Authorization or Cookie header, and no Bearer', () => {
+    for (const file of aiFiles) {
+      const bad = AI_CREDENTIAL.test(stripComments(fs.readFileSync(file, 'utf8')));
+      expect({ file: rel(file), bad }).toEqual({ file: rel(file), bad: false });
+    }
+  });
+
+  it('logs nothing from a prompt, an answer or a row', () => {
+    for (const file of aiFiles) {
+      const offending = codeLines(fs.readFileSync(file, 'utf8'))
+        .filter(({ line }) => AI_CONSOLE_LEAK.test(line))
+        .map(({ line }) => line.trim());
+      expect({ file: rel(file), offending }).toEqual({ file: rel(file), offending: [] });
+    }
+  });
+
+  it('no client component value-imports a server-only AI module', () => {
+    for (const file of filesUnder(srcDir)) {
+      const source = fs.readFileSync(file, 'utf8');
+      if (!isClientComponent(file, source)) continue;
+      const offending = source
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => AI_SERVER_ONLY.test(line) && !/^import\s+type\b/.test(line));
+      expect({ file: rel(file), offending }).toEqual({ file: rel(file), offending: [] });
+    }
+  });
+
+  it('the pure AI modules import no server-only AI module', () => {
+    for (const name of ['lan.ts', 'schemas.ts', 'prompts.ts', 'types.ts']) {
+      expect(fs.readFileSync(path.join(aiDir, name), 'utf8')).not.toMatch(AI_SERVER_ONLY);
+    }
+  });
+
+  it('the scheduler reaches the queue, never the network file', () => {
+    const source = fs.readFileSync(path.join(root, 'src/lib/scheduler.ts'), 'utf8');
+    expect(source).toMatch(/from\s+['"]@\/lib\/ai\/queue['"]/);
+    expect(source).not.toMatch(/@\/lib\/ai\/client/);
+  });
+
+  describe('each matcher catches a broken snippet', () => {
+    it('a request call with no guard above it, or a guard two lines up', () => {
+      expect(requestSites('const a = 1;\nconst req = http.request(url);\n')).toEqual([{ previous: 'const a = 1;' }]);
+      expect(requestSites('assertLocalAiUrl(url.href);\n\nreq = transport.request(url);')[0].previous).toBe('');
+      expect(requestSites('sendRequest(x);\n// request(x)\n')).toEqual([]);
+      expect(requestSites("const s = 'The server refused the request (HTTP 400).';")).toEqual([]);
+      expect(requestSites("const a = 1;\nhttp['request'](url);")).toEqual([{ previous: 'const a = 1;' }]);
+    });
+
+    it('a network import, by any spelling', () => {
+      for (const line of [
+        "import http from 'node:http';",
+        "import dns from 'dns';",
+        "const n = require('net');",
+        "await import('node:tls')",
+        "import { lookup } from 'node:dns/promises';",
+      ]) {
+        expect(NETWORK_IMPORT.test(line), line).toBe(true);
+      }
+      expect(NETWORK_IMPORT.test("import fs from 'node:fs';")).toBe(false);
+    });
+
+    it('a URL literal, a fetch, a leaking console call, a credential and a server-only import into a client', () => {
+      expect(stripComments("const u = ['http', '//x'].join(':'); // see http://x").includes('://')).toBe(false);
+      expect(stripComments("const u = 'http://192.168.1.5';").includes('://')).toBe(true);
+      expect(/(?<![.\w])fetch\s*\(/.test(stripComments('await fetch(url);'))).toBe(true);
+      expect(AI_CONSOLE_LEAK.test("console.log('[ai] asked', prompt.user);")).toBe(true);
+      expect(AI_CONSOLE_LEAK.test("console.error('[ai] job failed', job.kind, name);")).toBe(false);
+      expect(AI_CREDENTIAL.test("headers['Authorization'] = 'x';")).toBe(true);
+      expect(AI_SERVER_ONLY.test("import { sweepAiWork } from '@/lib/ai/queue';")).toBe(true);
+      expect(AI_SERVER_ONLY.test("import type { AiSuggestionView } from '@/lib/ai/types';")).toBe(false);
+      expect(isClientComponent('src/components/X.tsx', "'use client';\nimport x from 'y';")).toBe(true);
+      expect(isClientComponent('src/lib/x.ts', "import x from 'y';")).toBe(false);
+    });
   });
 });

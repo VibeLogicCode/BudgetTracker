@@ -1,6 +1,10 @@
+import { isPrivateIpv4, isPrivateIpv6 } from '@/lib/net/private-address';
+
 /**
  * MUST-8.1 / MUST-8.4 / MUST-8.6: the update feature's egress policy, in code. PURE
- * (MUST-2.1): no @/db import, no @/lib/env import, no node builtin, no import of any kind.
+ * (MUST-2.1): no @/db import, no @/lib/env import, no node builtin. Its one import is the pure
+ * private-address module (v1.64.0), which the local AI guard shares, so both refuse the same
+ * addresses.
  *
  * MUST-2.3: this module holds the ONLY `://` string literal anywhere under
  * src/lib/update/, mirroring the rule src/lib/notify/egress.ts already lives under, and
@@ -62,33 +66,6 @@ export function assertGithubUrl(url: string): void {
 
 /** A Docker Compose service name: one label, no dot. `watchtower` is the shipped default. */
 const BARE_LABEL = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/i;
-const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
-
-function isPrivateIpv4(hostname: string): boolean {
-  const match = IPV4.exec(hostname);
-  if (match === null) return false;
-  const octets = match.slice(1, 5).map(Number);
-  if (octets.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
-  const [a, b] = octets as [number, number, number, number];
-  if (a === 127) return true; //             127.0.0.0/8
-  if (a === 10) return true; //              10.0.0.0/8
-  if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
-  if (a === 192 && b === 168) return true; // 192.168.0.0/16
-  if (a === 169 && b === 254) return true; // 169.254.0.0/16
-  return false;
-}
-
-function isPrivateIpv6(hostname: string): boolean {
-  // URL.hostname keeps the brackets ON for an IPv6 literal (and lowercases it), unlike a
-  // dotted hostname or an IPv4 literal, which never carry brackets.
-  if (hostname === '[::1]') return true;
-  const inner = hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
-  if (inner === '::1') return true;
-  // fc00::/7 is fc.. or fd..; fe80::/10 is fe8./fe9./fea./feb.
-  if (/^f[cd][0-9a-f]{0,2}:/i.test(inner)) return true;
-  if (/^fe[89ab][0-9a-f]?:/i.test(inner)) return true;
-  return false;
-}
 
 /**
  * MUST-8.6 / MUST-8.2: this function is what makes the Watchtower exemption from the

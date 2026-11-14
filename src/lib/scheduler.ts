@@ -1,4 +1,5 @@
 import cron, { type ScheduledTask } from 'node-cron';
+import { sweepAiWork } from '@/lib/ai/queue';
 import { todayIso } from '@/lib/dates';
 import { postAllDueInterest } from '@/lib/loans';
 import { countUsers } from '@/lib/auth/users';
@@ -191,6 +192,22 @@ export function runCanadianPackUpdateTick(now: Date = new Date()): void {
  */
 
 /**
+ * v1.64.0 (plan 2026-11-12, A10). The local AI sweep: queues up to 100 merchants to ask about when
+ * the helper is on, set up and not waiting after failures, and does nothing otherwise
+ * (sweepAiWork's own first check). The queue's pump owns its single flight, so this needs none, and
+ * nothing here waits on the model. It imports the queue only, never the network file
+ * (tests/ops/notify-egress).
+ */
+export function runAiTick(now: Date = new Date()): void {
+  try {
+    const n = sweepAiWork(now);
+    if (n > 0) console.log(`[ai] sweep queued ${n} question(s)`);
+  } catch (error) {
+    console.error('[ai] tick failed', error);
+  }
+}
+
+/**
  * Task 8 (v1.7.0, design ruling 7): a SEPARATE function with its OWN independent gate,
  * deliberately not folded into runUpdateTick or runNotifyTick, for the same reason MUST-5.1
  * separates the update tick from the notify tick: a household that wants auto-sync but has
@@ -340,6 +357,7 @@ export function startScheduler(): void {
       runUpdateTick();
       runNotifyTick();
       runSimplefinTick();
+      runAiTick();
     },
     { timezone: tz },
   );
@@ -359,6 +377,8 @@ export function startScheduler(): void {
   // Task 8: same reasoning as the two ticks above -- a container that was off catches up on
   // a due auto-sync immediately at boot rather than waiting up to five minutes.
   runSimplefinTick();
+  // v1.64.0: a household with local AI on gets its questions queued at boot, not five minutes later.
+  runAiTick();
   // v1.60.0: a missed nightly backup runs two minutes after boot, never during it.
   scheduleBackupCatchUp();
 }

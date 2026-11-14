@@ -47,7 +47,28 @@ describe('MUST-2.1 and AC10: only history.ts touches the database', () => {
   });
 });
 
+/**
+ * v1.64.0 (plan 2026-11-12, A1). The local AI's per-merchant table is not a predictive object, but
+ * its name, ai_suggestions, carries one of the watched words. It is exempted by its EXACT names
+ * (table, index, drizzle export, migration tag) and nothing wider, so any other object with a
+ * watched word in it still fails every check below. The first test proves the exemption is that
+ * narrow.
+ */
+const LOCAL_AI_TABLE_NAMES = /\bai_suggestions_merchant_uq\b|\b0033_ai_suggestions\b|\bai_suggestions\b|\baiSuggestions\b/g;
+const withoutLocalAiTable = (text: string) => text.replace(LOCAL_AI_TABLE_NAMES, '');
+
 describe('MUST-1.4 and AC4: no migration, no schema change', () => {
+  it('the local AI exemption removes its own names and nothing else', () => {
+    expect(withoutLocalAiTable("CREATE TABLE `ai_suggestions` (`id` integer); CREATE UNIQUE INDEX `ai_suggestions_merchant_uq`")).not.toMatch(
+      /suggestion/i,
+    );
+    expect(withoutLocalAiTable("export const aiSuggestions = sqliteTable('ai_suggestions', {})")).not.toMatch(/suggestion/i);
+    expect(withoutLocalAiTable('0033_ai_suggestions')).toBe('');
+    for (const other of ['budget_suggestions', 'ai_suggestions_v2', 'CREATE TABLE `suggestion_cache`', 'predictSuggestions', 'xai_suggestions']) {
+      expect(withoutLocalAiTable(other), other).toMatch(/suggestion/i);
+    }
+  });
+
   // This used to pin the exact newest migration filename ("still 0007"), which was only ever
   // a proxy for "the predictive-targets feature itself adds no migration" -- it was never a
   // promise that no OTHER, unrelated feature could ever add one again. v1.6.0's migration 0008
@@ -59,11 +80,13 @@ describe('MUST-1.4 and AC4: no migration, no schema change', () => {
   it('no migration file\'s DDL names a predictive schema object', () => {
     const files = fs.readdirSync(path.join(root, 'drizzle')).filter((name) => name.endsWith('.sql'));
     for (const file of files) {
-      const ddl = fs
-        .readFileSync(path.join(root, 'drizzle', file), 'utf8')
-        .split('\n')
-        .filter((line) => !line.trim().startsWith('--'))
-        .join('\n');
+      const ddl = withoutLocalAiTable(
+        fs
+          .readFileSync(path.join(root, 'drizzle', file), 'utf8')
+          .split('\n')
+          .filter((line) => !line.trim().startsWith('--'))
+          .join('\n'),
+      );
       for (const banned of ['predict', 'suggestion', 'projection', 'baseline']) {
         expect({ file, banned, present: new RegExp(banned, 'i').test(ddl) }).toEqual({
           file,
@@ -80,7 +103,7 @@ describe('MUST-1.4 and AC4: no migration, no schema change', () => {
     };
     for (const entry of journal.entries) {
       for (const banned of ['predict', 'suggestion', 'projection', 'baseline']) {
-        expect({ tag: entry.tag, banned, present: new RegExp(banned, 'i').test(entry.tag) }).toEqual({
+        expect({ tag: entry.tag, banned, present: new RegExp(banned, 'i').test(withoutLocalAiTable(entry.tag)) }).toEqual({
           tag: entry.tag,
           banned,
           present: false,
@@ -90,7 +113,7 @@ describe('MUST-1.4 and AC4: no migration, no schema change', () => {
   });
 
   it('src/db/schema.ts names no predictive object', () => {
-    const schema = fs.readFileSync(path.join(root, 'src/db/schema.ts'), 'utf8');
+    const schema = withoutLocalAiTable(fs.readFileSync(path.join(root, 'src/db/schema.ts'), 'utf8'));
     for (const banned of ['predict', 'suggestion', 'projection', 'baseline']) {
       expect({ banned, present: new RegExp(banned, 'i').test(schema) }).toEqual({ banned, present: false });
     }

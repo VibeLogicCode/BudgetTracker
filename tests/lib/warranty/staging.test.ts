@@ -5,11 +5,14 @@ import path from 'node:path';
 import {
   ReceiptStagingError,
   STAGING_ID_RE,
+  aiSidecarPath,
   deleteSidecar,
   deleteStagedReceipt,
   findStagedReceipt,
+  readAiSidecar,
   readSidecar,
   sidecarPath,
+  writeAiSidecar,
   writeSidecar,
   writeStagedReceipt,
 } from '@/lib/warranty/staging';
@@ -118,5 +121,43 @@ describe('OCR sidecar (MUST-6.7)', () => {
     deleteSidecar(stagingId);
     expect(readSidecar(stagingId)).toBeNull();
     expect(() => deleteSidecar(stagingId)).not.toThrow();
+  });
+});
+
+describe('AI sidecar (v1.64.0, plan 2026-11-12 A8)', () => {
+  it('sits beside the OCR sidecar and round-trips done and failed', () => {
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
+    expect(aiSidecarPath(stagingId)).toBe(path.join(receiptTempDir(), `${stagingId}.ai.json`));
+    expect(readAiSidecar(stagingId)).toBeNull();
+    writeAiSidecar(stagingId, { status: 'done', fields: { vendor: 'Maple Grocer', priceCents: 4732 }, at: '2026-03-09T15:00:00.000Z' });
+    expect(readAiSidecar(stagingId)).toEqual({ status: 'done', fields: { vendor: 'Maple Grocer', priceCents: 4732 }, at: '2026-03-09T15:00:00.000Z' });
+    writeAiSidecar(stagingId, { status: 'failed', at: '2026-03-09T15:01:00.000Z' });
+    expect(readAiSidecar(stagingId)).toEqual({ status: 'failed', at: '2026-03-09T15:01:00.000Z' });
+    // Written through a temporary name: none is left behind.
+    expect(fs.readdirSync(receiptTempDir()).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('reads null on bad JSON or the wrong shape', () => {
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
+    fs.writeFileSync(aiSidecarPath(stagingId), '{not json');
+    expect(readAiSidecar(stagingId)).toBeNull();
+    fs.writeFileSync(aiSidecarPath(stagingId), JSON.stringify({ status: 'done' }));
+    expect(readAiSidecar(stagingId)).toBeNull();
+    fs.writeFileSync(aiSidecarPath(stagingId), JSON.stringify({ status: 'maybe', at: '2026-03-09T15:00:00.000Z' }));
+    expect(readAiSidecar(stagingId)).toBeNull();
+  });
+
+  it('never lets a non-UUID reach path.join', () => {
+    expect(() => aiSidecarPath('../budget.db')).toThrowError(ReceiptStagingError);
+  });
+
+  it('deleteSidecar removes both files', () => {
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
+    writeSidecar(stagingId, { status: 'done', text: 'TOTAL 47.32' });
+    writeAiSidecar(stagingId, { status: 'failed', at: '2026-03-09T15:00:00.000Z' });
+    deleteSidecar(stagingId);
+    expect(fs.existsSync(sidecarPath(stagingId))).toBe(false);
+    expect(fs.existsSync(aiSidecarPath(stagingId))).toBe(false);
+    expect(readAiSidecar(stagingId)).toBeNull();
   });
 });

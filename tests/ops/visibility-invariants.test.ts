@@ -106,6 +106,9 @@ const REQUIRE_VIEWER: { file: string; fn: string }[] = [
   { file: 'src/lib/year-end.ts', fn: 'yearEndPackEstimate' },
   { file: 'src/lib/year-end.ts', fn: 'yearEndDetailCsv' },
   { file: 'src/lib/reports.ts', fn: 'largestPurchases' },
+  // v1.64.0 (plan 2026-11-12, A12): Review's AI suggestions name household merchants, so a self viewer
+  // reads none. The viewer is required here, not left to each page to remember.
+  { file: 'src/lib/ai/suggestions.ts', fn: 'aiSuggestionsForMerchants' },
 ];
 
 /** Exempt, WITH the reason. Nothing is exempt without one. */
@@ -283,8 +286,9 @@ describe('ruling R2: every read-model helper takes a viewer', () => {
   // v1.59.0: raised from 43 to 44, the actual count with budgetIncomeLine added.
   // v1.60.0: raised from 44 to 45, the actual count with cashflowForRange added.
   // v1.63.0: raised from 45 to 53, the actual count with the eight tax and year-end reads added.
-  it('the named lists cannot shrink below 53 entries', () => {
-    expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(53);
+  // v1.64.0: raised from 53 to 54, the actual count with aiSuggestionsForMerchants added.
+  it('the named lists cannot shrink below 54 entries', () => {
+    expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(54);
   });
 });
 

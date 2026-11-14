@@ -109,9 +109,10 @@ describe("O-03: a scheduler tick's pre-try section never calls anything that can
   // A scan matching nothing proves nothing (same discipline as client-bundle.test.ts's own
   // sanity check) -- pin the exact set so a future tick added to this file is caught by name,
   // not silently skipped by a regex that stopped matching.
-  it('finds exactly the five exported ticks (a scan that matches nothing proves nothing)', () => {
+  // v1.64.0: runAiTick (the local AI sweep) makes six.
+  it('finds exactly the six exported ticks (a scan that matches nothing proves nothing)', () => {
     expect(tickFns.map((f) => f.name).sort()).toEqual(
-      ['runCanadianPackUpdateTick', 'runNightlyTick', 'runNotifyTick', 'runSimplefinTick', 'runUpdateTick'].sort(),
+      ['runAiTick', 'runCanadianPackUpdateTick', 'runNightlyTick', 'runNotifyTick', 'runSimplefinTick', 'runUpdateTick'].sort(),
     );
   });
 

@@ -9,6 +9,7 @@ import {
   NOTIFY_TICK_CRON,
   OCR_SWEEP_CRON,
   isSchedulerRunning,
+  runAiTick,
   runNightlyTick,
   runNotifyTick,
   runUpdateTick,
@@ -26,6 +27,9 @@ import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify
 import * as checkModule from '@/lib/update/check';
 import { readUpdateState, recordCheckOutcome, setUpdateChecksEnabled } from '@/lib/update/state';
 import { APP_VERSION } from '@/lib/version';
+import { saveLocalAiConfig } from '@/lib/ai/config';
+import * as aiQueueModule from '@/lib/ai/queue';
+import * as aiSuggestionsModule from '@/lib/ai/suggestions';
 
 // M8: startScheduler() runs the OCR sweep once at boot, which calls getDb() via
 // sweepPendingReceipts(). Without an isolated test db, that call falls through to the
@@ -413,5 +417,50 @@ describe('boot backup catch-up (item 7c)', () => {
     const body = source.slice(startAt, source.indexOf('export function stopScheduler'));
     expect(body.match(/scheduleBackupCatchUp\(\);/g)).toHaveLength(1);
     expect(body.indexOf('scheduleBackupCatchUp();')).toBeGreaterThan(body.lastIndexOf('runSimplefinTick();'));
+  });
+});
+
+describe('v1.64.0 (plan 2026-11-12, A10): the local AI tick', () => {
+  const AT = new Date('2026-03-10T09:00:00.000Z');
+
+  afterEach(async () => {
+    await aiQueueModule.drainAiQueue();
+    aiQueueModule.resetAiQueueForTests();
+    vi.restoreAllMocks();
+  });
+
+  it('asks for no targets while local AI is off', () => {
+    const targets = vi.spyOn(aiSuggestionsModule, 'aiMerchantTargets');
+    runAiTick(AT);
+    expect(targets).not.toHaveBeenCalled();
+  });
+
+  it('sweeps up to 100 targets while it is on', () => {
+    const alex = insertTestUser(current!.db, { username: 'ai-admin', role: 'admin' });
+    saveLocalAiConfig({ baseUrl: 'http://192.168.1.50:11434', model: 'test-model:1b', userId: alex, at: AT });
+    // No target comes back, so nothing is queued and no request is made.
+    const targets = vi.spyOn(aiSuggestionsModule, 'aiMerchantTargets').mockReturnValue([]);
+    runAiTick(AT);
+    expect(targets).toHaveBeenCalledWith(100);
+  });
+
+  it('logs a throw and never lets it escape the cron callback', () => {
+    const boom = new Error('database is locked');
+    vi.spyOn(aiQueueModule, 'sweepAiWork').mockImplementation(() => {
+      throw boom;
+    });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() => runAiTick(AT)).not.toThrow();
+    expect(errorSpy).toHaveBeenCalledWith('[ai] tick failed', boom);
+  });
+
+  it('runs in the five-minute callback and at boot, after the SimpleFIN tick each time', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'src/lib/scheduler.ts'), 'utf8');
+    const startAt = source.indexOf('export function startScheduler');
+    const body = source.slice(startAt, source.indexOf('export function stopScheduler'));
+    expect(body.match(/runAiTick\(\);/g)).toHaveLength(2);
+    const callback = body.slice(body.indexOf('NOTIFY_TICK_CRON,'), body.indexOf('{ timezone: tz },', body.indexOf('NOTIFY_TICK_CRON,')));
+    expect(callback.indexOf('runAiTick();')).toBeGreaterThan(callback.indexOf('runSimplefinTick();'));
+    expect(body.lastIndexOf('runAiTick();')).toBeGreaterThan(body.lastIndexOf('runSimplefinTick();'));
   });
 });

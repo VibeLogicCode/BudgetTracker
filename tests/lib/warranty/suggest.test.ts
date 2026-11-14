@@ -4,7 +4,9 @@ import {
   MAX_SUGGESTED_PRICE_CENTS,
   amountCandidates,
   candidateLabel,
+  currencyFigures,
   dateCandidates,
+  printedDates,
   suggestDueDate,
   suggestFromOcrText,
   suggestPriceCents,
@@ -393,5 +395,20 @@ describe('a space as a thousands separator', () => {
   it('candidates carry the corrected value', () => {
     const [top] = amountCandidates('RIVERSIDE WATER\nMontant dû 1 234,56 $');
     expect(top!.valueCents).toBe(123456);
+  });
+});
+
+describe('currencyFigures and printedDates (v1.64.0, plan 2026-11-12 A8)', () => {
+  it('lists every printed figure once, in text order, under the noise cap', () => {
+    const text = ['MAPLE GROCER', 'MILK 4.99', 'BREAD 4.99', 'SUBTOTAL 42.17', 'TOTAL $47.32', 'PHONE 4165550199'].join('\n');
+    expect(currencyFigures(text)).toEqual([499, 4217, 4732]);
+    expect(currencyFigures('BARCODE 123456789.00')).toEqual([]);
+    expect(currencyFigures('')).toEqual([]);
+  });
+
+  it('lists every printed date once, in text order, with no window', () => {
+    const text = ['Date 2026-03-09', 'Due Apr 15, 2026', 'Again 03/09/2026', 'Old 1999-01-01'].join('\n');
+    expect(printedDates(text)).toEqual(['2026-03-09', '2026-04-15', '1999-01-01']);
+    expect(printedDates('no dates here')).toEqual([]);
   });
 });

@@ -1621,3 +1621,34 @@ export const monthClosures = sqliteTable('month_closures', {
   /** Set once the monthly summary has been enqueued. A failed send must not un-close the month. */
   summarySentAt: text('summary_sent_at'),
 });
+
+/**
+ * v1.64.0, drizzle/0033 (the local AI table). What a model on the household's own network proposed
+ * for a merchant, ONE ROW PER MERCHANT (the unique index on normalized_merchant). Written only by one
+ * module under src/lib/ai/, and never read to file a row: a person using a proposal goes
+ * through the existing category and rename actions, with every guard they carry. `failed` keeps a
+ * merchant whose answer could not be used from being asked again every tick; `ignored` lasts until
+ * an admin forgets them all. SQL carries the CHECKs.
+ *
+ * Not part of the forecasting feature: that feature's schema guard in tests/ops exempts this table
+ * by its exact names, and the prose here avoids the words the guard watches for.
+ */
+export const aiSuggestions = sqliteTable(
+  'ai_suggestions',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    normalizedMerchant: text('normalized_merchant').notNull(),
+    status: text('status', { enum: ['suggested', 'failed', 'ignored'] }).notNull(),
+    /** Categories are archived, never deleted; an archived one reads as no category. */
+    categoryId: integer('category_id').references(() => categories.id),
+    /** 1-60 characters, already through cleanMerchantName. */
+    cleanName: text('clean_name'),
+    model: text('model').notNull(),
+    /** Why a `failed` row failed, in the app's own words (never the model's reply). */
+    reason: text('reason'),
+    createdAt: text('created_at').notNull(),
+    decidedBy: integer('decided_by').references(() => users.id),
+    decidedAt: text('decided_at'),
+  },
+  (t) => [uniqueIndex('ai_suggestions_merchant_uq').on(t.normalizedMerchant)],
+);

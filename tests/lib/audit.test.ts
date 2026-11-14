@@ -65,6 +65,31 @@ describe('audit_log (ruling R3)', () => {
     });
   });
 
+  it('records the two local AI actions (v1.64.0) with no migration', async () => {
+    current = createTestDb();
+    const user = await createUser({ name: 'Alex', username: 'alex', password: 'correct horse battery', role: 'admin' });
+    appendAudit({
+      userId: user.id,
+      action: 'set_local_ai',
+      entity: 'settings',
+      entityId: 0,
+      detail: 'Local AI on: test-model:1b at 192.168.1.50:11434',
+      at: '2026-03-10T09:00:00.000Z',
+    });
+    appendAudit({
+      userId: user.id,
+      action: 'forget_ai_suggestions',
+      entity: 'settings',
+      entityId: 0,
+      detail: 'Forgot 120 AI suggestions',
+      at: '2026-03-10T09:05:00.000Z',
+    });
+    expect(listAudit().map((row) => [row.action, row.entity, row.entityId, row.detail, row.userName])).toEqual([
+      ['forget_ai_suggestions', 'settings', 0, 'Forgot 120 AI suggestions', 'Alex'],
+      ['set_local_ai', 'settings', 0, 'Local AI on: test-model:1b at 192.168.1.50:11434', 'Alex'],
+    ]);
+  });
+
   it('stores NULL when no detail is given', async () => {
     current = createTestDb();
     const user = await createUser({ name: 'Alice', username: 'alice', password: 'correct horse battery', role: 'admin' });

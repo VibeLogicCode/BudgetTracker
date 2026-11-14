@@ -66,6 +66,24 @@ const ocrSidecarSchema = z.object({
   candidates: z.object({ amounts: z.array(amountCandidateSchema), dates: z.array(dateCandidateSchema) }).optional(),
 });
 
+/**
+ * v1.64.0 (plan 2026-11-12, A8). What the local AI read off a staged receipt, kept in its own file
+ * beside the OCR sidecar (`<stagingId>.ai.json`) and written by src/lib/ai/queue.ts only. `fields`
+ * holds only values grounded in the printed text (groundReceiptAnswer). The 24-hour purge of the
+ * staging directory removes it with everything else, and deleteSidecar removes both files.
+ */
+export interface AiSidecar {
+  status: 'done' | 'failed';
+  fields?: SuggestedFields;
+  at: string;
+}
+
+const aiSidecarSchema = z.object({
+  status: z.enum(['done', 'failed']),
+  fields: suggestedFieldsSchema.optional(),
+  at: z.string(),
+});
+
 export const STAGING_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export class ReceiptStagingError extends Error {
@@ -172,6 +190,35 @@ export function readSidecar(stagingId: string): OcrSidecar | null {
 
 export function deleteSidecar(stagingId: string): void {
   fs.rmSync(sidecarPath(stagingId), { force: true });
+  fs.rmSync(aiSidecarPath(stagingId), { force: true });
+}
+
+export function aiSidecarPath(stagingId: string): string {
+  assertStagingId(stagingId);
+  return path.join(receiptTempDir(), `${stagingId}.ai.json`);
+}
+
+/** Written to a temporary name and renamed, so a poll never reads half a file. */
+export function writeAiSidecar(stagingId: string, payload: AiSidecar): void {
+  const file = aiSidecarPath(stagingId);
+  fs.mkdirSync(receiptTempDir(), { recursive: true });
+  const temp = `${file}.tmp`;
+  fs.writeFileSync(temp, JSON.stringify(payload), 'utf8');
+  fs.renameSync(temp, file);
+}
+
+/** Null before the AI has answered, and on a file that is not valid JSON or not the right shape. */
+export function readAiSidecar(stagingId: string): AiSidecar | null {
+  const file = aiSidecarPath(stagingId);
+  if (!fs.existsSync(file)) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+  const result = aiSidecarSchema.safeParse(parsed);
+  return result.success ? result.data : null;
 }
 
 export function deleteStagedReceipt(stagingId: string): void {

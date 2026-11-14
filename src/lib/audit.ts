@@ -26,6 +26,11 @@ import { nowIso } from '@/lib/clock';
  * (src/lib/bulk-undo.ts). It names `transactions` with the smallest restored id, or
  * `merchant_rules` with the smallest rule id when only rules came back.
  */
+/**
+ * v1.64.0: 'set_local_ai' (turning local AI on, changing its address or model, turning it off) and
+ * 'forget_ai_suggestions'. Both name `settings` with entity id 0, and the detail names the model and
+ * the server's host and port only, never a full address (src/lib/ai/config.ts).
+ */
 export type AuditAction =
   | 'delete_item'
   | 'delete_receipt'
@@ -33,7 +38,9 @@ export type AuditAction =
   | 'delete_transaction'
   | 'keep_duplicate'
   | 'dismiss_duplicate'
-  | 'undo_bulk_action';
+  | 'undo_bulk_action'
+  | 'set_local_ai'
+  | 'forget_ai_suggestions';
 
 export function appendAudit(input: {
   userId: number;

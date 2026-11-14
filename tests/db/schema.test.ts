@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 const EXPECTED_TABLES = [
-  'account_balance_snapshots', 'account_card_people', 'accounts', 'audit_log', 'bayes_category_totals',
+  'account_balance_snapshots', 'account_card_people', 'accounts', 'ai_suggestions', 'audit_log', 'bayes_category_totals',
   'bayes_tokens', 'bill_installments', 'budget_rollover', 'budgets', 'categories', 'goal_contributions', 'goals',
   'import_profiles', 'imports', 'loan_anchors', 'loan_matcher_rules', 'loan_payments', 'loan_postings',
   'loan_rate_history', 'login_attempts',
@@ -80,6 +80,7 @@ const EXPECTED_INDEXES = [
   'set_aside_rows_candidate_idx',
   'set_aside_rows_import_idx',
   'transaction_splits_person_idx',
+  'ai_suggestions_merchant_uq',
 ];
 
 describe('database schema', () => {
@@ -355,6 +356,27 @@ describe('database schema', () => {
     ]);
     expect(columns.find((column) => column.name === 'person_set')).toMatchObject({ notnull: 1, dflt_value: '0' });
     expect(columns.find((column) => column.name === 'attributed_user_id')).toMatchObject({ notnull: 0, dflt_value: null });
+  });
+
+  it('creates ai_suggestions, one row per merchant (v1.64.0, drizzle/0033_ai_suggestions.sql)', () => {
+    current = createTestDb();
+    const columns = current.sqlite.prepare('pragma table_info(ai_suggestions)').all() as { name: string; notnull: number }[];
+    expect(columns.map((column) => [column.name, column.notnull])).toEqual([
+      ['id', 1],
+      ['normalized_merchant', 1],
+      ['status', 1],
+      ['category_id', 0],
+      ['clean_name', 0],
+      ['model', 1],
+      ['reason', 0],
+      ['created_at', 1],
+      ['decided_by', 0],
+      ['decided_at', 0],
+    ]);
+    const index = current.sqlite.prepare("select sql from sqlite_master where type = 'index' and name = 'ai_suggestions_merchant_uq'").get() as {
+      sql: string;
+    };
+    expect(index.sql).toMatch(/CREATE UNIQUE INDEX/);
   });
 
   it('is safe to migrate twice (idempotent boot)', () => {

@@ -182,6 +182,30 @@ export function suggestPriceCents(text: string): number | undefined {
   return undefined;
 }
 
+/**
+ * v1.64.0 (plan 2026-11-12, A8). Every money figure printed anywhere in the text, read by the same
+ * pattern and cap as the total, in text order and without repeats. The local AI's total is kept only
+ * when it is one of these (src/lib/ai/receipt.ts), so a figure the model made up never fills a form.
+ */
+export function currencyFigures(text: string): number[] {
+  if (typeof text !== 'string' || text.length === 0) return [];
+  const seen = new Set<number>();
+  for (const m of text.matchAll(CURRENCY_RE)) {
+    const cents = centsOf(m[1], m[2]);
+    if (cents !== null) seen.add(cents);
+  }
+  return [...seen];
+}
+
+/**
+ * v1.64.0. Every valid calendar date printed in the text (ISO), in text order and without repeats,
+ * with no window: each caller applies its own, as collectDateHits' callers do.
+ */
+export function printedDates(text: string): string[] {
+  if (typeof text !== 'string' || text.length === 0) return [];
+  return [...new Set(collectDateHits(text).map((hit) => hit.iso))];
+}
+
 /** Where the phrase ends on the line, or -1 when the line does not carry it. */
 function phraseEnd(phrase: RegExp, line: string): number {
   const match = phrase.exec(line);

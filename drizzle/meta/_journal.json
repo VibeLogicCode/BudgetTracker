@@ -232,6 +232,13 @@
       "when": 1758758400000,
       "tag": "0032_split_person",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1758844800000,
+      "tag": "0033_ai_suggestions",
+      "breakpoints": true
     }
   ]
 }
