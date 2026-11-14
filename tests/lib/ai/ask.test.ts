@@ -11,6 +11,8 @@ import {
   ASK_BUSY_ERROR,
   ASK_COOLDOWN_ERROR,
   ASK_COOLDOWN_MS,
+  ASK_MODEL_BUSY_ERROR,
+  ASK_MAX_RAW_QUESTION_CHARS,
   askChoices,
   askToFilter,
   beginAsk,
@@ -26,6 +28,7 @@ import {
   localAiActive,
   saveLocalAiConfig,
 } from '@/lib/ai/config';
+import { acquireModelLock, resetModelLockForTests } from '@/lib/ai/client';
 import type { Viewer } from '@/lib/auth/viewer';
 import { getSetting, setSetting } from '@/lib/settings';
 import { transactionsHref } from '@/lib/transaction-links';
@@ -47,6 +50,7 @@ afterEach(async () => {
   fx?.t.cleanup();
   fx = null;
   resetAskLimitsForTests();
+  resetModelLockForTests();
 });
 
 /** Every key the schema names, null or false unless a test says otherwise. */
@@ -255,6 +259,65 @@ describe('askToFilter: off, down, unreadable, and the question', () => {
     expect(await ask(household())).toEqual({ ok: false, error: ASK_UNREADABLE_ERROR });
     expect(getSetting(SETTING_LOCAL_AI_FAILURES)).toBeNull();
     expect(localAiActive(AT)).toBe(true);
+  });
+});
+
+describe('one model request at a time, household-wide', () => {
+  it('two questions at once get one answer and one busy sentence', async () => {
+    fx = buildAiFixture();
+    server = await startFakeModelServer(async (request, res) => {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      return modelServerHandler({ answer: () => answer({ spendingOnly: true }) })(request, res);
+    });
+    saveLocalAiConfig({ baseUrl: server.baseUrl, model: MODEL, userId: fx.alex, at: AT });
+    const [first, second] = await Promise.all([
+      askToFilter({ question: QUESTION, viewer: household(), today: TODAY, at: AT, lockWaitMs: 20 }),
+      askToFilter({ question: QUESTION, viewer: selfSam(), today: TODAY, at: AT, lockWaitMs: 20 }),
+    ]);
+    expect(first).toMatchObject({ ok: true });
+    expect(second).toEqual({ ok: false, error: ASK_MODEL_BUSY_ERROR });
+    expect(server.requests).toHaveLength(1);
+  });
+
+  it('a question waits for a holder that lets go inside the wait', async () => {
+    fx = buildAiFixture();
+    await turnOn(() => answer({ spendingOnly: true }));
+    const release = await acquireModelLock();
+    const pending = askToFilter({ question: QUESTION, viewer: household(), today: TODAY, at: AT, lockWaitMs: 2_000 });
+    setTimeout(() => release?.(), 30);
+    expect(await pending).toMatchObject({ ok: true });
+  });
+
+  it('the lock is released after an unreadable answer', async () => {
+    fx = buildAiFixture();
+    await turnOn(() => 'not json at all');
+    expect(await ask(household())).toEqual({ ok: false, error: ASK_UNREADABLE_ERROR });
+    const release = await acquireModelLock(0);
+    expect(release).not.toBeNull();
+    release?.();
+  });
+
+  it('the lock is released after a server failure', async () => {
+    fx = buildAiFixture();
+    const probe = http.createServer();
+    await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+    const port = (probe.address() as AddressInfo).port;
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+    saveLocalAiConfig({ baseUrl: `http://127.0.0.1:${port}`, model: MODEL, userId: fx.alex, at: AT });
+    expect(await ask(household())).toEqual({ ok: false, error: ASK_OFF_ERROR });
+    const release = await acquireModelLock(0);
+    expect(release).not.toBeNull();
+    release?.();
+  });
+});
+
+describe('the question is read through a capped schema', () => {
+  it('text over the raw cap is refused before it is squashed, and nothing is sent', async () => {
+    fx = buildAiFixture();
+    const s = await turnOn(() => answer({ spendingOnly: true }));
+    const padded = `grocery${' '.repeat(ASK_MAX_RAW_QUESTION_CHARS + 1)}spending`;
+    expect(await ask(household(), padded)).toEqual({ ok: false, error: ASK_QUESTION_LENGTH_ERROR });
+    expect(s.requests).toHaveLength(0);
   });
 });
 

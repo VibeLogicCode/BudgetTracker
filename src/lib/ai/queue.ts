@@ -1,6 +1,6 @@
 import { listCategories } from '@/lib/categories';
 import { todayIso } from '@/lib/dates';
-import { LocalAiAnswerError, LocalAiServerError, chatJson } from '@/lib/ai/client';
+import { LocalAiAnswerError, LocalAiServerError, acquireModelLock, chatJson } from '@/lib/ai/client';
 import {
   LOCAL_AI_UNREADABLE_LIMIT,
   localAiActive,
@@ -28,6 +28,8 @@ import { readAiSidecar, readSidecar, stagedByViewer, writeAiSidecar } from '@/li
  * - A server failure (LocalAiServerError, or the fifth unreadable answer in a row) is recorded once,
  *   empties the queue and stops. One unusable answer marks that merchant or receipt failed and the
  *   queue goes on.
+ * - One model request at a time household-wide: each job holds the model lock (client.ts), shared with
+ *   Ask in words, so a question is never behind more than the job in flight.
  * - Nothing is logged that carries household data: a log line names the job kind and an error name.
  */
 
@@ -115,6 +117,7 @@ async function runQueue(): Promise<void> {
       pump = null;
       return;
     }
+    const release = await acquireModelLock();
     try {
       await runJob(job, config);
     } catch (error) {
@@ -127,6 +130,7 @@ async function runQueue(): Promise<void> {
       }
       console.error('[ai] job failed', job.kind, error instanceof Error ? error.name : 'unknown');
     } finally {
+      release?.();
       claimed.delete(jobKey(job));
     }
   }

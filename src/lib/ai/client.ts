@@ -6,6 +6,7 @@ import {
   LOCAL_AI_ANSWER_TIMEOUT_MS,
   LOCAL_AI_CONNECT_TIMEOUT_MS,
   LOCAL_AI_LAN_ONLY_ERROR,
+  LOCAL_AI_MAX_LISTED_MODELS,
   LOCAL_AI_MAX_REQUEST_BYTES,
   LOCAL_AI_MAX_RESPONSE_BYTES,
   addressLabel,
@@ -322,5 +323,70 @@ export async function listModels(config: LocalAiConfig, timeouts?: Partial<Local
   const url = endpointUrl(config, '/v1/models');
   const result = await send(url, { method: 'GET', timeouts: { ...DEFAULT_TIMEOUTS, ...timeouts } });
   assertOk(result.status, config, '/v1/models');
-  return readEnvelope(result.body, modelsEnvelopeSchema).data.map((entry) => entry.id);
+  return readEnvelope(result.body, modelsEnvelopeSchema)
+    .data.map((entry) => entry.id)
+    .filter(isModelName)
+    .slice(0, LOCAL_AI_MAX_LISTED_MODELS);
+}
+
+// ---------------------------------------------------------------------------------- one at a time
+
+/**
+ * One request to the model server at a time, household-wide. The lock lives on globalThis under a
+ * Symbol.for key, so the scheduler's copy of this module and the actions' copy share it. A holder
+ * releases it in a finally; a waiter may give up after a stated wait and gets null.
+ */
+interface ModelLockState {
+  held: boolean;
+  waiters: Array<() => void>;
+}
+
+const MODEL_LOCK_KEY = Symbol.for('budget.localAi.modelLock');
+
+function lockState(): ModelLockState {
+  const holder = globalThis as unknown as Record<symbol, ModelLockState | undefined>;
+  return (holder[MODEL_LOCK_KEY] ??= { held: false, waiters: [] });
+}
+
+/** Resolves a release function once the lock is held, or null when waitMs passed first (no limit when omitted). */
+export function acquireModelLock(waitMs?: number): Promise<(() => void) | null> {
+  const state = lockState();
+  const makeRelease = () => {
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      const next = state.waiters.shift();
+      if (next === undefined) state.held = false;
+      else next();
+    };
+  };
+  if (!state.held) {
+    state.held = true;
+    return Promise.resolve(makeRelease());
+  }
+  return new Promise((resolve) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const grant = () => {
+      if (timer !== undefined) clearTimeout(timer);
+      resolve(makeRelease());
+    };
+    state.waiters.push(grant);
+    if (waitMs !== undefined) {
+      timer = setTimeout(() => {
+        const at = state.waiters.indexOf(grant);
+        if (at !== -1) {
+          state.waiters.splice(at, 1);
+          resolve(null);
+        }
+      }, waitMs);
+    }
+  });
+}
+
+/** Tests only: forget any holder and waiter. */
+export function resetModelLockForTests(): void {
+  const state = lockState();
+  state.held = false;
+  state.waiters.length = 0;
 }

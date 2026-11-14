@@ -8,8 +8,9 @@ import { isPrivateIpv4, isPrivateIpv6 } from '@/lib/net/private-address';
  * Only an address on the household's own network is accepted: a private or loopback IPv4 literal
  * (10/8, 172.16/12, 192.168/16, 127/8, 169.254/16), an IPv6 loopback, unique-local or link-local
  * literal, `localhost`, a one-word name (a compose service) or a name under `.local` or `.home.arpa`.
- * Everything else is refused, carrier NAT (100.64.0.0/10, Tailscale) included, and so are the two
- * cloud metadata addresses inside those ranges (169.254.169.254, fd00:ec2::254). A NAME can still
+ * Everything else is refused, carrier NAT (100.64.0.0/10, Tailscale) included, and so are Tailscale's
+ * IPv6 range (fd7a:115c:a1e0::/48) and the two cloud metadata addresses inside those ranges
+ * (169.254.169.254, fd00:ec2::254). A NAME can still
  * resolve anywhere, so src/lib/ai/client.ts re-checks every address a name resolves to on every
  * request (lanOnlyLookup) with isPrivateAddress below.
  *
@@ -29,6 +30,8 @@ export const LOCAL_AI_ANSWER_TIMEOUT_MS = 90_000;
 export const LOCAL_AI_MAX_RESPONSE_BYTES = 1024 * 1024;
 /** L3. A question over 64 KB is never sent. */
 export const LOCAL_AI_MAX_REQUEST_BYTES = 64 * 1024;
+/** The most model ids kept from a server's list. */
+export const LOCAL_AI_MAX_LISTED_MODELS = 50;
 /** The longest address the settings form takes. */
 export const LOCAL_AI_MAX_ADDRESS_CHARS = 200;
 
@@ -36,7 +39,7 @@ const EXAMPLE_ADDRESS = ['http', '//192.168.1.50:11434'].join(':');
 
 export const LOCAL_AI_ENTER_ADDRESS_ERROR = `Enter the model server's address, like ${EXAMPLE_ADDRESS}.`;
 export const LOCAL_AI_LAN_ONLY_ERROR =
-  'Only an address on your own network is allowed: a 10.x, 172.16-31.x or 192.168.x address, localhost, a one-word name, or a .local name.';
+  'Only an address on your own network is allowed: a 10.x, 172.16-31.x or 192.168.x address, an IPv6 home address (not Tailscale), localhost, a one-word name, or a .local name.';
 export const LOCAL_AI_NOTHING_AFTER_ERROR = "Enter only the server's address and port, with nothing after it.";
 
 /** One DNS label: letters, digits, hyphen and underscore inside, never at an end. URL.hostname is lowercase. */
@@ -87,6 +90,16 @@ function isMetadataAddress(address: string): boolean {
   return expandIpv6(inner) === METADATA_IPV6;
 }
 
+/** Tailscale's IPv6 range, fd7a:115c:a1e0::/48: inside unique-local, but an overlay network, not the home one. */
+const TAILSCALE_IPV6_PREFIX = 'fd7a:115c:a1e0:';
+
+function isTailscaleIpv6(address: string): boolean {
+  if (!address.includes(':')) return false;
+  const inner = address.startsWith('[') && address.endsWith(']') ? address.slice(1, -1) : address;
+  const groups = expandIpv6(inner);
+  return groups !== null && `${groups}:`.startsWith(TAILSCALE_IPV6_PREFIX);
+}
+
 /**
  * True for an address a name resolved to (no brackets on IPv6) or an IP literal from a URL (with
  * them). Anything that is not a well-formed private IPv4 or IPv6 address is false, and so is a
@@ -94,7 +107,7 @@ function isMetadataAddress(address: string): boolean {
  */
 export function isPrivateAddress(address: string): boolean {
   if (typeof address !== 'string' || address.length === 0) return false;
-  if (isMetadataAddress(address)) return false;
+  if (isMetadataAddress(address) || isTailscaleIpv6(address)) return false;
   if (IPV4_RE.test(address)) return isPrivateIpv4(address);
   if (!address.includes(':')) return false;
   if (isMappedIpv6(address)) return false;

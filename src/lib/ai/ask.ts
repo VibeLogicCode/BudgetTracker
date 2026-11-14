@@ -5,7 +5,7 @@ import { listCategories } from '@/lib/categories';
 import { addMonthsClamped, dayLabel, isIsoDate } from '@/lib/dates';
 import { transactionsHref } from '@/lib/transaction-links';
 import { z } from '@/lib/zod';
-import { LocalAiAnswerError, LocalAiServerError, chatJson, type LocalAiTimeouts } from '@/lib/ai/client';
+import { LocalAiAnswerError, LocalAiServerError, acquireModelLock, chatJson, type LocalAiTimeouts } from '@/lib/ai/client';
 import { readLocalAiConfig, recordLocalAiFailure, recordLocalAiSuccess } from '@/lib/ai/config';
 import type { PromptPair } from '@/lib/ai/prompts';
 import { categoryChoices, type JsonSchema } from '@/lib/ai/schemas';
@@ -32,6 +32,10 @@ import { categoryChoices, type JsonSchema } from '@/lib/ai/schemas';
 
 export const ASK_MIN_QUESTION_CHARS = 3;
 export const ASK_MAX_QUESTION_CHARS = 200;
+/** The text a form may send before it is squashed to one line. */
+export const ASK_MAX_RAW_QUESTION_CHARS = 1_000;
+/** How long a question waits when another request holds the model, before a plain busy answer. */
+export const ASK_LOCK_WAIT_MS = 5_000;
 export const ASK_MAX_SEARCH_CHARS = 40;
 /** A date in an answer must be within this many years of today, either side. */
 export const ASK_YEARS_EITHER_SIDE = 10;
@@ -44,6 +48,7 @@ export const ASK_COOLDOWN_MS = 3_000;
 export const ASK_OFF_ERROR = 'Local AI is off or not answering. Use the filters instead.';
 export const ASK_QUESTION_LENGTH_ERROR = `Type a question of ${ASK_MIN_QUESTION_CHARS} to ${ASK_MAX_QUESTION_CHARS} characters.`;
 export const ASK_BUSY_ERROR = 'Still working on your last question.';
+export const ASK_MODEL_BUSY_ERROR = 'The model is busy with another request. Try again in a moment.';
 export const ASK_COOLDOWN_ERROR = 'Wait a few seconds before asking again.';
 export const ASK_UNREADABLE_ERROR = "The model's answer could not be read. Try different words, or use the filters.";
 export const ASK_SHAPE_ERROR = "The model's answer named something this page cannot filter by. Try different words, or use the filters.";
@@ -114,9 +119,13 @@ export function askChoices(viewer: Viewer): AskChoices {
   return { categories, accounts, people };
 }
 
+/** The question as typed, capped before it is squashed. */
+export const askQuestionSchema = z.string().max(ASK_MAX_RAW_QUESTION_CHARS);
+
 /** The question as one line, or the length sentence. Nothing is kept. */
 export function readQuestion(raw: unknown): { ok: true; question: string } | { ok: false; error: string } {
-  const question = typeof raw === 'string' ? oneLine(raw) : '';
+  const text = askQuestionSchema.safeParse(raw);
+  const question = text.success ? oneLine(text.data) : '';
   if (question.length < ASK_MIN_QUESTION_CHARS || question.length > ASK_MAX_QUESTION_CHARS) {
     return { ok: false, error: ASK_QUESTION_LENGTH_ERROR };
   }
@@ -249,6 +258,7 @@ export async function askToFilter(input: {
   today: string;
   at: Date;
   timeouts?: Partial<LocalAiTimeouts>;
+  lockWaitMs?: number;
 }): Promise<AskResult> {
   const question = readQuestion(input.question);
   if (!question.ok) return question;
@@ -257,6 +267,8 @@ export async function askToFilter(input: {
   const choices = askChoices(input.viewer);
   const { jsonSchema, zodSchema } = askAnswer(choices);
   let content: unknown;
+  const release = await acquireModelLock(input.lockWaitMs ?? ASK_LOCK_WAIT_MS);
+  if (release === null) return { ok: false, error: ASK_MODEL_BUSY_ERROR };
   try {
     ({ content } = await chatJson({
       config,
@@ -272,6 +284,8 @@ export async function askToFilter(input: {
     }
     if (error instanceof LocalAiAnswerError) return { ok: false, error: ASK_UNREADABLE_ERROR };
     throw error;
+  } finally {
+    release();
   }
   if (zodSchema.safeParse(content).success) recordLocalAiSuccess(input.at);
   return readAskAnswer(content, choices, input.today);

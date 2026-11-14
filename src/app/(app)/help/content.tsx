@@ -794,8 +794,9 @@ export const HELP_SECTIONS: HelpSection[] = [
         </P>
         <P>
           It talks only to the address you enter, and that address must be on your own network: a 10.x,
-          172.16&ndash;31.x or 192.168.x address, <code>localhost</code>, a one-word name, or a{' '}
-          <code>.local</code> name. Anything else is refused, and nothing is sent to the internet.
+          172.16&ndash;31.x or 192.168.x address, an IPv6 home address (unique-local or link-local),{' '}
+          <code>localhost</code>, a one-word name, or a <code>.local</code> name. Tailscale addresses are
+          refused, IPv6 ones included. Anything else is refused, and nothing is sent to the internet.
         </P>
         <P>
           <B>It is off until you turn it on, and the app works the same without it.</B> If the model server

@@ -83,7 +83,7 @@ export function LocalAiCard(props: LocalAiCardProps) {
         </p>
 
         <form action={save} className="flex flex-col gap-3">
-          <Field label="Model server address" htmlFor="local-ai-address" hint="An address on your own network, like a 192.168.x.x address.">
+          <Field label="Model server address" htmlFor="local-ai-address" hint="An address on your own network, like a 192.168.x.x address. IPv6 home addresses work; Tailscale addresses are refused.">
             <input
               id="local-ai-address"
               name="baseUrl"

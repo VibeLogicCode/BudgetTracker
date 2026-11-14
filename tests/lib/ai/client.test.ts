@@ -20,7 +20,7 @@ import {
   setResolverForTests,
   unreachableError,
 } from '@/lib/ai/client';
-import { LOCAL_AI_LAN_ONLY_ERROR } from '@/lib/ai/lan';
+import { LOCAL_AI_LAN_ONLY_ERROR, LOCAL_AI_MAX_LISTED_MODELS } from '@/lib/ai/lan';
 import { TEST_LABELS, TEST_PROMPT } from '@/lib/ai/prompts';
 import { merchantAnswer } from '@/lib/ai/schemas';
 import {
@@ -97,6 +97,14 @@ describe('chatJson: one round trip', () => {
     const error = await rejection(ask(s.baseUrl));
     expect(error).toBeInstanceOf(LocalAiAnswerError);
     expect(error.message).toBe(LOCAL_AI_UNREADABLE_ERROR);
+  });
+
+  it('keeps only well-formed model ids, at most 50', async () => {
+    const good = Array.from({ length: 60 }, (_, n) => `model-${n}:1b`);
+    const s = await serve(modelServerHandler({ models: ['bad name', 'x'.repeat(500), '', 'a://b', ...good], answer: () => null }));
+    const listed = await listModels({ baseUrl: s.baseUrl, model: MODEL });
+    expect(listed).toHaveLength(LOCAL_AI_MAX_LISTED_MODELS);
+    expect(listed).toEqual(good.slice(0, LOCAL_AI_MAX_LISTED_MODELS));
   });
 
   it('lists the models the server has', async () => {
@@ -209,6 +217,14 @@ describe('chatJson: the server cannot be used', () => {
 });
 
 describe('lanOnlyLookup: every resolved address, on every request', () => {
+  it('refuses a name that resolves to the Tailscale IPv6 range', async () => {
+    const s = await serve(modelServerHandler({ answer: () => null }));
+    setResolverForTests(async () => [{ address: 'fd7a:115c:a1e0:ab12:4843:cd96:6262:1', family: 6 }]);
+    const error = await rejection(ask(`http://gpu-box.local:${s.port}`));
+    expect(error.message).toBe(LOCAL_AI_NOT_LAN_NOW_ERROR);
+    expect(s.requests).toHaveLength(0);
+  });
+
   it('connects to gpu-box.local when it resolves to 127.0.0.1', async () => {
     const s = await serve(modelServerHandler({ answer: () => ({ category: 'Groceries', merchant: null }) }));
     const asked: string[] = [];

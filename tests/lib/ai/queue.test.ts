@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { acquireModelLock, resetModelLockForTests } from '@/lib/ai/client';
 import { SETTING_LOCAL_AI_FAILURES, localAiStatus, saveLocalAiConfig, turnOffLocalAi } from '@/lib/ai/config';
 import { AI_QUEUE_MAX_MERCHANT_JOBS, aiQueueDepth, drainAiQueue, enqueueAiJob, resetAiQueueForTests, sweepAiWork } from '@/lib/ai/queue';
 import { getSetting } from '@/lib/settings';
@@ -32,6 +33,7 @@ beforeEach(() => {
 afterEach(async () => {
   await drainAiQueue();
   resetAiQueueForTests();
+  resetModelLockForTests();
   await server?.close();
   server = null;
   fx?.t.cleanup();
@@ -277,5 +279,34 @@ describe('receipt jobs', () => {
     enqueueAiJob({ kind: 'receipt', stagingId, userId: fx.alex });
     await drainAiQueue();
     expect(readAiSidecar(stagingId)).toEqual({ status: 'failed', at: AT.toISOString() });
+  });
+});
+
+describe('one model request at a time, household-wide', () => {
+  it('a queued job waits for a holder, is not cut short, and runs once the lock is free', async () => {
+    fx = buildAiFixture();
+    const s = await turnOn(() => GOOD);
+    const release = await acquireModelLock();
+    expect(sweepAiWork(AT)).toBe(1);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(s.requests).toHaveLength(0);
+    release?.();
+    await drainAiQueue();
+    expect(s.requests).toHaveLength(1);
+    expect(rows()).toHaveLength(1);
+  });
+
+  it('the lock is released after a server failure', async () => {
+    fx = buildAiFixture();
+    const probe = http.createServer();
+    await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+    const port = (probe.address() as AddressInfo).port;
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+    saveLocalAiConfig({ baseUrl: `http://127.0.0.1:${port}`, model: MODEL, userId: fx.alex, at: AT });
+    expect(sweepAiWork(AT)).toBe(1);
+    await drainAiQueue();
+    const release = await acquireModelLock(0);
+    expect(release).not.toBeNull();
+    release?.();
   });
 });

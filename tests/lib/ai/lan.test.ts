@@ -126,6 +126,18 @@ describe('isLanHostname and isPrivateAddress', () => {
   });
 });
 
+describe('Tailscale IPv6 range', () => {
+  it('is refused as a literal and as a resolved address, while other unique-local addresses stay accepted', () => {
+    for (const address of ['fd7a:115c:a1e0::1', 'fd7a:115c:a1e0:ab12:4843:cd96:6262:1', '[fd7a:115c:a1e0::5]', 'FD7A:115C:A1E0:0:0:0:0:9']) {
+      expect(isPrivateAddress(address), address).toBe(false);
+    }
+    expect(normalizeLocalAiBaseUrl('http://[fd7a:115c:a1e0::1]:11434')).toEqual({ ok: false, error: LOCAL_AI_LAN_ONLY_ERROR });
+    for (const address of ['fd7a:115c:a1df::1', 'fd7a:115d:a1e0::1', 'fd00::1', 'fd12::1', 'fe80::1']) {
+      expect(isPrivateAddress(address), address).toBe(true);
+    }
+  });
+});
+
 /**
  * v1.64.0 review fix. The cloud metadata addresses are link-local and unique-local, so the shared
  * private-address check passes them (the Watchtower guard keeps that); local AI refuses them, in
