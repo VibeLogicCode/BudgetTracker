@@ -103,10 +103,11 @@ async function setupWithTwoSessions(): Promise<{ db: TestDb['db']; userId: numbe
   return { db: current!.db, userId, myToken: token };
 }
 
-async function setupWithTotpEnabled(): Promise<{ db: TestDb['db']; userId: number; myToken: string }> {
+async function setupWithTotpEnabled(): Promise<{ db: TestDb['db']; userId: number; myToken: string; secret: string }> {
   const setup = await setupWithTwoSessions();
-  enableTotpForUser(setup.userId, generateTotpSecret());
-  return setup;
+  const secret = generateTotpSecret();
+  enableTotpForUser(setup.userId, secret);
+  return { ...setup, secret };
 }
 
 describe('confirmTotpEnrollmentAction — finding 6c: pending-enrollment cookie', () => {
@@ -244,24 +245,70 @@ describe('v1.12.1: turning off two-factor costs a password (item AA / SEC-4)', (
   });
 
   it('refuses a wrong password, and leaves MFA on', async () => {
-    const { db, userId, myToken } = await setupWithTotpEnabled();
+    const { db, userId, myToken, secret } = await setupWithTotpEnabled();
 
-    const result = await withSession(myToken, () => disableTotpAction({}, formData({ currentPassword: 'nope' })));
+    const result = await withSession(myToken, () =>
+      disableTotpAction({}, formData({ currentPassword: 'nope', currentCode: currentTotpToken(secret) })),
+    );
 
     expect(result.error).toBe('Current password is incorrect.');
     expect(db.get<{ on: number }>(sql`select totp_enabled as "on" from users where id = ${userId}`).on).toBe(1);
   });
 
-  it('disables it on the right password, and signs out every other session', async () => {
-    const { db, userId, myToken } = await setupWithTotpEnabled();
+  it('disables it on the right password and a current code, and signs out every other session', async () => {
+    const { db, userId, myToken, secret } = await setupWithTotpEnabled();
 
     const result = await withSession(myToken, () =>
-      disableTotpAction({}, formData({ currentPassword: PASSWORD })),
+      disableTotpAction({}, formData({ currentPassword: PASSWORD, currentCode: currentTotpToken(secret) })),
     );
 
     expect(result.message).toContain('off');
     expect(db.get<{ on: number }>(sql`select totp_enabled as "on" from users where id = ${userId}`).on).toBe(0);
     expect(db.get<{ n: number }>(sql`select count(*) as n from sessions where user_id = ${userId}`).n).toBe(1);
+    expect(validateSession(myToken)).not.toBeNull();
+    expect(raiseAccountSecurityEvent).toHaveBeenCalledWith(expect.objectContaining({ userId, event: 'mfa_disabled' }));
+  });
+});
+
+describe('v1.64.1: turning off two-factor also costs a current code', () => {
+  function totpOn(db: TestDb['db'], userId: number): number {
+    return db.get<{ on: number }>(sql`select totp_enabled as "on" from users where id = ${userId}`).on;
+  }
+
+  it('refuses the right password without a code, and leaves MFA on and every session in place', async () => {
+    const { db, userId, myToken } = await setupWithTotpEnabled();
+    const result = await withSession(myToken, () => disableTotpAction({}, formData({ currentPassword: PASSWORD })));
+    expect(result.error).toBe('Enter a current code from your authenticator app.');
+    expect(totpOn(db, userId)).toBe(1);
+    expect(db.get<{ n: number }>(sql`select count(*) as n from sessions where user_id = ${userId}`).n).toBe(2);
+  });
+
+  it('refuses a wrong code', async () => {
+    const { db, userId, myToken, secret } = await setupWithTotpEnabled();
+    const wrong = currentTotpToken(secret) === '000000' ? '000001' : '000000';
+    const result = await withSession(myToken, () => disableTotpAction({}, formData({ currentPassword: PASSWORD, currentCode: wrong })));
+    expect(result.error).toMatch(/current code did not match/);
+    expect(totpOn(db, userId)).toBe(1);
+  });
+
+  it('refuses a code that was already spent', async () => {
+    const { db, userId, myToken, secret } = await setupWithTotpEnabled();
+    const at = new Date();
+    const code = currentTotpToken(secret, at);
+    consumeTotpCounter(userId, verifyTotpCounter(secret, code, at)!);
+    const result = await withSession(myToken, () => disableTotpAction({}, formData({ currentPassword: PASSWORD, currentCode: code })));
+    expect(result.error).toMatch(/already used/);
+    expect(totpOn(db, userId)).toBe(1);
+    expect(raiseAccountSecurityEvent).not.toHaveBeenCalled();
+  });
+
+  it('spends the code it accepts', async () => {
+    const { db, userId, myToken, secret } = await setupWithTotpEnabled();
+    const at = new Date();
+    const code = currentTotpToken(secret, at);
+    await withSession(myToken, () => disableTotpAction({}, formData({ currentPassword: PASSWORD, currentCode: code })));
+    expect(totpOn(db, userId)).toBe(0);
+    expect(consumeTotpCounter(userId, verifyTotpCounter(secret, code, at)!)).toBe(false);
   });
 });
 

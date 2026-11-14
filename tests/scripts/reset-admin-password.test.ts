@@ -1,15 +1,27 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createTestDb, type TestDb } from '../helpers/db';
-import { createUser, findUserByUsername, setUserActive } from '@/lib/auth/users';
-import { verifyPassword, hashPassword, MIN_PASSWORD_LENGTH as APP_MIN_PASSWORD_LENGTH } from '@/lib/auth/password';
+import { createUser, findUserByUsername, mustChangePassword, setUserActive, setUserCanSignIn } from '@/lib/auth/users';
+import {
+  verifyPassword,
+  hashPassword,
+  MAX_PASSWORD_LENGTH as APP_MAX_PASSWORD_LENGTH,
+  MIN_PASSWORD_LENGTH as APP_MIN_PASSWORD_LENGTH,
+} from '@/lib/auth/password';
 import { createSession, validateSession } from '@/lib/auth/session';
 import { checkLockout, recordLoginAttempt } from '@/lib/auth/ratelimit';
 import { countUnusedRecoveryCodes, enableTotpForUser, generateRecoveryCodes, generateTotpSecret, storeRecoveryCodes } from '@/lib/auth/totp';
-import { ARGON2_OPTIONS, MIN_PASSWORD_LENGTH, resetPassword, resolveDatabasePath } from '../../scripts/reset-admin-password';
+import {
+  ARGON2_OPTIONS,
+  MAX_PASSWORD_LENGTH,
+  MIN_PASSWORD_LENGTH,
+  main,
+  resetPassword,
+  resolveDatabasePath,
+} from '../../scripts/reset-admin-password';
 
 /** Parses the "m=...,t=...,p=..." parameter segment out of a PHC-format argon2id hash. */
 function argon2ParamSegment(hash: string): string {
@@ -39,6 +51,35 @@ function enrollTotp(userId: number): void {
   storeRecoveryCodes(userId, generateRecoveryCodes());
 }
 
+function auditRows(): { user_id: number; action: string; entity: string; entity_id: number; detail: string | null }[] {
+  return current!.sqlite.prepare('select user_id, action, entity, entity_id, detail from audit_log order by id').all() as {
+    user_id: number;
+    action: string;
+    entity: string;
+    entity_id: number;
+    detail: string | null;
+  }[];
+}
+
+/** Runs main() in this process with a stand-in for the prompt or standard input, capturing what it prints. */
+async function runMain(argv: string[], dbPath: string, password: string) {
+  const out: string[] = [];
+  const err: string[] = [];
+  const log = vi.spyOn(console, 'log').mockImplementation((line: string) => void out.push(line));
+  const error = vi.spyOn(console, 'error').mockImplementation((line: string) => void err.push(line));
+  const original = process.env.BUDGET_DB_PATH;
+  process.env.BUDGET_DB_PATH = dbPath;
+  try {
+    const code = await main(['node', 'reset-admin-password.ts', ...argv], async () => password);
+    return { code, stdout: out.join('\n'), stderr: err.join('\n') };
+  } finally {
+    if (original === undefined) delete process.env.BUDGET_DB_PATH;
+    else process.env.BUDGET_DB_PATH = original;
+    log.mockRestore();
+    error.mockRestore();
+  }
+}
+
 function totpRow(userId: number): { totp_enabled: number; totp_secret_encrypted: string | null } {
   return current!.sqlite
     .prepare('select totp_enabled, totp_secret_encrypted from users where id = ?')
@@ -61,6 +102,10 @@ describe('argon2 parameters stay in step with the app', () => {
   it('MIN_PASSWORD_LENGTH matches the app (imported from src/lib/auth/password.ts, not copied)', () => {
     expect(MIN_PASSWORD_LENGTH).toBe(APP_MIN_PASSWORD_LENGTH);
     expect(MIN_PASSWORD_LENGTH).toBe(10);
+  });
+
+  it('MAX_PASSWORD_LENGTH matches the app', () => {
+    expect(MAX_PASSWORD_LENGTH).toBe(APP_MAX_PASSWORD_LENGTH);
   });
 
   // Drift-pin for the argon2 cost parameters: rather than comparing
@@ -107,7 +152,45 @@ describe('resetPassword', () => {
       mfaCleared: false,
       recoveryCodesDeleted: 0,
       mfaStillRequired: false,
+      reactivated: false,
+      canSignIn: true,
     });
+  });
+
+  it('asks the person to choose their own password at the next sign-in', async () => {
+    const { alice, dbPath } = await setup();
+    expect(mustChangePassword(alice.id)).toBe(false);
+    await resetPassword({ dbPath, username: 'alice', newPassword: NEW_PASSWORD });
+    expect(mustChangePassword(alice.id)).toBe(true);
+  });
+
+  it('writes one audit row naming the reset account', async () => {
+    const { alice, dbPath } = await setup();
+    await resetPassword({ dbPath, username: 'alice', newPassword: NEW_PASSWORD });
+    expect(auditRows()).toEqual([
+      { user_id: alice.id, action: 'reset_password', entity: 'users', entity_id: alice.id, detail: 'Reset from the server command line' },
+    ]);
+  });
+
+  it('names a cleared two-factor and a reactivated account in that audit row', async () => {
+    const { alice, dbPath } = await setup();
+    await createUser({ name: 'Bob', username: 'bob', password: OLD_PASSWORD, role: 'admin' });
+    enrollTotp(alice.id);
+    setUserActive(alice.id, false);
+    const result = await resetPassword({ dbPath, username: 'alice', newPassword: NEW_PASSWORD, clearMfa: true });
+    expect(result.reactivated).toBe(true);
+    expect(auditRows().map((row) => row.detail)).toEqual([
+      'Reset from the server command line, two-factor cleared, account reactivated',
+    ]);
+  });
+
+  it('refuses a password over the policy maximum, and changes nothing', async () => {
+    const { dbPath } = await setup();
+    await expect(resetPassword({ dbPath, username: 'alice', newPassword: 'a'.repeat(MAX_PASSWORD_LENGTH + 1) })).rejects.toThrowError(
+      /at most 1024 characters/,
+    );
+    expect(await verifyPassword(findUserByUsername('alice')!.passwordHash, OLD_PASSWORD)).toBe(true);
+    expect(auditRows()).toEqual([]);
   });
 
   it('signs every existing session out', async () => {
@@ -130,13 +213,14 @@ describe('resetPassword', () => {
     expect(checkLockout({ username: 'alice', ip: '10.0.0.5', at: new Date(at.getTime() + 7000) }).locked).toBe(false);
   });
 
-  it('reactivates a deactivated account', async () => {
+  it('reactivates a deactivated account and says so', async () => {
     const { alice, dbPath } = await setup();
     await createUser({ name: 'Bob', username: 'bob', password: OLD_PASSWORD, role: 'admin' });
     setUserActive(alice.id, false);
     expect(findUserByUsername('alice')!.isActive).toBe(false);
-    await resetPassword({ dbPath, username: 'alice', newPassword: NEW_PASSWORD });
+    const result = await resetPassword({ dbPath, username: 'alice', newPassword: NEW_PASSWORD });
     expect(findUserByUsername('alice')!.isActive).toBe(true);
+    expect(result.reactivated).toBe(true);
   });
 
   it('matches the username case-insensitively', async () => {
@@ -233,29 +317,97 @@ describe('--clear-mfa — the documented SECRET_KEY-loss recovery path (C2)', ()
   });
 });
 
+describe('v1.64.1: what the command says', () => {
+  it('refuses a password given on the command line, says how to pass it, and changes nothing', async () => {
+    const { dbPath } = await setup();
+    const result = await runMain(['alice', NEW_PASSWORD], dbPath, NEW_PASSWORD);
+    expect(result.code).toBe(2);
+    expect(result.stderr).toMatch(/not on the command line/);
+    expect(result.stderr).toMatch(/prompt|standard input/);
+    expect(await verifyPassword(findUserByUsername('alice')!.passwordHash, OLD_PASSWORD)).toBe(true);
+  });
+
+  it('says a new password is chosen at the next sign-in, and whether the account was reactivated', async () => {
+    const { alice, dbPath } = await setup();
+    await createUser({ name: 'Bob', username: 'bob', password: OLD_PASSWORD, role: 'admin' });
+    const first = await runMain(['alice'], dbPath, NEW_PASSWORD);
+    expect(first.code).toBe(0);
+    expect(first.stdout).toMatch(/choose their own password at the next sign-in/);
+    expect(first.stdout).toMatch(/already active/);
+    expect(first.stdout).not.toMatch(/sign in immediately/i);
+
+    setUserActive(alice.id, false);
+    const second = await runMain(['alice'], dbPath, NEW_PASSWORD);
+    expect(second.stdout).toMatch(/was deactivated and is active again/);
+  });
+
+  it('says an admin must allow sign-in first for a person whose sign-in is withdrawn', async () => {
+    const { dbPath } = await setup();
+    const sam = await createUser({ name: 'Sam', username: 'sam', password: OLD_PASSWORD, role: 'member' });
+    setUserCanSignIn(sam.id, false);
+    const result = await runMain(['sam'], dbPath, NEW_PASSWORD);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toMatch(/an admin must allow sign-in/);
+    expect(result.stdout).not.toMatch(/sign in immediately/i);
+  });
+
+  it('refuses an empty password from standard input', async () => {
+    const { dbPath } = await setup();
+    const result = await runMain(['alice'], dbPath, '');
+    expect(result.code).toBe(1);
+    expect(result.stderr).toMatch(/No new password was given/);
+  });
+});
+
 describe('the CLI as it runs inside the container', () => {
   const [major, minor] = process.versions.node.split('.').map(Number);
   const stripTypesSupported = major > 22 || (major === 22 && minor >= 6);
   const scriptPath = path.join(process.cwd(), 'scripts', 'reset-admin-password.ts');
 
-  const runCli = (args: string[], dbPath: string) =>
+  /** Standard input is a pipe here, never a terminal, so the script reads its first line. */
+  const runCli = (args: string[], dbPath: string, input = `${NEW_PASSWORD}\n`) =>
     spawnSync(process.execPath, ['--experimental-strip-types', scriptPath, ...args], {
       cwd: process.cwd(),
       encoding: 'utf8',
+      input,
       env: { ...process.env, BUDGET_DB_PATH: dbPath },
     });
 
-  it.runIf(stripTypesSupported)('resets a password end to end and prints what it did', async () => {
-    const { dbPath } = await setup();
-    const result = runCli(['alice', NEW_PASSWORD], dbPath);
+  it.runIf(stripTypesSupported)('resets a password end to end from standard input and prints what it did', async () => {
+    const { alice, dbPath } = await setup();
+    const result = runCli(['alice'], dbPath);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('Password reset for "alice"');
     expect(await verifyPassword(findUserByUsername('alice')!.passwordHash, NEW_PASSWORD)).toBe(true);
+    expect(mustChangePassword(alice.id)).toBe(true);
+  });
+
+  it.runIf(stripTypesSupported)('reads only the first line of standard input, without its line ending', async () => {
+    const { dbPath } = await setup();
+    const result = runCli(['alice'], dbPath, `${NEW_PASSWORD}\r\nsecond line ignored\n`);
+    expect(result.status).toBe(0);
+    expect(await verifyPassword(findUserByUsername('alice')!.passwordHash, NEW_PASSWORD)).toBe(true);
+  });
+
+  it.runIf(stripTypesSupported)('refuses a password on the command line before reading anything', async () => {
+    const { dbPath } = await setup();
+    const result = runCli(['alice', NEW_PASSWORD], dbPath);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/not on the command line/);
+    expect(await verifyPassword(findUserByUsername('alice')!.passwordHash, OLD_PASSWORD)).toBe(true);
+  });
+
+  it.runIf(stripTypesSupported)('refuses an over-long password from standard input', async () => {
+    const { dbPath } = await setup();
+    const result = runCli(['alice'], dbPath, `${'a'.repeat(MAX_PASSWORD_LENGTH + 1)}\n`);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/at most 1024 characters/);
+    expect(await verifyPassword(findUserByUsername('alice')!.passwordHash, OLD_PASSWORD)).toBe(true);
   });
 
   it.runIf(stripTypesSupported)('exits non-zero and explains itself when the user does not exist', async () => {
     const { dbPath } = await setup();
-    const result = runCli(['nobody', NEW_PASSWORD], dbPath);
+    const result = runCli(['nobody'], dbPath);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('No user named "nobody"');
   });
@@ -280,7 +432,7 @@ describe('the CLI as it runs inside the container', () => {
     const { alice, dbPath } = await setup();
     enrollTotp(alice.id);
 
-    const result = runCli(['alice', NEW_PASSWORD], dbPath);
+    const result = runCli(['alice'], dbPath);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toMatch(/still ON/i);
@@ -293,7 +445,7 @@ describe('the CLI as it runs inside the container', () => {
     const { alice, dbPath } = await setup();
     enrollTotp(alice.id);
 
-    const result = runCli(['alice', NEW_PASSWORD, '--clear-mfa'], dbPath);
+    const result = runCli(['alice', '--clear-mfa'], dbPath);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('Password reset for "alice"');
@@ -307,7 +459,7 @@ describe('the CLI as it runs inside the container', () => {
   it.runIf(stripTypesSupported)('accepts --clear-mfa before the positional arguments too', async () => {
     const { alice, dbPath } = await setup();
     enrollTotp(alice.id);
-    const result = runCli(['--clear-mfa', 'alice', NEW_PASSWORD], dbPath);
+    const result = runCli(['--clear-mfa', 'alice'], dbPath);
     expect(result.status).toBe(0);
     expect(totpRow(alice.id).totp_enabled).toBe(0);
   });

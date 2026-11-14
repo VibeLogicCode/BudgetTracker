@@ -59,9 +59,9 @@ export function ProfileForms({ totpEnabled, recoveryLeft }: { totpEnabled: boole
               </Notice>
             ) : null}
             {/* v1.12.1 (item AA / SEC-4): a form, not a one-click button. Turning the second
-                factor off is the moment an attacker holding a session converts it into permanent
-                access, so it costs the password -- the same bar changePasswordAction sets one
-                column to the left. */}
+                factor off costs the password -- the same bar changePasswordAction sets one column
+                to the left. v1.64.1: and a current code from the authenticator being turned off,
+                the same pair replacing it asks for. */}
             <form action={disableAction} className="flex flex-col gap-3">
               <FormError message={disableState.error} />
               {disableState.message ? <Notice tone="success">{disableState.message}</Notice> : null}
@@ -70,6 +70,19 @@ export function ProfileForms({ totpEnabled, recoveryLeft }: { totpEnabled: boole
                   name="currentPassword"
                   type="password"
                   autoComplete="current-password"
+                  required
+                  className={inputClass}
+                />
+              </Field>
+              <Field
+                label="Current code"
+                hint="From the authenticator app you use now. Without it, ask an admin to reset two-factor for you under Settings → Users."
+              >
+                <input
+                  name="currentCode"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  placeholder="123456"
                   required
                   className={inputClass}
                 />

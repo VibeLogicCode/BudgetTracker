@@ -577,33 +577,46 @@ put it on) exists before the first start.
 ### I forgot my password
 
 If you forgot your password, reset it from the host with the rescue script — it runs inside the
-container:
+container and asks for the new password without showing it:
 
 ```bash
-docker compose exec budget-tracker node --experimental-strip-types \
-  scripts/reset-admin-password.ts alice 'a brand new password'
+docker compose exec -it budget-tracker node --experimental-strip-types \
+  scripts/reset-admin-password.ts alice
 ```
 
-It sets the new password (minimum 10 characters), reactivates the account if it was deactivated,
-signs out every one of that user's sessions, and clears the recorded failed sign-ins (the
-per-username backoff and any per-browser counts) so the new password works immediately. Run it with no arguments to see the usage text and the list of known
-usernames.
+Or give it the new password as the first line of standard input (here from a file you delete
+afterwards):
+
+```bash
+docker compose exec -T budget-tracker node --experimental-strip-types \
+  scripts/reset-admin-password.ts alice < new-password.txt
+```
+
+It never takes the password on the command line. It sets the new password (10 to 1024
+characters), reactivates the account if it was deactivated and says so, signs out every one of
+that user's sessions, clears the recorded failed sign-ins (the per-username backoff and any
+per-browser counts) so the lockout lifts immediately, and records the reset in the audit log. The
+password you set works for one sign-in: the person then chooses their own before anything else. A
+person whose sign-in an admin withdrew still needs an admin to allow sign-in under **Settings →
+Users** first. Run it with no arguments to see the usage text, or with an unknown name to see the
+list of known usernames.
 
 **It does not touch two-factor authentication.** If that account has an authenticator enrolled,
 sign-in still asks for a code after the new password. Add `--clear-mfa` when you also need to
 remove the enrollment (see the SECRET_KEY section below):
 
 ```bash
-docker compose exec budget-tracker node --experimental-strip-types \
-  scripts/reset-admin-password.ts alice 'a brand new password' --clear-mfa
+docker compose exec -it budget-tracker node --experimental-strip-types \
+  scripts/reset-admin-password.ts alice --clear-mfa
 ```
 
 **On a Synology with no SSH,** you do not need a terminal on the NAS at all: **Container Manager
 → Container → `budget-tracker` → Details → Terminal → Create**, which opens a shell *inside* the
-running container. Run the command there without the `docker compose exec budget-tracker` prefix:
+running container. Run the command there without the `docker compose exec budget-tracker` prefix;
+it asks for the new password the same way:
 
 ```bash
-node --experimental-strip-types scripts/reset-admin-password.ts alice 'a brand new password'
+node --experimental-strip-types scripts/reset-admin-password.ts alice
 ```
 
 If another admin is still able to sign in, the easier route is **Settings → Users → Reset
@@ -634,8 +647,8 @@ rows are stored as plaintext.
    `--clear-mfa`. This is the only path that clears two-factor from outside the app:
 
    ```bash
-   docker compose exec budget-tracker node --experimental-strip-types \
-     scripts/reset-admin-password.ts alice 'a brand new password' --clear-mfa
+   docker compose exec -it budget-tracker node --experimental-strip-types \
+     scripts/reset-admin-password.ts alice --clear-mfa
    ```
 
    It sets the new password, turns `totp_enabled` off, deletes the undecryptable TOTP secret, and
@@ -661,7 +674,10 @@ Fix it on both sides:
    `passHostHeader = true` or the same header rule.
 
 Only turn `TRUST_PROXY` on behind a proxy you control — with nothing in front of the container,
-any client could forge that header.
+any client could forge that header. The app expects exactly one proxy in front of it that appends
+the client's address to `X-Forwarded-For` (or sets `X-Real-IP`), and reads the last
+`X-Forwarded-For` entry, the one that proxy added. With `TRUST_PROXY=1`, make the app's own port
+reachable only from that proxy, not from the rest of the network.
 
 ### Two-factor codes are rejected even though they look right
 

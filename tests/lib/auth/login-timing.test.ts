@@ -3,14 +3,14 @@ import { createTestDb, type TestDb } from '../../helpers/db';
 
 // Isolated in its own file (Vitest gives each test file its own module registry
 // under the "forks" pool) so this mock never leaks into tests/lib/auth/login.test.ts.
-// hashPassword is passed through untouched — only verifyPassword is wrapped in a
+// hashPassword is passed through untouched — only the sign-in verify is wrapped in a
 // spy — so createUser/setUserPassword elsewhere in the suite are unaffected.
 vi.mock('@/lib/auth/password', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/password')>();
-  return { ...actual, verifyPassword: vi.fn(actual.verifyPassword) };
+  return { ...actual, verifyPasswordForSignIn: vi.fn(actual.verifyPasswordForSignIn) };
 });
 
-import { verifyPassword } from '@/lib/auth/password';
+import { verifyPasswordForSignIn as verifyPassword } from '@/lib/auth/password';
 import { attemptLogin } from '@/lib/auth/login';
 import { createUser } from '@/lib/auth/users';
 

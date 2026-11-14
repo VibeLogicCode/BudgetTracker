@@ -28,39 +28,38 @@ function request(url: string, cookie: string): Request {
   return new Request(url, { headers: { cookie } });
 }
 
+// v1.64.1: userFromRequest answers a person who still has to change their password as signed out,
+// so every download answers 401 under the flag, before the routes' own flag checks are reached.
 describe('v1.12.1: bulk exports honour the forced-password-change gate (item AD / SEC-9)', () => {
-  it('the transactions export returns 403 under the flag', async () => {
+  it('the transactions export returns 401 under the flag', async () => {
     const { cookie } = setup(true);
     const response = await exportGet(request('http://localhost/api/reports/export', cookie));
-    expect(response.status).toBe(403);
-    expect(await response.text()).toContain('Finish setting your password first.');
+    expect(response.status).toBe(401);
   });
 
-  it('the tax-year export returns 403 under the flag', async () => {
+  it('the tax-year export returns 401 under the flag', async () => {
     const { cookie } = setup(true);
     const response = await taxExportGet(request('http://localhost/api/reports/tax-export?year=2026', cookie));
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(401);
   });
 
   // v1.63.0 (plan 2026-11-12, B5): the two year-end downloads carry the same gate.
-  it('the tax detail CSV returns 403 under the flag', async () => {
+  it('the tax detail CSV returns 401 under the flag', async () => {
     const { cookie } = setup(true);
     const response = await taxDetailGet(request('http://localhost/api/reports/tax-detail?year=2026', cookie));
-    expect(response.status).toBe(403);
-    expect(await response.text()).toContain('Finish setting your password first.');
+    expect(response.status).toBe(401);
   });
 
-  it('the year-end pack returns 403 under the flag, before any zip is planned', async () => {
+  it('the year-end pack returns 401 under the flag, before any zip is planned', async () => {
     const { cookie } = setup(true);
     const response = await yearEndGet(request('http://localhost/api/reports/year-end?year=2026', cookie));
-    expect(response.status).toBe(403);
-    expect(await response.text()).toContain('Finish setting your password first.');
+    expect(response.status).toBe(401);
   });
 
-  it('the backup download returns 403 under the flag, before any archive is built', async () => {
+  it('the backup download returns 401 under the flag, before any archive is built', async () => {
     const { cookie } = setup(true);
     const response = await backupGet(request('http://localhost/api/backup/download', cookie));
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(401);
   });
 
   it('the transactions export works normally without the flag', async () => {

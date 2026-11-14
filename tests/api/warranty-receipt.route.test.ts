@@ -158,10 +158,11 @@ describe('GET /api/warranties/receipts/[id]', () => {
  * a document of the same kind. This route was the one that had been missed.
  */
 describe('D8: the forced-password-change gate', () => {
-  it('returns 403 while the flag is set, and the file once it is cleared', async () => {
+  // v1.64.1: userFromRequest answers a person who still has to change their password as signed out.
+  it('returns 401 while the flag is set, and the file once it is cleared', async () => {
     const receipt = attach(JPEG, 'image/jpeg', 'till receipt.jpg');
     current!.sqlite.prepare('update users set must_change_password = 1 where id = ?').run(ownerId);
-    expect((await fetchReceipt(receipt.id)).status).toBe(403);
+    expect((await fetchReceipt(receipt.id)).status).toBe(401);
 
     current!.sqlite.prepare('update users set must_change_password = 0 where id = ?').run(ownerId);
     expect((await fetchReceipt(receipt.id)).status).toBe(200);

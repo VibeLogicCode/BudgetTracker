@@ -10,14 +10,11 @@ import { AppShell } from '@/components/app-shell/AppShell';
 export const dynamic = 'force-dynamic';
 
 /**
- * Forced password change (spec v1.5) is gated HERE — at the page layer only, on purpose.
- *
- * /api/* routes keep working normally under the same session. The flag's threat model is
- * "an admin knows this password", not "this session is compromised": it is a UX nudge to
- * replace an admin-issued secret, not a session invalidation. An admin who wanted the
- * session dead already has Deactivate and Reset password (both of which really do destroy
- * every session). Gating the APIs too would buy nothing against that threat while breaking
- * the logout POST and every in-flight fetch for no security gain.
+ * Forced password change (spec v1.5). Since v1.64.1 it is a boundary everywhere, not only here:
+ * `requireUser` sends a flagged user to /change-password and `userFromRequest` refuses them on
+ * every route, so no action or API works until the admin-issued password is replaced. Only the
+ * change-password page and action (through `requireUserForPasswordChange`) and logout stay open.
+ * The redirect below is the page-layer half of the same rule.
  */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();

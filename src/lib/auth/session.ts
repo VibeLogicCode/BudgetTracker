@@ -59,7 +59,16 @@ export function createSession(
   return { token, expiresAt, createdAt };
 }
 
-export function validateSession(token: string, at: Date = new Date()): SessionUser | null {
+/**
+ * v1.64.1: a live session and whether its person still has to choose their own password. Internal:
+ * the exported readers below decide what a flagged person may reach.
+ */
+interface LiveSession {
+  user: SessionUser;
+  mustChangePassword: boolean;
+}
+
+function readSession(token: string, at: Date): LiveSession | null {
   if (!token) return null;
   const tokenHash = hashSessionToken(token);
   const db = getDb();
@@ -75,6 +84,7 @@ export function validateSession(token: string, at: Date = new Date()): SessionUs
       isActive: users.isActive,
       visibility: users.visibility,
       canSignIn: users.canSignIn,
+      mustChangePassword: users.mustChangePassword,
     })
     .from(sessions)
     .innerJoin(users, eq(users.id, sessions.userId))
@@ -101,7 +111,19 @@ export function validateSession(token: string, at: Date = new Date()): SessionUs
       .run();
   }
 
-  return { id: row.id, name: row.name, username: row.username, role: row.role, visibility: row.visibility };
+  return {
+    user: { id: row.id, name: row.name, username: row.username, role: row.role, visibility: row.visibility },
+    mustChangePassword: row.mustChangePassword,
+  };
+}
+
+/**
+ * The session's person, flagged or not. Only sign-out reads it outside this module
+ * (tests/ops/forced-password-change.test.ts): everything else goes through requireUser(),
+ * requireUserForPasswordChange() or userFromRequest(), which decide what a flagged person reaches.
+ */
+export function validateSession(token: string, at: Date = new Date()): SessionUser | null {
+  return readSession(token, at)?.user ?? null;
 }
 
 export function destroySession(token: string): void {
@@ -237,18 +259,31 @@ function readCookie(header: string | null, name: string): string | null {
   return null;
 }
 
-/** Route-handler friendly: no next/headers, so it is unit-testable with a plain Request. */
+/** One cookie's value from a raw `Cookie` header, or null. */
+export function readCookieFromHeader(header: string | null, name: string): string | null {
+  return readCookie(header, name);
+}
+
+/**
+ * Route-handler friendly: no next/headers, so it is unit-testable with a plain Request.
+ *
+ * v1.64.1: a person who still has to choose their own password reads as signed out here, so every
+ * route answers them as it answers no session (401). Sign-out is the one route that reads the
+ * session another way, through validateSession.
+ */
 export function userFromRequest(request: Request): SessionUser | null {
   const token = readCookie(request.headers.get('cookie'), SESSION_COOKIE_NAME);
   if (!token) return null;
-  return validateSession(token);
+  const session = readSession(token, new Date());
+  if (!session || session.mustChangePassword) return null;
+  return session.user;
 }
 
-export async function getCurrentUser(): Promise<SessionUser | null> {
+async function sessionFromCookies(): Promise<LiveSession | null> {
   const store = await cookies();
   const token = store.get(SESSION_COOKIE_NAME)?.value;
   if (!token) return null;
-  return validateSession(token);
+  return readSession(token, new Date());
 }
 
 /**
@@ -264,10 +299,25 @@ export async function getCurrentSessionId(): Promise<string | null> {
   return hashSessionToken(token);
 }
 
+/**
+ * v1.64.1: the forced password change is a boundary. A flagged person is sent to /change-password
+ * before the caller runs, so no page or action reaches their data until they have chosen a password.
+ */
 export async function requireUser(): Promise<SessionUser> {
-  const user = await getCurrentUser();
-  if (!user) redirect('/login');
-  return user;
+  const session = await sessionFromCookies();
+  if (!session) redirect('/login');
+  if (session.mustChangePassword) redirect('/change-password');
+  return session.user;
+}
+
+/**
+ * The only way to obtain a flagged person: the change-password page and forcedChangePasswordAction
+ * (tests/ops/forced-password-change.test.ts keeps it that way). Anyone with a live session passes.
+ */
+export async function requireUserForPasswordChange(): Promise<SessionUser> {
+  const session = await sessionFromCookies();
+  if (!session) redirect('/login');
+  return session.user;
 }
 
 export async function requireAdmin(): Promise<SessionUser> {

@@ -17,6 +17,11 @@ export const users = sqliteTable(
     name: text('name').notNull(),
     username: text('username').notNull(),
     passwordHash: text('password_hash').notNull(),
+    /**
+     * v1.64.1, drizzle/0034_auth_limits.sql: two triggers (users_role_allowed_insert and
+     * users_role_allowed_update) refuse any other value on insert or on an update of role. They
+     * exist only in that raw SQL file; Drizzle has no way to declare a trigger.
+     */
     role: text('role', { enum: ['admin', 'member'] }).notNull().default('member'),
     totpSecretEncrypted: text('totp_secret_encrypted'),
     totpEnabled: integer('totp_enabled', { mode: 'boolean' }).notNull().default(false),
@@ -702,6 +707,8 @@ export const loginAttempts = sqliteTable(
     index('login_attempts_username_idx').on(t.username, t.createdAt),
     index('login_attempts_ip_idx').on(t.ip, t.createdAt),
     index('login_attempts_device_idx').on(t.username, t.deviceId, t.createdAt),
+    /** v1.64.1, drizzle/0034_auth_limits.sql: the household-wide failure count and the nightly purge. */
+    index('login_attempts_created_idx').on(t.createdAt),
   ],
 );
 

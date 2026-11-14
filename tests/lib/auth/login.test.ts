@@ -386,3 +386,43 @@ describe('MUST-14.4: a throwing raiseNewSignin does not fail the login', () => {
     }
   });
 });
+
+describe('v1.64.1: the household-wide budget for unrecognised browsers', () => {
+  const T0 = new Date('2026-09-14T08:00:00.000Z');
+  const seconds = (n: number) => new Date(T0.getTime() + n * 1000);
+
+  /** The rows a run of failed sign-ins for unknown usernames from unrecognised browsers leaves. */
+  async function spreadFailures() {
+    await seedAlice();
+    for (let i = 0; i < ratelimit.GLOBAL_MAX_FAILURES; i += 1) {
+      ratelimit.recordLoginAttempt({ username: `guess${i}`, ip: ratelimit.UNKNOWN_IP, success: false, at: seconds(i), deviceId: null });
+    }
+  }
+
+  function attemptRows(): number {
+    return (current!.sqlite.prepare('select count(*) as c from login_attempts').get() as { c: number }).c;
+  }
+
+  it('locks the next unrecognised attempt, even with the right password, and records nothing', async () => {
+    current = createTestDb();
+    await spreadFailures();
+    const before = attemptRows();
+    const result = await attemptLogin({ username: 'alice', password: PASSWORD, ip: ratelimit.UNKNOWN_IP, at: seconds(200) });
+    expect(result.status).toBe('locked');
+    expect(attemptRows()).toBe(before);
+  });
+
+  it('still signs in a recognised browser', async () => {
+    current = createTestDb();
+    await spreadFailures();
+    const result = await attemptLogin({ username: 'alice', password: PASSWORD, ip: ratelimit.UNKNOWN_IP, deviceId: 'dev-alice', at: seconds(200) });
+    expect(result.status).toBe('ok');
+  });
+
+  it('reopens once the window has passed', async () => {
+    current = createTestDb();
+    await spreadFailures();
+    const later = new Date(T0.getTime() + ratelimit.GLOBAL_WINDOW_MS + ratelimit.GLOBAL_MAX_FAILURES * 1000);
+    expect((await attemptLogin({ username: 'alice', password: PASSWORD, ip: ratelimit.UNKNOWN_IP, at: later })).status).toBe('ok');
+  });
+});

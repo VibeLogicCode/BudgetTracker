@@ -160,9 +160,10 @@ describe('the gate, in order, on every handler', () => {
     expect(restoreDirs()).toEqual([]);
   });
 
-  it('refuses an admin who still has to change their password', async () => {
+  // v1.64.1: userFromRequest answers a person who still has to change their password as signed out.
+  it('refuses an admin who still has to change their password, as signed out', async () => {
     const token = userToken({ role: 'admin', mustChange: true });
-    for (const [label, call] of everyHandler({ token })) expect((await call()).status, label).toBe(403);
+    for (const [label, call] of everyHandler({ token })) expect((await call()).status, label).toBe(401);
     expect(restoreDirs()).toEqual([]);
   });
 

@@ -17,12 +17,20 @@ export const USERNAME_HISTORY_MS = 24 * 60 * 60 * 1000;
 export const ATTEMPT_RETENTION_DAYS = 30;
 
 /**
+ * v1.64.1: failed sign-ins from unrecognised browsers (no verified known-device id), counted across
+ * every username, known or not, over this window. At GLOBAL_MAX_FAILURES every unrecognised browser
+ * is answered locked until the count falls below it. Recognised browsers keep their own bucket.
+ */
+export const GLOBAL_WINDOW_MS = 15 * 60 * 1000;
+export const GLOBAL_MAX_FAILURES = 100;
+
+/**
  * v1.58.1: the address a request carries when no trustworthy one exists. It never gets a per-address
  * bucket; layer A counts that username's failures from unrecognised browsers instead.
  */
 export const UNKNOWN_IP = 'unknown';
 
-export type LockoutReason = 'none' | 'user_ip' | 'username' | 'device';
+export type LockoutReason = 'none' | 'user_ip' | 'username' | 'device' | 'household';
 
 export interface LockoutStatus {
   locked: boolean;
@@ -31,6 +39,12 @@ export interface LockoutStatus {
 }
 
 const UNLOCKED: LockoutStatus = { locked: false, reason: 'none', retryAfterMs: 0 };
+
+/** The sign-in lockout's wording, in whole minutes rounded up. Re-checks of a password use it too. */
+export function lockoutMessage(retryAfterMs: number): string {
+  const minutes = Math.ceil(retryAfterMs / 60000);
+  return `Too many attempts. Try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`;
+}
 
 function normalizeUsername(username: string): string {
   return username.trim().toLowerCase();
@@ -128,6 +142,25 @@ function backoffUntil(failuresDesc: number[]): number | null {
   return newest + lockoutMs;
 }
 
+/**
+ * When the household-wide budget for unrecognised browsers reopens (ms), or null while it is under
+ * the limit: the moment the GLOBAL_MAX_FAILURES-th newest failure leaves the window. Reads through
+ * login_attempts_created_idx (drizzle/0034_auth_limits.sql).
+ */
+function householdLockUntil(now: number): number | null {
+  const floorIso = new Date(now - GLOBAL_WINDOW_MS).toISOString();
+  const row = getDb()
+    .select({ createdAt: loginAttempts.createdAt })
+    .from(loginAttempts)
+    .where(and(sql`${loginAttempts.createdAt} > ${floorIso}`, eq(loginAttempts.success, false), isNull(loginAttempts.deviceId)))
+    .orderBy(sql`${loginAttempts.createdAt} desc`)
+    .limit(1)
+    .offset(GLOBAL_MAX_FAILURES - 1)
+    .get();
+  if (!row) return null;
+  return new Date(row.createdAt).getTime() + GLOBAL_WINDOW_MS;
+}
+
 export function checkLockout(input: { username: string; ip: string; deviceId?: string | null; at?: Date }): LockoutStatus {
   const username = normalizeUsername(input.username);
   const now = (input.at ?? new Date()).getTime();
@@ -164,6 +197,12 @@ export function checkLockout(input: { username: string; ip: string; deviceId?: s
   // ---- Layer B: username only (every failure, device rows included), 10 failures / 15 min burst ----
   const until = backoffUntil(failuresSince(username, historyFloor));
   if (until !== null && now < until) return { locked: true, reason: 'username', retryAfterMs: until - now };
+
+  // ---- Household: every unrecognised browser shares one budget, whatever username it names. ----
+  const householdUntil = householdLockUntil(now);
+  if (householdUntil !== null && now < householdUntil) {
+    return { locked: true, reason: 'household', retryAfterMs: householdUntil - now };
+  }
 
   return UNLOCKED;
 }
@@ -218,12 +257,16 @@ function validIp(value: string): string | null {
  * So: `x-real-ip` is now read ONLY when TRUST_PROXY is on -- the same treatment `x-forwarded-for`
  * has always had, one line below -- and whatever survives is validated as an address and bounded
  * in length before it can reach sessions.ip or renderEvent.
+ *
+ * v1.64.1: the LAST `x-forwarded-for` entry, the one the trusted proxy in front appended. Earlier
+ * entries arrived from the client side of that proxy. When the last entry is not an address the
+ * header is passed over entirely, never read further left.
  */
 export function clientIpFromHeaders(headers: Headers, socketIp: string | null, env: AppEnv = readEnv()): string {
   if (env.trustProxy) {
     const forwarded = headers.get('x-forwarded-for');
-    const first = forwarded?.split(',')[0];
-    const fromForwarded = first === undefined ? null : validIp(first);
+    const last = forwarded?.split(',').at(-1);
+    const fromForwarded = last === undefined ? null : validIp(last);
     if (fromForwarded !== null) return fromForwarded;
     const real = headers.get('x-real-ip');
     const fromReal = real === null ? null : validIp(real);

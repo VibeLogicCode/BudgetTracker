@@ -274,6 +274,11 @@ When you terminate TLS at a reverse proxy, set `TRUST_PROXY=1` so the app trusts
 (which gives the rate limiter the real client IP). Leave `TRUST_PROXY=0` when nothing is in
 front of the container — otherwise a client could forge those headers.
 
+With `TRUST_PROXY=1` the app expects exactly one proxy in front of it that appends the client's
+address to `X-Forwarded-For` (or sets `X-Real-IP`); it reads the last `X-Forwarded-For` entry,
+the one that proxy added. The app's own port should then be reachable only from that proxy, not
+from the rest of the network.
+
 **The honest caveat about plain HTTP.** On a shared-key Wi-Fi network (ordinary WPA2 with one
 Wi-Fi password), anybody who knows the password can decrypt other devices' traffic. Over plain
 HTTP that exposes your login credentials and session cookie to any guest on the network. Plain
@@ -289,7 +294,7 @@ This app is not designed for exposure to the public internet. Do not port-forwar
 | Variable | Default | Meaning |
 |---|---|---|
 | `SECRET_KEY` | *(auto-generated)* | Random string, at least 32 bytes. Encryption keys are derived from it. If unset, the app generates one at `DATA_DIR/secret.key` on first boot. |
-| `TRUST_PROXY` | `0` | When `1`, trust `X-Forwarded-Proto` and `X-Forwarded-For`. Only behind a proxy you control. |
+| `TRUST_PROXY` | `0` | When `1`, trust `X-Forwarded-Proto` and `X-Forwarded-For` (its last entry). Only behind one proxy you control, with the app's port reachable only from it. |
 | `TZ` | `America/Toronto` | Timezone for date handling and the nightly job. |
 | `PORT` | `3000` | Listening port inside the container. |
 | `SETUP_TOKEN` | *(unset)* | Optional first-run token for `/setup`, 16 characters or more. When unset, a random token is printed in the app log at start while no account exists. |
@@ -347,7 +352,9 @@ sign-ins in 15 minutes lock the username for 15 minutes (counted per address beh
 addresses back it off for 15 minutes, doubling on repeat bursts up to 24 hours. A browser that has
 signed in before keeps its own allowance (ten failures in 15 minutes, counted separately) through a
 signed cookie that never signs anyone in; signing in there does not lift a lock other browsers
-earned. Either wait it out, or reset the password: an admin's
+earned. Separately, once 100 sign-ins from browsers that have not signed in before have failed
+within 15 minutes, across every username together, all such browsers wait until that count drops;
+browsers that have signed in before are not held up. Either wait it out, or reset the password: an admin's
 **Reset password** under **Settings → Users**, or `npm run reset-password` on the host (see
 INSTALL.md for the `docker exec` form). Both clear the recorded attempts.
 

@@ -4,14 +4,14 @@ import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { z } from '@/lib/zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
-import { GENERIC_LOGIN_ERROR, attemptLogin } from '@/lib/auth/login';
+import { BUSY_LOGIN_ERROR, GENERIC_LOGIN_ERROR, attemptLogin } from '@/lib/auth/login';
 import {
   KNOWN_DEVICE_COOKIE_NAME,
   KNOWN_DEVICE_MAX_AGE_SECONDS,
   knownDeviceFor,
   withKnownDevice,
 } from '@/lib/auth/known-device';
-import { clientIpFromHeaders } from '@/lib/auth/ratelimit';
+import { clientIpFromHeaders, lockoutMessage } from '@/lib/auth/ratelimit';
 import { setSessionCookie, shouldUseSecureCookie } from '@/lib/auth/session';
 
 export interface LoginFormState {
@@ -79,12 +79,14 @@ export async function loginAction(prevState: LoginFormState, formData: FormData)
     // no header to set. The same information (rounded the same way: whole
     // minutes from Math.ceil(retryAfterMs / 60000)) is surfaced in the form's
     // error message instead — see task-7-report.md for the full note.
-    const minutes = Math.ceil(result.retryAfterMs / 60000);
     return {
-      error: `Too many attempts. Try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`,
+      error: lockoutMessage(result.retryAfterMs),
       needsTotp: prevState?.needsTotp ?? false,
       username: parsed.data.username,
     };
+  }
+  if (result.status === 'busy') {
+    return { error: BUSY_LOGIN_ERROR, needsTotp: prevState?.needsTotp ?? false, username: parsed.data.username };
   }
   if (result.status === 'totp_required') {
     return { needsTotp: true, username: parsed.data.username };

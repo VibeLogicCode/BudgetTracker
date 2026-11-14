@@ -3,12 +3,14 @@ import { getDb } from '@/db/client';
 import { seedDatabase } from '@/db/seed';
 import { raiseNewSignin } from '@/lib/notify/raise';
 import { createSession, type SessionUser } from './session';
-import { hashPassword, verifyPassword } from './password';
+import { PASSWORD_WORK_BUSY, hashPassword, verifyPasswordForSignIn } from './password';
 import { checkLockout, recordLoginAttempt } from './ratelimit';
 import { consumeRecoveryCode, consumeTotpCounter, getTotpSecretForUser, verifyTotpCounter } from './totp';
 import { countUsers, createFirstAdmin, findUserByUsername } from './users';
 
 export const GENERIC_LOGIN_ERROR = 'Incorrect username or password.';
+/** v1.64.1: the answer when the password work line is full. Nothing was checked or recorded. */
+export const BUSY_LOGIN_ERROR = 'The server is busy. Try again in a moment.';
 
 /**
  * Ruling (c): the response for an unknown or deactivated user must cost the same
@@ -24,7 +26,8 @@ export type LoginResult =
   | { status: 'ok'; token: string; expiresAt: string; user: SessionUser }
   | { status: 'totp_required' }
   | { status: 'invalid' }
-  | { status: 'locked'; retryAfterMs: number };
+  | { status: 'locked'; retryAfterMs: number }
+  | { status: 'busy' };
 
 export function isSetupRequired(): boolean {
   return countUsers() === 0;
@@ -77,11 +80,16 @@ export async function attemptLogin(input: {
     // have paid, against a fixed dummy hash, before recording the failure — a
     // fast early-return here would otherwise let an attacker distinguish "no
     // such user" from "wrong password" purely by response time.
-    await verifyPassword(await DUMMY_PASSWORD_HASH, input.password);
+    // v1.64.1: a full password work line is answered busy here exactly as for a real user, with
+    // nothing verified or recorded.
+    const dummy = await verifyPasswordForSignIn(await DUMMY_PASSWORD_HASH, input.password);
+    if (dummy === PASSWORD_WORK_BUSY) return { status: 'busy' };
     return fail();
   }
 
-  const passwordOk = await verifyPassword(user.passwordHash, input.password);
+  // v1.64.1: busy is its own answer. It is never counted, and never read as a wrong password.
+  const passwordOk = await verifyPasswordForSignIn(user.passwordHash, input.password);
+  if (passwordOk === PASSWORD_WORK_BUSY) return { status: 'busy' };
   if (!passwordOk) return fail();
 
   // Ruling (b), concurrent-overshoot guard: argon2 verification takes real wall

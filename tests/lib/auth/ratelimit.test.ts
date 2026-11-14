@@ -2,6 +2,8 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { createTestDb, type TestDb } from '../../helpers/db';
 import {
   ATTEMPT_RETENTION_DAYS,
+  GLOBAL_MAX_FAILURES,
+  GLOBAL_WINDOW_MS,
   USERNAME_BASE_LOCKOUT_MS,
   USERNAME_MAX_FAILURES,
   USERNAME_MAX_LOCKOUT_MS,
@@ -11,6 +13,7 @@ import {
   checkLockout,
   clearAttemptsFor,
   clientIpFromHeaders,
+  lockoutMessage,
   purgeOldLoginAttempts,
   recordLoginAttempt,
 } from '@/lib/auth/ratelimit';
@@ -193,9 +196,9 @@ describe('clientIpFromHeaders', () => {
     expect(clientIpFromHeaders(headers, '10.0.0.5', base)).toBe('10.0.0.5');
   });
 
-  it('uses the first X-Forwarded-For entry when TRUST_PROXY is on', () => {
+  it('uses the last X-Forwarded-For entry when TRUST_PROXY is on', () => {
     const headers = new Headers({ 'x-forwarded-for': '1.2.3.4, 5.6.7.8' });
-    expect(clientIpFromHeaders(headers, '10.0.0.5', { ...base, trustProxy: true })).toBe('1.2.3.4');
+    expect(clientIpFromHeaders(headers, '10.0.0.5', { ...base, trustProxy: true })).toBe('5.6.7.8');
   });
 
   it('falls back to the socket IP when the proxy header is absent, then to "unknown"', () => {
@@ -243,9 +246,9 @@ describe('v1.12.1: x-real-ip is untrusted unless TRUST_PROXY is on (item AB / SE
     expect(clientIpFromHeaders(new Headers({ 'x-real-ip': '10.0.0.2' }), null, trusted)).toBe('10.0.0.2');
   });
 
-  it('still prefers the first x-forwarded-for entry when both are present and trusted', () => {
+  it('prefers the last x-forwarded-for entry over x-real-ip when both are present and trusted', () => {
     const headers = new Headers({ 'x-forwarded-for': '203.0.113.7, 10.0.0.9', 'x-real-ip': '10.0.0.1' });
-    expect(clientIpFromHeaders(headers, null, trusted)).toBe('203.0.113.7');
+    expect(clientIpFromHeaders(headers, null, trusted)).toBe('10.0.0.9');
   });
 
   it('refuses a value that is not an IP address, however it arrived', () => {
@@ -392,5 +395,94 @@ describe('v1.58.1: a recognised browser signing in leaves the unrecognised-brows
     signInOnDevice(5);
     expect(checkLockout({ username: 'alex', ip: '10.0.0.5', deviceId: null, at: at(6) }).reason).toBe('user_ip');
     expect(checkLockout({ username: 'alex', ip: UNKNOWN_IP, deviceId: null, at: at(6) }).reason).toBe('user_ip');
+  });
+});
+
+describe('v1.64.1: the address behind a trusted proxy is the last X-Forwarded-For entry', () => {
+  const trusted = { trustProxy: true } as AppEnv;
+
+  it('ignores every earlier entry', () => {
+    const headers = new Headers({ 'x-forwarded-for': '198.51.100.1, 198.51.100.2, 192.168.1.40' });
+    expect(clientIpFromHeaders(headers, null, trusted)).toBe('192.168.1.40');
+  });
+
+  it('reads a single entry', () => {
+    expect(clientIpFromHeaders(new Headers({ 'x-forwarded-for': ' 192.168.1.40 ' }), null, trusted)).toBe('192.168.1.40');
+  });
+
+  it('falls through to x-real-ip when the last entry is not an address, never to an earlier entry', () => {
+    const headers = new Headers({ 'x-forwarded-for': '198.51.100.1, not-an-address', 'x-real-ip': '192.168.1.41' });
+    expect(clientIpFromHeaders(headers, null, trusted)).toBe('192.168.1.41');
+    const noReal = new Headers({ 'x-forwarded-for': '198.51.100.1, ' });
+    expect(clientIpFromHeaders(noReal, null, trusted)).toBe(UNKNOWN_IP);
+  });
+
+  it('still reads nothing from either header without TRUST_PROXY', () => {
+    const headers = new Headers({ 'x-forwarded-for': '198.51.100.1, 192.168.1.40', 'x-real-ip': '192.168.1.41' });
+    expect(clientIpFromHeaders(headers, null, { trustProxy: false } as AppEnv)).toBe(UNKNOWN_IP);
+  });
+});
+
+describe('v1.64.1: a household-wide budget for failed sign-ins from unrecognised browsers', () => {
+  /** Failures from unrecognised browsers, one per username, one second apart from T0. */
+  function failAcrossUsernames(count: number, deviceId: string | null = null) {
+    for (let i = 0; i < count; i += 1) {
+      recordLoginAttempt({ username: `guess${i}`, ip: UNKNOWN_IP, success: false, at: new Date(T0.getTime() + i * 1000), deviceId });
+    }
+  }
+  const afterAll = (count: number, extraMs = 0) => new Date(T0.getTime() + count * 1000 + extraMs);
+
+  it('names its limits', () => {
+    expect(GLOBAL_MAX_FAILURES).toBe(100);
+    expect(GLOBAL_WINDOW_MS).toBe(15 * 60 * 1000);
+  });
+
+  it('stays open one failure short of the budget', () => {
+    current = createTestDb();
+    failAcrossUsernames(GLOBAL_MAX_FAILURES - 1);
+    expect(checkLockout({ username: 'alex', ip: UNKNOWN_IP, deviceId: null, at: afterAll(GLOBAL_MAX_FAILURES) }).locked).toBe(false);
+  });
+
+  it('locks every unrecognised browser, for any username, once failures across many usernames reach it', () => {
+    current = createTestDb();
+    failAcrossUsernames(GLOBAL_MAX_FAILURES);
+    const now = afterAll(GLOBAL_MAX_FAILURES);
+    for (const username of ['alex', 'sam', 'nobody-at-all']) {
+      const status = checkLockout({ username, ip: UNKNOWN_IP, deviceId: null, at: now });
+      expect(status).toMatchObject({ locked: true, reason: 'household' });
+    }
+    expect(checkLockout({ username: 'alex', ip: '192.168.1.40', deviceId: null, at: now }).reason).toBe('household');
+  });
+
+  it('leaves a recognised browser in its own bucket', () => {
+    current = createTestDb();
+    failAcrossUsernames(GLOBAL_MAX_FAILURES);
+    expect(checkLockout({ username: 'alex', ip: UNKNOWN_IP, deviceId: 'dev-a', at: afterAll(GLOBAL_MAX_FAILURES) }).locked).toBe(false);
+  });
+
+  it('does not count failures from recognised browsers or successful sign-ins', () => {
+    current = createTestDb();
+    failAcrossUsernames(GLOBAL_MAX_FAILURES, 'dev-a');
+    for (let i = 0; i < GLOBAL_MAX_FAILURES; i += 1) {
+      recordLoginAttempt({ username: `ok${i}`, ip: UNKNOWN_IP, success: true, at: new Date(T0.getTime() + i * 1000) });
+    }
+    expect(checkLockout({ username: 'alex', ip: UNKNOWN_IP, deviceId: null, at: afterAll(GLOBAL_MAX_FAILURES) }).locked).toBe(false);
+  });
+
+  it('reopens once the count falls below the budget, and says when', () => {
+    current = createTestDb();
+    failAcrossUsernames(GLOBAL_MAX_FAILURES);
+    const now = afterAll(GLOBAL_MAX_FAILURES);
+    // The oldest failure leaves the window GLOBAL_WINDOW_MS after it was recorded, at T0.
+    const status = checkLockout({ username: 'alex', ip: UNKNOWN_IP, deviceId: null, at: now });
+    expect(status.retryAfterMs).toBe(T0.getTime() + GLOBAL_WINDOW_MS - now.getTime());
+    expect(checkLockout({ username: 'alex', ip: UNKNOWN_IP, deviceId: null, at: new Date(T0.getTime() + GLOBAL_WINDOW_MS) }).locked).toBe(false);
+  });
+});
+
+describe('lockoutMessage', () => {
+  it('rounds up to whole minutes', () => {
+    expect(lockoutMessage(60_000)).toBe('Too many attempts. Try again in 1 minute.');
+    expect(lockoutMessage(60_001)).toBe('Too many attempts. Try again in 2 minutes.');
   });
 });

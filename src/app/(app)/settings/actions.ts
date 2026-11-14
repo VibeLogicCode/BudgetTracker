@@ -5,7 +5,8 @@ import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { z } from '@/lib/zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
-import { passwordSchema, verifyPassword } from '@/lib/auth/password';
+import { passwordSchema } from '@/lib/auth/password';
+import { recordFailedReauth, verifyCurrentPassword } from '@/lib/auth/reauth';
 import {
   clearSessionCookie,
   destroyOtherSessionsForUser,
@@ -95,8 +96,23 @@ async function clearPendingTotpSecret(): Promise<void> {
   store.delete(PENDING_TOTP_COOKIE);
 }
 
+const CURRENT_CODE_MISMATCH = 'That current code did not match. Try the next one your app shows.';
+const CURRENT_CODE_SPENT = 'That current code was already used. Try the next one your app shows.';
+
+/** The time-step counter of a current code from the person's EXISTING authenticator, or null. */
+function currentCodeCounter(userId: number, code: string): number | null {
+  let existingSecret: string | null = null;
+  try {
+    existingSecret = getTotpSecretForUser(userId);
+  } catch {
+    existingSecret = null;
+  }
+  return existingSecret ? verifyTotpCounter(existingSecret, code) : null;
+}
+
 export async function changePasswordAction(_prev: ProfileFormState, formData: FormData): Promise<ProfileFormState> {
-  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+  const requestHeaders = await headers();
+  if (!isSameOrigin(requestHeaders)) return { error: CROSS_ORIGIN_ERROR };
 
   const user = await requireUser();
   const parsed = z
@@ -104,10 +120,9 @@ export async function changePasswordAction(_prev: ProfileFormState, formData: Fo
     .safeParse({ currentPassword: formData.get('currentPassword') ?? '', newPassword: formData.get('newPassword') ?? '' });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Please check the form.' };
 
-  const record = findUserByUsername(user.username);
-  if (!record || !(await verifyPassword(record.passwordHash, parsed.data.currentPassword))) {
-    return { error: 'Current password is incorrect.' };
-  }
+  // v1.64.1: counted through the sign-in lockout (src/lib/auth/reauth.ts).
+  const check = await verifyCurrentPassword({ user, password: parsed.data.currentPassword, headers: requestHeaders });
+  if (!check.ok) return { error: check.error };
   await setUserPassword(user.id, parsed.data.newPassword);
 
   // v1.12.1 (item Z / SEC-3). The two lines src/app/(auth)/change-password/actions.ts:55-56 has
@@ -134,7 +149,8 @@ export async function beginTotpEnrollmentAction(): Promise<ProfileFormState> {
 }
 
 export async function confirmTotpEnrollmentAction(_prev: ProfileFormState, formData: FormData): Promise<ProfileFormState> {
-  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+  const requestHeaders = await headers();
+  if (!isSameOrigin(requestHeaders)) return { error: CROSS_ORIGIN_ERROR };
 
   const user = await requireUser();
   const parsed = confirmTotpSchema.safeParse({ code: formData.get('code') ?? '' });
@@ -148,6 +164,7 @@ export async function confirmTotpEnrollmentAction(_prev: ProfileFormState, formD
 
   // v1.58.1: replacing an authenticator that is already on needs the current password and a current
   // code for the EXISTING secret, the same bar turning it off sets. First-time enrollment is unchanged.
+  // v1.64.1: both proofs are counted through the sign-in lockout (src/lib/auth/reauth.ts).
   const record = findUserByUsername(user.username);
   const replacing = Boolean(record?.totpEnabled);
   let existingCounter: number | null = null;
@@ -159,17 +176,13 @@ export async function confirmTotpEnrollmentAction(_prev: ProfileFormState, formD
       })
       .safeParse({ currentPassword: formData.get('currentPassword') ?? '', currentCode: formData.get('currentCode') ?? '' });
     if (!proof.success) return { error: proof.error.issues[0]?.message ?? 'Please check the form.' };
-    if (!record || !(await verifyPassword(record.passwordHash, proof.data.currentPassword))) {
-      return { error: 'Current password is incorrect.' };
+    const check = await verifyCurrentPassword({ user, password: proof.data.currentPassword, headers: requestHeaders });
+    if (!check.ok) return { error: check.error };
+    existingCounter = currentCodeCounter(user.id, proof.data.currentCode);
+    if (existingCounter === null) {
+      recordFailedReauth({ user, headers: requestHeaders });
+      return { error: CURRENT_CODE_MISMATCH };
     }
-    let existingSecret: string | null = null;
-    try {
-      existingSecret = getTotpSecretForUser(user.id);
-    } catch {
-      existingSecret = null;
-    }
-    existingCounter = existingSecret ? verifyTotpCounter(existingSecret, proof.data.currentCode) : null;
-    if (existingCounter === null) return { error: 'That current code did not match. Try the next one your app shows.' };
   }
   // v1.12.1 (item BF / SEC-10), carried into v1.13.0: verify-then-spend, the same pair
   // login's own MFA challenge uses, so the code shown during enrollment cannot be observed
@@ -189,7 +202,8 @@ export async function confirmTotpEnrollmentAction(_prev: ProfileFormState, formD
     // Spend the existing secret's code first (replay-checked). The new code may share its time step;
     // the stored counter then already covers it, so it is not spent a second time.
     if (!consumeTotpCounter(user.id, existingCounter)) {
-      return { error: 'That current code was already used. Try the next one your app shows.' };
+      recordFailedReauth({ user, headers: requestHeaders });
+      return { error: CURRENT_CODE_SPENT };
     }
     if (counter > existingCounter && !consumeTotpCounter(user.id, counter)) {
       return { error: 'That code was already used. Try the next one your app shows.' };
@@ -221,19 +235,37 @@ export async function confirmTotpEnrollmentAction(_prev: ProfileFormState, formD
  * Three changes, matching what the ADMIN MFA reset already does
  * (src/app/(app)/settings/users/actions.ts:96): the current password is verified with the same
  * block changePasswordAction uses, every other session is destroyed, and the report is told.
+ *
+ * v1.64.1: it also takes a current code from the existing authenticator, verified and spent exactly
+ * as the replace path in confirmTotpEnrollmentAction does, and both proofs are counted through the
+ * sign-in lockout (src/lib/auth/reauth.ts). A person without their authenticator asks an admin for
+ * Reset MFA under Settings -> Users.
  */
 export async function disableTotpAction(_prev: ProfileFormState, formData: FormData): Promise<ProfileFormState> {
-  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+  const requestHeaders = await headers();
+  if (!isSameOrigin(requestHeaders)) return { error: CROSS_ORIGIN_ERROR };
 
   const user = await requireUser();
   const parsed = z
-    .object({ currentPassword: z.string().min(1, 'Enter your current password.') })
-    .safeParse({ currentPassword: formData.get('currentPassword') ?? '' });
+    .object({
+      currentPassword: z.string().min(1, 'Enter your current password.'),
+      currentCode: z.string().trim().regex(/^\d{6,8}$/, 'Enter a current code from your authenticator app.'),
+    })
+    .safeParse({ currentPassword: formData.get('currentPassword') ?? '', currentCode: formData.get('currentCode') ?? '' });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Enter your current password.' };
 
-  const record = findUserByUsername(user.username);
-  if (!record || !(await verifyPassword(record.passwordHash, parsed.data.currentPassword))) {
-    return { error: 'Current password is incorrect.' };
+  if (!findUserByUsername(user.username)?.totpEnabled) return { error: 'Two-factor authentication is already off.' };
+
+  const check = await verifyCurrentPassword({ user, password: parsed.data.currentPassword, headers: requestHeaders });
+  if (!check.ok) return { error: check.error };
+  const counter = currentCodeCounter(user.id, parsed.data.currentCode);
+  if (counter === null) {
+    recordFailedReauth({ user, headers: requestHeaders });
+    return { error: CURRENT_CODE_MISMATCH };
+  }
+  if (!consumeTotpCounter(user.id, counter)) {
+    recordFailedReauth({ user, headers: requestHeaders });
+    return { error: CURRENT_CODE_SPENT };
   }
 
   clearTotpEnrollment(user.id);

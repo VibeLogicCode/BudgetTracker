@@ -3,9 +3,13 @@
  * Rescue tool: reset a user's password, clear their lockout, and (with
  * --clear-mfa) clear their two-factor enrollment.
  *
- * Run it inside the container:
- *   docker compose exec budget-tracker node --experimental-strip-types \
- *     scripts/reset-admin-password.ts <username> '<new password>' [--clear-mfa]
+ * Run it inside the container; it asks for the new password without showing it:
+ *   docker compose exec -it budget-tracker node --experimental-strip-types \
+ *     scripts/reset-admin-password.ts <username> [--clear-mfa]
+ *
+ * v1.64.1: the new password comes from that prompt on a terminal, or from the first line of
+ * standard input when it is piped, never from the command line. The person chooses their own
+ * password at the next sign-in (must_change_password), and every run writes one audit_log row.
  *
  * This script is DELIBERATELY self-contained. The runtime image ships Next's
  * standalone output, which does not include the project's src/ tree, so the
@@ -29,6 +33,11 @@ export const ARGON2_OPTIONS = {
 };
 
 export const MIN_PASSWORD_LENGTH = 10;
+/** Must stay identical to MAX_PASSWORD_LENGTH in src/lib/auth/password.ts. */
+export const MAX_PASSWORD_LENGTH = 1024;
+
+/** The audit_log row's detail; matches the 'reset_password' action src/lib/audit.ts names. */
+const AUDIT_DETAIL = 'Reset from the server command line';
 
 export function resolveDatabasePath(env: NodeJS.ProcessEnv = process.env): string {
   const override = env.BUDGET_DB_PATH;
@@ -47,6 +56,10 @@ export interface ResetResult {
   recoveryCodesDeleted: number;
   /** true when the account still has TOTP enrollment after this run — the caller must say so. */
   mfaStillRequired: boolean;
+  /** true when the account was deactivated before this run; the reset makes it active again. */
+  reactivated: boolean;
+  /** false for a person whose sign-in an admin withdrew: the reset does not grant it back. */
+  canSignIn: boolean;
 }
 
 export async function resetPassword(input: {
@@ -63,6 +76,9 @@ export async function resetPassword(input: {
 }): Promise<ResetResult> {
   if (input.newPassword.length < MIN_PASSWORD_LENGTH) {
     throw new Error(`The new password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+  }
+  if (input.newPassword.length > MAX_PASSWORD_LENGTH) {
+    throw new Error(`The new password must be at most ${MAX_PASSWORD_LENGTH} characters.`);
   }
 
   const username = input.username.trim().toLowerCase();
@@ -86,9 +102,9 @@ export async function resetPassword(input: {
     db.pragma('foreign_keys = ON');
     db.pragma('busy_timeout = 5000');
 
-    const user = db.prepare('select id, username, totp_enabled from users where username = ?').get(username) as
-      | { id: number; username: string; totp_enabled: number }
-      | undefined;
+    const user = db
+      .prepare('select id, username, totp_enabled, is_active, can_sign_in from users where username = ?')
+      .get(username) as { id: number; username: string; totp_enabled: number; is_active: number; can_sign_in: number } | undefined;
     if (!user) {
       const known = (db.prepare('select username from users order by username').all() as { username: string }[])
         .map((row) => row.username)
@@ -97,32 +113,49 @@ export async function resetPassword(input: {
     }
 
     const hash = await argon2.hash(input.newPassword, ARGON2_OPTIONS);
-    db.prepare('update users set password_hash = ?, is_active = 1 where id = ?').run(hash, user.id);
-
     const hadMfa = Number(user.totp_enabled) === 1;
-    let recoveryCodesDeleted = 0;
-    if (input.clearMfa === true) {
-      // Mirrors clearTotpEnrollment() in src/lib/auth/totp.ts: disable the
-      // flag, drop the (now undecryptable) secret, and delete the recovery
-      // codes, which are SHA-256 hashes tied to the enrollment being removed.
-      db.prepare('update users set totp_enabled = 0, totp_secret_encrypted = null where id = ?').run(user.id);
-      recoveryCodesDeleted = Number(
-        db.prepare('delete from totp_recovery_codes where user_id = ?').run(user.id).changes ?? 0,
-      );
-    }
+    const reactivated = Number(user.is_active) !== 1;
+    const mfaCleared = input.clearMfa === true && hadMfa;
 
-    const sessions = db.prepare('delete from sessions where user_id = ?').run(user.id);
-    const attempts = db.prepare('delete from login_attempts where username = ?').run(username);
+    return db.transaction(() => {
+      // The password set here is used once: the person chooses their own at the next sign-in.
+      db.prepare('update users set password_hash = ?, is_active = 1, must_change_password = 1 where id = ?').run(hash, user.id);
 
-    return {
-      userId: user.id,
-      username: user.username,
-      sessionsRevoked: Number(sessions.changes ?? 0),
-      attemptsCleared: Number(attempts.changes ?? 0),
-      mfaCleared: input.clearMfa === true && hadMfa,
-      recoveryCodesDeleted,
-      mfaStillRequired: hadMfa && input.clearMfa !== true,
-    };
+      let recoveryCodesDeleted = 0;
+      if (input.clearMfa === true) {
+        // Mirrors clearTotpEnrollment() in src/lib/auth/totp.ts: disable the
+        // flag, drop the (now undecryptable) secret, and delete the recovery
+        // codes, which are SHA-256 hashes tied to the enrollment being removed.
+        db.prepare('update users set totp_enabled = 0, totp_secret_encrypted = null where id = ?').run(user.id);
+        recoveryCodesDeleted = Number(
+          db.prepare('delete from totp_recovery_codes where user_id = ?').run(user.id).changes ?? 0,
+        );
+      }
+
+      const sessions = db.prepare('delete from sessions where user_id = ?').run(user.id);
+      const attempts = db.prepare('delete from login_attempts where username = ?').run(username);
+
+      // One row per reset. audit_log needs a user, and no one is signed in here, so the row names the
+      // reset account itself as both the actor and the entity.
+      const detail = [AUDIT_DETAIL, mfaCleared ? 'two-factor cleared' : null, reactivated ? 'account reactivated' : null]
+        .filter((part): part is string => part !== null)
+        .join(', ');
+      db.prepare(
+        "insert into audit_log (at, user_id, action, entity, entity_id, detail) values (?, ?, 'reset_password', 'users', ?, ?)",
+      ).run(new Date().toISOString(), user.id, user.id, detail);
+
+      return {
+        userId: user.id,
+        username: user.username,
+        sessionsRevoked: Number(sessions.changes ?? 0),
+        attemptsCleared: Number(attempts.changes ?? 0),
+        mfaCleared,
+        recoveryCodesDeleted,
+        mfaStillRequired: hadMfa && input.clearMfa !== true,
+        reactivated,
+        canSignIn: Number(user.can_sign_in) === 1,
+      };
+    })();
   } finally {
     db.close();
   }
@@ -132,15 +165,22 @@ function usage(): void {
   console.log(`Reset a Budget Tracker password and clear that account's lockout.
 
 Usage:
-  node --experimental-strip-types scripts/reset-admin-password.ts <username> '<new password>' [--clear-mfa]
+  node --experimental-strip-types scripts/reset-admin-password.ts <username> [--clear-mfa]
 
-Inside Docker:
-  docker compose exec budget-tracker node --experimental-strip-types \\
-    scripts/reset-admin-password.ts alice 'a brand new password'
+Inside Docker, asked for the new password at a prompt that does not show it:
+  docker compose exec -it budget-tracker node --experimental-strip-types \\
+    scripts/reset-admin-password.ts alice
 
-The password must be at least ${MIN_PASSWORD_LENGTH} characters. The account is
-reactivated if it was deactivated, every one of its sessions is signed out, and
-its failed-login history is cleared so the lockout lifts immediately.
+Or with the new password as the first line of standard input:
+  docker compose exec -T budget-tracker node --experimental-strip-types \\
+    scripts/reset-admin-password.ts alice < new-password.txt
+
+The new password is never taken on the command line. It must be ${MIN_PASSWORD_LENGTH} to
+${MAX_PASSWORD_LENGTH} characters, works for one sign-in, and the person then chooses their own.
+The account is reactivated if it was deactivated, every one of its sessions is
+signed out, its failed-login history is cleared so the lockout lifts immediately,
+and the reset is recorded in the audit log. A person whose sign-in an admin
+withdrew still needs an admin to allow sign-in again.
 
   --clear-mfa   Also turn off two-factor authentication for that user: clears
                 totp_enabled, deletes the stored (encrypted) TOTP secret, and
@@ -153,7 +193,68 @@ its failed-login history is cleared so the lockout lifts immediately.
 Database location: $BUDGET_DB_PATH, else $DATA_DIR/budget.db, else /data/budget.db.`);
 }
 
-export async function main(argv: string[]): Promise<number> {
+/**
+ * A prompt that does not show what is typed: the terminal is put in raw mode and each key handled
+ * here. Enter finishes, Ctrl-C cancels, Backspace removes the last character.
+ */
+function promptHidden(question: string, input: NodeJS.ReadStream, output: NodeJS.WriteStream): Promise<string> {
+  return new Promise((resolve, reject) => {
+    output.write(question);
+    const wasRaw = input.isRaw;
+    input.setRawMode(true);
+    input.setEncoding('utf8');
+    input.resume();
+    let value = '';
+    const finish = (error?: Error) => {
+      input.removeListener('data', onData);
+      input.setRawMode(wasRaw);
+      input.pause();
+      output.write('\n');
+      if (error) reject(error);
+      else resolve(value);
+    };
+    function onData(chunk: string) {
+      for (const char of chunk) {
+        if (char === '\r' || char === '\n' || char === '\u0004') return finish();
+        if (char === '\u0003') return finish(new Error('Cancelled.'));
+        if (char === '\u007f' || char === '\b') {
+          value = Array.from(value).slice(0, -1).join('');
+          continue;
+        }
+        // Past the maximum nothing more is kept; the length check then refuses it.
+        if (value.length <= MAX_PASSWORD_LENGTH) value += char;
+      }
+    }
+    input.on('data', onData);
+  });
+}
+
+/** The first line of piped standard input, without its line ending. Stops reading past the maximum. */
+async function readFirstLine(input: NodeJS.ReadableStream): Promise<string> {
+  input.setEncoding('utf8');
+  let buffered = '';
+  for await (const chunk of input) {
+    buffered += String(chunk);
+    const end = buffered.indexOf('\n');
+    if (end !== -1) {
+      buffered = buffered.slice(0, end);
+      break;
+    }
+    if (buffered.length > MAX_PASSWORD_LENGTH + 1) break;
+  }
+  return buffered.replace(/\r$/, '');
+}
+
+/** The new password: a no-echo prompt (asked twice) on a terminal, else the first line of standard input. */
+export async function readNewPassword(input: NodeJS.ReadStream = process.stdin, output: NodeJS.WriteStream = process.stdout): Promise<string> {
+  if (!input.isTTY) return readFirstLine(input);
+  const first = await promptHidden('New password: ', input, output);
+  const again = await promptHidden('Type it again: ', input, output);
+  if (first !== again) throw new Error('The two passwords did not match. Nothing was changed.');
+  return first;
+}
+
+export async function main(argv: string[], readPassword: () => Promise<string> = () => readNewPassword()): Promise<number> {
   const raw = argv.slice(2);
   const clearMfa = raw.includes('--clear-mfa');
   const args = raw.filter((arg) => arg !== '--clear-mfa');
@@ -161,24 +262,40 @@ export async function main(argv: string[]): Promise<number> {
     usage();
     return args.length === 0 ? 2 : 0;
   }
-  if (args.length < 2) {
-    console.error('error: both a username and a new password are required.\n');
-    usage();
+  if (args.length > 1) {
+    console.error('error: give the new password at the prompt or on standard input, not on the command line.');
+    console.error('Run it with only the username (and --clear-mfa if needed): it asks for the password, or reads the');
+    console.error('first line of standard input when that is piped in. See --help.');
     return 2;
   }
 
   const dbPath = resolveDatabasePath();
   try {
-    const result = await resetPassword({ dbPath, username: args[0], newPassword: args[1], clearMfa });
+    const newPassword = await readPassword();
+    if (newPassword.length === 0) {
+      throw new Error(
+        'No new password was given. Run it in a terminal (docker compose exec -it) to be asked for one, or pipe it on standard input.',
+      );
+    }
+    const result = await resetPassword({ dbPath, username: args[0], newPassword, clearMfa });
     console.log(
       `Password reset for "${result.username}" (id ${result.userId}). ` +
         `${result.sessionsRevoked} session(s) signed out, ${result.attemptsCleared} failed-login record(s) cleared.`,
     );
+    console.log(result.reactivated ? 'The account was deactivated and is active again.' : 'The account was already active.');
+    if (result.canSignIn) {
+      console.log('They will choose their own password at the next sign-in; the one set here works only to get to that step.');
+    } else {
+      console.log(
+        'Sign-in is withdrawn for this person, so an admin must allow sign-in under Settings → Users first. ' +
+          'They will then choose their own password at the next sign-in.',
+      );
+    }
     if (clearMfa) {
       console.log(
         result.mfaCleared
           ? `Two-factor authentication cleared: TOTP is off and ${result.recoveryCodesDeleted} recovery code(s) were deleted. ` +
-              'They can sign in with the new password alone, and can enroll a fresh authenticator from Settings → Profile.'
+              'Sign-in no longer asks for a code, and a fresh authenticator can be set up from Settings → Profile.'
           : `Two-factor authentication was already off for this account; nothing to clear (${result.recoveryCodesDeleted} recovery code(s) deleted).`,
       );
       console.log('Nothing else was touched: transactions, budgets, goals and every other user are unchanged.');
@@ -188,8 +305,6 @@ export async function main(argv: string[]): Promise<number> {
           'authenticator code (or a recovery code) after the new password. If SECRET_KEY was lost or rotated, that ' +
           'code can never be accepted: re-run this with --clear-mfa.',
       );
-    } else {
-      console.log('They can sign in with the new password immediately.');
     }
     return 0;
   } catch (error) {
