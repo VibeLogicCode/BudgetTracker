@@ -13,10 +13,12 @@ import { Money } from '@/components/ui/Money';
 import { selectClass } from '@/components/ui/form';
 import { categoryOptions, type CategoryLike } from '@/lib/category-order';
 import { dayLabel } from '@/lib/dates';
+import type { AiSuggestionView } from '@/lib/ai/types';
 import type { MerchantGroupPage, MerchantGroupRow, TransactionRow } from '@/lib/transactions';
 // A RELATIVE import, for the reason PossibleDuplicatesCard.tsx gives: the client-bundle guard
 // follows `@/`-qualified value imports and cannot tell a 'use server' file from an ordinary module.
 import { reviewMerchantGroupAction, type ActionState } from '../../app/(app)/transactions/actions';
+import { acceptAiSuggestionAction, ignoreAiSuggestionAction } from '../../app/(app)/transactions/ai-actions';
 
 const initial: ActionState = {};
 
@@ -38,6 +40,18 @@ function reporting(onDone: (message: string | null) => void): (prev: ActionState
   };
 }
 
+/** An AI action, with its message handed up to the list for the reason `reporting` gives. */
+function reportingAi(
+  run: (prev: ActionState, formData: FormData) => Promise<ActionState>,
+  onDone: (message: string | null) => void,
+): (prev: ActionState, formData: FormData) => Promise<ActionState> {
+  return async (prev, formData) => {
+    const result = await run(prev, formData);
+    onDone(result.message ?? null);
+    return result;
+  };
+}
+
 interface Person {
   id: number;
   name: string;
@@ -50,6 +64,7 @@ function GroupCard({
   people,
   today,
   actionable,
+  suggestion,
   onCreateRule,
   onDone,
 }: {
@@ -59,6 +74,7 @@ function GroupCard({
   people: Person[];
   today: string;
   actionable: boolean;
+  suggestion: AiSuggestionView | null;
   onCreateRule: (row: TransactionRow) => void;
   onDone: (message: string | null) => void;
 }) {
@@ -67,7 +83,12 @@ function GroupCard({
   // guess stored before its category was archived opens the picker empty rather than on it.
   const options = categoryOptions(categories);
   const seed = group.guessCategoryId !== null && options.some((option) => option.id === group.guessCategoryId) ? group.guessCategoryId : null;
-  const [categoryId, setCategoryId] = useState<number | null>(seed);
+  // v1.64.0: with no Bayes guess, the picker opens on the local AI's category (a guess still wins).
+  const aiCategoryId =
+    seed === null && suggestion?.categoryId != null && options.some((option) => option.id === suggestion.categoryId) ? suggestion.categoryId : null;
+  const [categoryId, setCategoryId] = useState<number | null>(seed ?? aiCategoryId);
+  const [, aiUseAction] = useActionState(reportingAi(acceptAiSuggestionAction, onDone), initial);
+  const [, aiIgnoreAction] = useActionState(reportingAi(ignoreAiSuggestionAction, onDone), initial);
 
   const name = merchantGroupName(group);
   const hasMerchant = group.merchant !== '';
@@ -138,10 +159,33 @@ function GroupCard({
                 {`Remember for future ${group.merchant} rows`}
               </label>
             ) : null}
+            {aiCategoryId !== null ? <span className="text-xs text-muted">AI suggestion</span> : null}
             <SubmitButton size="sm" disabled={categoryId === null} className="min-h-11 sm:min-h-0" ariaLabel={`File all ${count} (${name})`}>
               {`File all ${count}`}
             </SubmitButton>
           </form>
+
+          {hasMerchant && suggestion !== null && (suggestion.categoryId !== null || suggestion.cleanName !== null) ? (
+            <div data-ai-suggestion className="flex flex-wrap items-center gap-2 text-xs text-muted">
+              <span className="badge badge--slate">AI</span>
+              {suggestion.cleanName !== null ? (
+                <form action={aiUseAction}>
+                  <input type="hidden" name="transactionId" value={String(group.newest.id)} />
+                  <input type="hidden" name="part" value="name" />
+                  <input type="hidden" name="remember" value="1" />
+                  <SubmitButton variant="secondary" size="sm" className="min-h-11 sm:min-h-0" ariaLabel={`Use the name ${suggestion.cleanName} for all (${name})`}>
+                    {`Use the name ${suggestion.cleanName} for all`}
+                  </SubmitButton>
+                </form>
+              ) : null}
+              <form action={aiIgnoreAction}>
+                <input type="hidden" name="merchant" value={group.merchant} />
+                <SubmitButton variant="ghost" size="sm" className="min-h-11 sm:min-h-0" ariaLabel={`Ignore the AI suggestion for ${group.merchant}`}>
+                  Ignore
+                </SubmitButton>
+              </form>
+            </div>
+          ) : null}
 
           {people.length > 0 ? (
             <form action={action} className="flex flex-wrap items-center gap-2">
@@ -221,6 +265,7 @@ export function MerchantGroups({
   previousHref = null,
   nextHref = null,
   onCreateRule,
+  aiSuggestions = {},
 }: {
   groupPage: MerchantGroupPage;
   /** The page's own querystring (currentQuery), posted as the decision's scope. */
@@ -232,6 +277,8 @@ export function MerchantGroups({
   previousHref?: string | null;
   nextHref?: string | null;
   onCreateRule: (row: TransactionRow) => void;
+  /** v1.64.0: the local AI's suggestion per merchant (page.tsx); empty when off. */
+  aiSuggestions?: Record<string, AiSuggestionView>;
 }) {
   // The last decision's message, kept here for the reason `reporting` gives. The live region is
   // always rendered, empty until then, so a screen reader announces the message.
@@ -281,6 +328,7 @@ export function MerchantGroups({
               people={people}
               today={today}
               actionable={actionable}
+              suggestion={Object.hasOwn(aiSuggestions, group.merchant) ? aiSuggestions[group.merchant] : null}
               onCreateRule={onCreateRule}
               onDone={setDone}
             />

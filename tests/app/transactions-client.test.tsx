@@ -54,6 +54,12 @@ vi.mock('@/app/(app)/transactions/actions', () => ({
   undoBulkAction: vi.fn(async () => ({})),
 }));
 
+// v1.64.0: the AI suggestion line's two actions.
+vi.mock('@/app/(app)/transactions/ai-actions', () => ({
+  acceptAiSuggestionAction: vi.fn(async () => ({ message: 'Category updated.' })),
+  ignoreAiSuggestionAction: vi.fn(async () => ({})),
+}));
+
 afterEach(() => {
   cleanup();
   // Ruling S7's disclosure reads window.location.search in an effect (never during render --
@@ -5514,5 +5520,59 @@ describe('A split part belongs to a person (v1.63.0)', () => {
     const scope = rowScope();
     expect(scope.getByText('Dining · You · Groceries · Someone else')).toBeTruthy();
     expect(scope.queryByText(/Someone(?! else)/)).toBeNull();
+  });
+});
+
+/** v1.64.0 (plan lane C4). The local AI's line on a Review card, and only there. */
+describe('TransactionsClient: AI suggestion line (v1.64.0)', () => {
+  type Suggestions = Record<string, { categoryId: number | null; categoryLabel: string | null; cleanName: string | null }>;
+  const SUGGESTIONS: Suggestions = { 'TIM HORTONS': { categoryId: 7, categoryLabel: 'Coffee', cleanName: 'Tim Hortons' } };
+  const aiCategories = [{ id: 7, name: 'Coffee', parentId: null, isArchived: false, sortOrder: 0 }];
+  const uncategorized = (over: Partial<TransactionRow> = {}) => pageWithRow({ categoryId: null, categoryName: null, source: 'none', ...over });
+  const renderClient = (page: TransactionPage, over: { reviewMode?: boolean; aiSuggestions?: Suggestions; splits?: Record<number, SplitRow[]> } = {}) =>
+    render(
+      <TransactionsClient
+        page={page}
+        accounts={[]}
+        categories={aiCategories}
+        people={[]}
+        today="2026-03-02"
+        reviewMode={over.reviewMode ?? true}
+        aiSuggestions={over.aiSuggestions ?? SUGGESTIONS}
+        splits={over.splits}
+      />,
+    );
+
+  it('shows the line on an uncategorized Review card, and on neither renderer outside review', () => {
+    renderClient(uncategorized());
+    expect(screen.getByRole('button', { name: 'Use Coffee for TIM HORTONS' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Ignore the AI suggestion for TIM HORTONS' })).toBeTruthy();
+    cleanup();
+
+    renderClient(uncategorized(), { reviewMode: false });
+    expect(screen.queryByText('AI suggests:')).toBeNull();
+  });
+
+  it('shows nothing for a categorized, transferred or split row, or a merchant with no suggestion', () => {
+    renderClient(pageWithRow({ source: 'bayes', categoryId: 7, categoryName: 'Coffee', confidence: 0.8 }));
+    expect(screen.queryByText('AI suggests:')).toBeNull();
+    cleanup();
+    renderClient(uncategorized({ isTransfer: true }));
+    expect(screen.queryByText('AI suggests:')).toBeNull();
+    cleanup();
+    renderClient(uncategorized(), { splits: { 1: [{ id: 1, txnId: 1, categoryId: 7, amountCents: -500, attributedUserId: null } as unknown as SplitRow] } });
+    expect(screen.queryByText('AI suggests:')).toBeNull();
+    cleanup();
+    renderClient(uncategorized(), { aiSuggestions: {} });
+    expect(screen.queryByText('AI suggests:')).toBeNull();
+    cleanup();
+    renderClient(uncategorized({ normalizedMerchant: 'constructor' }), { aiSuggestions: {} });
+    expect(screen.queryByText('AI suggests:')).toBeNull();
+  });
+
+  it('says the result of Use in the page banner', async () => {
+    renderClient(uncategorized());
+    fireEvent.submit(screen.getByRole('button', { name: 'Use Coffee for TIM HORTONS' }).closest('form') as HTMLFormElement);
+    await waitFor(() => expect(screen.getByText('Category updated.')).toBeTruthy());
   });
 });

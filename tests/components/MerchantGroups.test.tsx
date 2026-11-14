@@ -3,15 +3,25 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MerchantGroups } from '@/components/review/MerchantGroups';
 import { reviewMerchantGroupAction } from '@/app/(app)/transactions/actions';
+import { acceptAiSuggestionAction, ignoreAiSuggestionAction } from '@/app/(app)/transactions/ai-actions';
+import type { AiSuggestionView } from '@/lib/ai/types';
 import type { MerchantGroupPage, MerchantGroupRow, TransactionRow } from '@/lib/transactions';
 
 vi.mock('@/app/(app)/transactions/actions', () => ({
   reviewMerchantGroupAction: vi.fn(async () => ({})),
 }));
 
+// v1.64.0: the AI Use and Ignore buttons post to these.
+vi.mock('@/app/(app)/transactions/ai-actions', () => ({
+  acceptAiSuggestionAction: vi.fn(async () => ({ message: 'Renamed.' })),
+  ignoreAiSuggestionAction: vi.fn(async () => ({ message: 'Ignored. No more AI suggestions for MAPLE GROCER.' })),
+}));
+
 afterEach(() => {
   cleanup();
   vi.mocked(reviewMerchantGroupAction).mockClear();
+  vi.mocked(acceptAiSuggestionAction).mockClear();
+  vi.mocked(ignoreAiSuggestionAction).mockClear();
 });
 
 /** v1.62.0 (plan item 1, B6). One card per merchant waiting in Needs review, one decision each. */
@@ -81,7 +91,10 @@ function page(groups: MerchantGroupRow[], over: Partial<MerchantGroupPage> = {})
   };
 }
 
-function renderGroups(groups: MerchantGroupRow[], opts: { actionable?: boolean; onCreateRule?: (row: TransactionRow) => void; over?: Partial<MerchantGroupPage> } = {}) {
+function renderGroups(
+  groups: MerchantGroupRow[],
+  opts: { actionable?: boolean; onCreateRule?: (row: TransactionRow) => void; over?: Partial<MerchantGroupPage>; aiSuggestions?: Record<string, AiSuggestionView> } = {},
+) {
   return render(
     <MerchantGroups
       groupPage={page(groups, opts.over)}
@@ -93,6 +106,7 @@ function renderGroups(groups: MerchantGroupRow[], opts: { actionable?: boolean; 
       previousHref={null}
       nextHref={opts.over?.pageCount === 2 ? '/transactions?review=1&group=merchant&gpage=2' : null}
       onCreateRule={opts.onCreateRule ?? vi.fn()}
+      aiSuggestions={opts.aiSuggestions}
     />,
   );
 }
@@ -202,5 +216,52 @@ describe('MerchantGroups (v1.62.0)', () => {
 
     renderGroups([]);
     expect(screen.getByText('Nothing to review. Everything is categorized.')).toBeTruthy();
+  });
+});
+
+/** v1.64.0 (plan lane C4). The group's picker opens on the local AI's category when the categorizer has no guess. */
+describe('MerchantGroups with an AI suggestion (v1.64.0)', () => {
+  const AI: Record<string, AiSuggestionView> = { 'MAPLE GROCER': { categoryId: 43, categoryLabel: 'Coffee', cleanName: 'Maple Grocer' } };
+  const picked = (name: string) => (card(name).querySelector('input[type="hidden"][name="categoryId"]') as HTMLInputElement).value;
+
+  it('seeds the picker from the suggestion with a muted label when there is no guess', () => {
+    renderGroups([group({ guessCategoryId: null })], { aiSuggestions: AI });
+    const maple = card('MAPLE GROCER');
+    expect((within(maple).getByRole('combobox', { name: 'Category for MAPLE GROCER' }) as HTMLInputElement).value).toBe('Coffee');
+    expect(picked('MAPLE GROCER')).toBe('43');
+    expect(maple.textContent).toContain('AI suggestion');
+  });
+
+  it('lets the categorizer guess win over the suggestion', () => {
+    renderGroups([group({ guessCategoryId: 42 })], { aiSuggestions: AI });
+    expect(picked('MAPLE GROCER')).toBe('42');
+    expect(card('MAPLE GROCER').textContent).not.toContain('AI suggestion');
+  });
+
+  it('does not seed from an archived suggested category', () => {
+    renderGroups([group({ guessCategoryId: null })], { aiSuggestions: { 'MAPLE GROCER': { categoryId: 44, categoryLabel: 'Old Pantry', cleanName: null } } });
+    expect(picked('MAPLE GROCER')).toBe('');
+  });
+
+  it('offers the name for all, posting the newest row with remember, and Ignore posting the merchant', async () => {
+    renderGroups([group({ guessCategoryId: null })], { aiSuggestions: AI });
+    const maple = card('MAPLE GROCER');
+    fireEvent.submit(within(maple).getByRole('button', { name: 'Use the name Maple Grocer for all (MAPLE GROCER)' }).closest('form') as HTMLFormElement);
+    await waitFor(() => expect(acceptAiSuggestionAction).toHaveBeenCalledTimes(1));
+    const posted = vi.mocked(acceptAiSuggestionAction).mock.calls.at(-1)![1] as FormData;
+    expect([posted.get('transactionId'), posted.get('part'), posted.get('remember')]).toEqual(['903', 'name', '1']);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe('Renamed.'));
+
+    fireEvent.submit(within(maple).getByRole('button', { name: 'Ignore the AI suggestion for MAPLE GROCER' }).closest('form') as HTMLFormElement);
+    await waitFor(() => expect(ignoreAiSuggestionAction).toHaveBeenCalledTimes(1));
+    expect((vi.mocked(ignoreAiSuggestionAction).mock.calls.at(-1)![1] as FormData).get('merchant')).toBe('MAPLE GROCER');
+  });
+
+  it('shows nothing of the AI without a suggestion or outside review', () => {
+    renderGroups([group()], { aiSuggestions: {} });
+    expect(card('MAPLE GROCER').querySelector('[data-ai-suggestion]')).toBeNull();
+    cleanup();
+    renderGroups([group()], { aiSuggestions: AI, actionable: false });
+    expect(screen.queryAllByRole('button')).toEqual([]);
   });
 });

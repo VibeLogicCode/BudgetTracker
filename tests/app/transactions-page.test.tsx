@@ -9,6 +9,9 @@ import { captureBulkBefore, recordBulkUndo } from '@/lib/bulk-undo';
 import { localTimeLabel } from '@/lib/dates';
 import { readEnv } from '@/lib/env';
 import { bulkSetAttribution } from '@/lib/transactions';
+import { saveLocalAiConfig, turnOffLocalAi } from '@/lib/ai/config';
+import { ignoreAiSuggestion, recordMerchantSuggestion } from '@/lib/ai/suggestions';
+import { buildAiFixture, type AiFixture } from '../helpers/ai-fixture';
 
 /**
  * Item BO. No transactions-page test existed before this task -- transactions-client.test.tsx
@@ -1091,5 +1094,74 @@ describe('TransactionsPage: loan links on a row reached through a part (v1.63.0 
     currentUser.value = { id: f.alex, name: 'Alex', username: 'alex', role: 'admin', visibility: 'household' };
     const alex = await pageProps();
     expect(alex.loanLinks[f.maple]).toMatchObject([{ itemName: 'Boat loan', amountCents: 15000 }]);
+  });
+});
+
+/**
+ * v1.64.0 (plan lane C2). The local AI's suggestions reach Review only for the merchants of rows
+ * waiting there, only while the helper is on, and never for a self viewer.
+ */
+describe('TransactionsPage: AI suggestions in Review (v1.64.0)', () => {
+  let fx: AiFixture | null = null;
+  afterEach(() => {
+    fx?.t.cleanup();
+    fx = null;
+  });
+  const AT = new Date('2026-03-10T09:00:00.000Z');
+
+  function setup(on = true): AiFixture {
+    fx = buildAiFixture();
+    currentUser.value = { id: fx.alex, name: 'Alex', username: 'alex', role: 'admin', visibility: 'household' };
+    recordMerchantSuggestion({ merchant: 'MAPLE GROCER', categoryId: fx.groceries, cleanName: 'Maple Grocer', model: 'test-model:1b', at: AT });
+    recordMerchantSuggestion({ merchant: 'FUEL STOP 12', categoryId: fx.groceries, cleanName: 'Fuel Stop', model: 'test-model:1b', at: AT });
+    if (on) saveLocalAiConfig({ baseUrl: 'http://192.168.1.50:11434/v1', model: 'test-model:1b', userId: fx.alex, at: AT });
+    return fx;
+  }
+
+  async function renderPage(searchParams: Record<string, string>) {
+    const { default: TransactionsPage } = await import('@/app/(app)/transactions/page');
+    return render(await TransactionsPage({ searchParams: Promise.resolve(searchParams) }));
+  }
+
+  it("carries MAPLE GROCER's suggestion on an admin's review page, and never looks up a guessed row's merchant", async () => {
+    setup();
+    await renderPage({ review: '1' });
+    expect(screen.getAllByText('AI suggests:').length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('button', { name: /^Use .*Groceries for MAPLE GROCER$/ }).length).toBeGreaterThan(0);
+    // FUEL STOP 12 is a Bayes guess, so its stored suggestion is not read.
+    expect(screen.queryByRole('button', { name: /^Use .* for FUEL STOP 12$|Ignore the AI suggestion for FUEL STOP 12/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Use the name Fuel Stop/ })).toBeNull();
+  });
+
+  it('carries none with AI off, with the suggestion ignored, or outside review', async () => {
+    setup();
+    turnOffLocalAi({ userId: fx!.alex, at: AT });
+    await renderPage({ review: '1' });
+    expect(screen.queryByText('AI suggests:')).toBeNull();
+    cleanup();
+
+    saveLocalAiConfig({ baseUrl: 'http://192.168.1.50:11434/v1', model: 'test-model:1b', userId: fx!.alex, at: AT });
+    await renderPage({});
+    expect(screen.queryByText('AI suggests:')).toBeNull();
+    cleanup();
+
+    ignoreAiSuggestion({ merchant: 'MAPLE GROCER', userId: fx!.alex, at: AT });
+    await renderPage({ review: '1' });
+    expect(screen.queryByText('AI suggests:')).toBeNull();
+  });
+
+  it('serializes none to a self viewer asking for ?review=1', async () => {
+    const f = setup();
+    currentUser.value = { id: f.sam, name: 'Sam', username: 'sam', role: 'member', visibility: 'self' };
+    const { container } = await renderPage({ review: '1' });
+    expect(container.textContent).not.toContain('AI suggests');
+    expect(container.innerHTML).not.toContain('Maple Grocer');
+  });
+
+  it('seeds the merchant groups view from the suggestion', async () => {
+    setup();
+    const { container } = await renderPage({ review: '1', group: 'merchant' });
+    expect((screen.getByRole('combobox', { name: /^Category for .*MAPLE GROCER/ }) as HTMLInputElement).value).toMatch(/Groceries$/);
+    expect(container.textContent).toContain('Use the name Maple Grocer for all');
   });
 });

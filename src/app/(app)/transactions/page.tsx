@@ -13,6 +13,7 @@ import { resolveRenameRule, reviewQueueCount } from '@/lib/categorize/engine';
 // rule renamed this row" at all.
 import { alwaysAskRuleFor, listRecurringMarkRules, listRules, recurringMarkFor } from '@/lib/categorize/rules';
 import type { RecurringMark } from '@/lib/categorize/mark-kinds';
+import type { AiSuggestionView } from '@/lib/ai/types';
 import { splitsForTransactions, type SplitRow } from '@/lib/splits';
 import { effectivePartPerson } from '@/lib/split-person';
 import {
@@ -23,6 +24,8 @@ import {
   listTransactions,
 } from '@/lib/transactions';
 import { lastBulkUndo } from '@/lib/bulk-undo';
+import { localAiEnabled } from '@/lib/ai/config';
+import { aiSuggestionsForMerchants } from '@/lib/ai/suggestions';
 import { suggestTransferPairs } from '@/lib/transfer-pairs';
 import { localTimeLabel, todayIso } from '@/lib/dates';
 import { resolveRange } from '@/lib/date-range';
@@ -197,6 +200,23 @@ export default async function TransactionsPage({
       }
     }
   }
+  /**
+   * v1.64.0 (plan lane C2). The local AI's suggestions for the merchants whose rows Review shows as
+   * waiting: uncategorized, not a transfer, not split (so a Bayes-guessed row's merchant is never
+   * looked up), plus the merchant groups' merchants. Only in review mode, never the duplicates view,
+   * and only while the feature is on; a self viewer is not in review mode, and the lookup refuses
+   * them as well.
+   */
+  let aiSuggestions: Record<string, AiSuggestionView> = {};
+  if (reviewMode && !duplicatesView && localAiEnabled()) {
+    const split = splitsForTransactions(page.rows.map((row) => row.id));
+    const merchants = new Set<string>();
+    for (const row of page.rows) {
+      if (row.categoryId === null && !row.isTransfer && !split.has(row.id)) merchants.add(row.normalizedMerchant);
+    }
+    for (const group of merchantGroups?.groups ?? []) merchants.add(group.merchant);
+    aiSuggestions = aiSuggestionsForMerchants([...merchants], viewer);
+  }
   return (
     <TransactionsClient
       page={page}
@@ -206,6 +226,7 @@ export default async function TransactionsPage({
       renameRules={renameRules}
       recurringMarks={recurringMarks}
       alwaysAskMerchants={alwaysAskMerchants}
+      aiSuggestions={aiSuggestions}
       groups={groups}
       merchantGroups={merchantGroups}
       undo={undo}

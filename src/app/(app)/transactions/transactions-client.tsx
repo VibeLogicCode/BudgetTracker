@@ -7,6 +7,7 @@ import { defaultBoundsAround } from '@/lib/categorize/amount-bounds';
 import { FormError } from '@/components/FormError';
 import { PossibleDuplicatesCard } from '@/components/PossibleDuplicatesCard';
 import { QuickAddTransaction } from '@/components/QuickAddTransaction';
+import { AiSuggestionLine } from '@/components/review/AiSuggestionLine';
 import { MerchantGroups } from '@/components/review/MerchantGroups';
 import { TransferPairsCard } from '@/components/review/TransferPairsCard';
 import { UndoBar, type UndoOffer } from '@/components/review/UndoBar';
@@ -97,6 +98,7 @@ import {
   type ActionState,
 } from './actions';
 import type { RecurringMark } from '@/lib/categorize/mark-kinds';
+import type { AiSuggestionView } from '@/lib/ai/types';
 import { buttonClass } from '@/components/ui/Button';
 import { DisclosureSummary } from '@/components/ui/Disclosure';
 import { BackLink } from '@/components/ui/BackLink';
@@ -501,6 +503,7 @@ export function TransactionsClient({
   renameRules = {},
   recurringMarks = {},
   alwaysAskMerchants = [],
+  aiSuggestions = {},
   groups = null,
   merchantGroups = null,
   undo = null,
@@ -563,6 +566,8 @@ export function TransactionsClient({
   recurringMarks?: Record<string, RecurringMark>;
   /** Spec 2026-10-21 §2.1: merchants on this page an enabled Always ask rule already covers, keyed by normalizedMerchant (page.tsx). */
   alwaysAskMerchants?: string[];
+  /** v1.64.0: the local AI's suggestion per merchant (page.tsx); empty when AI is off or in no review mode. */
+  aiSuggestions?: Record<string, AiSuggestionView>;
   /**
    * v1.26.0 Lane 3a item 2. groupTransactionsByCategory's page of clusters (src/lib/transactions.ts)
    * for the SAME filter the row list above was built from -- `null` whenever `?group=category` is
@@ -696,6 +701,13 @@ export function TransactionsClient({
    */
   const [askRow, setAskRow] = useState<{ id: number; merchant: string } | null>(null);
   // The send-back result, shown in the page banner after the dialog closes.
+  // v1.64.0: the last Use or Ignore on an AI suggestion, shown by the same banner and cleared after a while so it cannot mask later results.
+  const [aiResult, setAiResult] = useState<ActionState>({});
+  useEffect(() => {
+    if (!aiResult.message && !aiResult.error) return;
+    const timer = setTimeout(() => setAiResult({}), 8000);
+    return () => clearTimeout(timer);
+  }, [aiResult]);
   const [askSentMessage, setAskSentMessage] = useState<string | undefined>(undefined);
   /**
    * v1.25.0 Lane R item R3. The two new bulk actions' own dialog state -- one nullable slot
@@ -1109,7 +1121,7 @@ export function TransactionsClient({
       ? null
       : { confirmGroup: confirmGroupState, recatGroup: recatGroupState, confirmView: confirmViewState }[lastGroupAction];
   const notice =
-    newLoanState.message ?? applyAllState.message ??
+    aiResult.message ?? newLoanState.message ?? applyAllState.message ??
     attrState.message ?? bulkCatState.message ?? bulkTfrState.message ?? bulkRecurringState.message ??
     renameState.message ?? assignState.message ?? unassignState.message ?? splitState.message ?? noteState.message ??
     bulkLoanState.message ?? bulkNoteState.message ??
@@ -1125,7 +1137,7 @@ export function TransactionsClient({
     acceptState.message ?? acceptAllState.message ?? rowTransferState.message ?? rowRecurringState.message ??
     askSentMessage;
   const error =
-    newLoanState.error ?? applyAllState.error ??
+    aiResult.error ?? newLoanState.error ?? applyAllState.error ??
     attrState.error ?? bulkCatState.error ?? bulkTfrState.error ?? bulkRecurringState.error ??
     renameState.error ?? assignState.error ?? unassignState.error ?? splitState.error ?? noteState.error ??
     bulkLoanState.error ?? bulkNoteState.error ??
@@ -2503,6 +2515,17 @@ export function TransactionsClient({
           {/* The one thing review mode adds beyond this card's shared control set. */}
           {reviewMode ? confirmButton(row) : null}
         </div>
+        {/* v1.64.0: the local AI's suggestion for this merchant, an uncategorized unsplit row only. */}
+        {reviewMode && !selfScoped && row.categoryId === null && !row.isTransfer && rowSplits.length === 0 && Object.hasOwn(aiSuggestions, row.normalizedMerchant) ? (
+          <AiSuggestionLine
+            transactionId={row.id}
+            merchant={row.normalizedMerchant}
+            suggestion={aiSuggestions[row.normalizedMerchant]}
+            canRemember={row.normalizedMerchant !== ''}
+            alwaysAsk={alwaysAskMerchants.includes(row.normalizedMerchant)}
+            onResult={setAiResult}
+          />
+        ) : null}
       </li>
     );
   }
@@ -3074,6 +3097,7 @@ export function TransactionsClient({
         previousHref={groupPage.page > 1 ? filterHref(currentQuery, 'gpage', String(groupPage.page - 1)) : null}
         nextHref={groupPage.page < groupPage.pageCount ? filterHref(currentQuery, 'gpage', String(groupPage.page + 1)) : null}
         onCreateRule={openRuleDialog}
+        aiSuggestions={aiSuggestions}
       />
     );
   }
