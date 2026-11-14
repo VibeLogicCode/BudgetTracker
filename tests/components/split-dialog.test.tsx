@@ -13,6 +13,7 @@ const CATEGORIES = [
 
 describe('SplitDialog', () => {
   it('posts the whole transaction id and the parts it was given through the action handed to it, then closes', () => {
+    // No `people` (the default, null): an editor that cannot choose a person keeps each stored part's.
     const action = vi.fn();
     const onClose = vi.fn();
     render(
@@ -35,8 +36,8 @@ describe('SplitDialog', () => {
     const data = new FormData(form);
     expect(data.get('txnId')).toBe('77');
     expect(JSON.parse(String(data.get('parts')))).toEqual([
-      { categoryId: 1, amountCents: -2000, note: null, person: 'follow' },
-      { categoryId: 2, amountCents: -2217, note: 'the case', person: 'follow' },
+      { categoryId: 1, amountCents: -2000, note: null, person: 'keep', splitId: 501 },
+      { categoryId: 2, amountCents: -2217, note: 'the case', person: 'keep', splitId: 502 },
     ]);
   });
 
@@ -134,9 +135,29 @@ describe('SplitDialog: a part belongs to a person (v1.63.0)', () => {
     expect(posted()[0].person).toBe(4);
   });
 
-  it('shows no person select and posts follow when people is null', () => {
+  it("shows no person select when people is null, and keeps every stored part's person (fix round)", () => {
     open(null);
     expect(screen.queryByRole('combobox', { name: /^Person for part/ })).toBeNull();
-    expect(posted().map((p) => p.person)).toEqual(['follow', 'follow', 'follow']);
+    // Each stored part asks to keep the person it has, by its own id; nothing is reset to follow.
+    expect(posted().map((p) => [p.person, (p as { splitId?: unknown }).splitId])).toEqual([
+      ['keep', 1],
+      ['keep', 2],
+      ['keep', 3],
+    ]);
+  });
+
+  it('a part added in an editor with no person select follows the transaction', () => {
+    open(null, []);
+    expect(screen.queryByRole('combobox', { name: /^Person for part/ })).toBeNull();
+    const [first, second] = screen.getAllByRole('combobox') as HTMLInputElement[];
+    for (const [field, label] of [[first, 'Groceries'], [second, 'Phone']] as const) {
+      fireEvent.focus(field);
+      fireEvent.change(field, { target: { value: label } });
+      fireEvent.mouseDown(screen.getAllByRole('option').find((node) => node.textContent === label)!);
+    }
+    expect(posted()).toEqual([
+      { categoryId: 1, amountCents: 0, note: null, person: 'follow' },
+      { categoryId: 2, amountCents: 0, note: null, person: 'follow' },
+    ]);
   });
 });

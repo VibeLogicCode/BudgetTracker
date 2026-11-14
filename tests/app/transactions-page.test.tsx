@@ -1058,3 +1058,38 @@ describe('TransactionsPage: a split part belongs to a person (v1.63.0)', () => {
     expect(props.scopePersonName).toBe('Sam');
   });
 });
+
+describe('TransactionsPage: loan links on a row reached through a part (v1.63.0 fix round)', () => {
+  let f: SplitPersonFixture | null = null;
+  afterEach(() => {
+    f?.t.cleanup();
+    f = null;
+  });
+
+  async function pageProps() {
+    const { default: TransactionsPage } = await import('@/app/(app)/transactions/page');
+    const element = (await TransactionsPage({ searchParams: Promise.resolve({}) })) as { props: Record<string, any> };
+    return element.props;
+  }
+
+  it("hands a self viewer no loan link, name or amount on a charge that is someone else's", async () => {
+    f = buildSplitPersonFixture();
+    const { createLoanFromTransaction } = await import('@/lib/loans');
+    // A name of the row's own, so the loan does not relabel it: this test is about the links.
+    f.t.sqlite.prepare("update transactions set display_description = 'Maple Grocer', display_source = 'manual' where id = ?").run(f.maple);
+    createLoanFromTransaction({ txnId: f.maple, name: 'Boat loan', direction: 'owed' }, f.admin);
+
+    currentUser.value = { id: f.sam, name: 'Sam', username: 'sam', role: 'member', visibility: 'self' };
+    const sam = await pageProps();
+    expect(sam.page.rows.map((row: { id: number }) => row.id)).toContain(f.maple);
+    expect(sam.loanLinks[f.maple]).toBeUndefined();
+    const serialized = JSON.stringify(sam);
+    expect(serialized).not.toContain('Boat loan');
+    expect(serialized).not.toContain('15000');
+
+    // The transaction's own person still sees the link.
+    currentUser.value = { id: f.alex, name: 'Alex', username: 'alex', role: 'admin', visibility: 'household' };
+    const alex = await pageProps();
+    expect(alex.loanLinks[f.maple]).toMatchObject([{ itemName: 'Boat loan', amountCents: 15000 }]);
+  });
+});

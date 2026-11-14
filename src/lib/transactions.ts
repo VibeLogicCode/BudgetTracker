@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, or, sql, type SQL, type SQLWrapper } from 'drizzle-orm';
 import { z } from '@/lib/zod';
 import { getDb } from '@/db/client';
 import { accounts, categories, imports, transactions, transactionSplits, users } from '@/db/schema';
@@ -271,7 +271,10 @@ export interface TransactionRow {
   source: 'rule' | 'bayes' | 'manual' | 'none';
   confidence: number | null;
   isTransfer: boolean;
-  /** The TRANSACTION's person, which still decides who may act on it (transactionOwners). */
+  /**
+   * The TRANSACTION's person, which still decides who may act on it (transactionOwners). v1.63.0 fix
+   * round: null for a self viewer on a row that is not theirs, like the name, notes and account name.
+   */
   attributedUserId: number | null;
   /**
    * v1.63.0: null for a self viewer when the transaction is someone else's (the row is in their
@@ -334,18 +337,39 @@ export function displayNameOf(row: Pick<TransactionRow, 'rawDescription' | 'disp
 const NO_PART_OUTSIDE = sql<boolean>`0`.mapWith((value: unknown) => Number(value) === 1);
 
 /**
+ * v1.63.0 fix round. The account name a self viewer reads on a row that is not theirs (they hold a
+ * part of it): the placeholder the app prints for "no value", so the other person's account name
+ * never reaches them. Exported for the tax detail rows, which follow the same rule.
+ */
+export const OTHER_ACCOUNT_LABEL = '—';
+
+/**
+ * v1.63.0 fix round. `value` on the self viewer's own row, `otherwise` on a row they reach only
+ * through a part of theirs. Nested for the reason scopedAmountSql gives (src/lib/splits.ts).
+ */
+function ownRowOnly<T>(ownView: number, value: SQLWrapper, otherwise: SQL): SQL<T> {
+  return sql<T>`${sql`(case when ${transactions.attributedUserId} = ${ownView} then ${value} else ${otherwise} end)`}`;
+}
+
+/**
  * v1.63.0 (plan 2026-11-12, S3). The row read model, for one person scope.
  *
  * `person` is whose share the row is read at (sharePerson: a self viewer's own id, else the person
  * filter, else null for the whole charge). `ownView` is the self viewer's own id, or null for a
  * household viewer: a self viewer gets no whole amount and no other person's name.
+ *
+ * Fix round: on a row a self viewer reaches only through a part (the transaction is someone else's
+ * or Household's) they also get no note, no account name and no person id. attributedUserId reads
+ * null there, which the list already treats as "not yours" (no checkbox, no row menu) and prints as
+ * Household, the name it already prints for such a row; the split filter in page.tsx and the CSV keep
+ * only parts set to the viewer either way.
  */
 function selectionFor(person: SplitPersonScope | null, ownView: number | null) {
   return {
     id: transactions.id,
     date: transactions.date,
     accountId: transactions.accountId,
-    accountName: accounts.name,
+    accountName: ownView === null ? accounts.name : ownRowOnly<string>(ownView, accounts.name, sql`${OTHER_ACCOUNT_LABEL}`),
     rawDescription: transactions.rawDescription,
     displayDescription: transactions.displayDescription,
     displaySource: transactions.displaySource,
@@ -358,12 +382,11 @@ function selectionFor(person: SplitPersonScope | null, ownView: number | null) {
     source: transactions.categorizationSource,
     confidence: transactions.confidence,
     isTransfer: transactions.isTransfer,
-    attributedUserId: transactions.attributedUserId,
+    attributedUserId:
+      ownView === null ? transactions.attributedUserId : ownRowOnly<number | null>(ownView, transactions.attributedUserId, sql`null`),
     attributedUserName:
-      ownView === null
-        ? sql<string | null>`${users.name}`
-        : sql<string | null>`${sql`(case when ${transactions.attributedUserId} = ${ownView} then ${users.name} else null end)`}`,
-    notes: transactions.notes,
+      ownView === null ? sql<string | null>`${users.name}` : ownRowOnly<string | null>(ownView, users.name, sql`null`),
+    notes: ownView === null ? transactions.notes : ownRowOnly<string | null>(ownView, transactions.notes, sql`null`),
     importId: transactions.importId,
   };
 }
@@ -394,6 +417,16 @@ function sharePerson(filter: Pick<TransactionFilter, 'attributedUserId'>, viewer
   const own = ownerScope(viewer);
   if (own !== null) return own;
   return filter.attributedUserId === 'unattributed' || typeof filter.attributedUserId === 'number' ? filter.attributedUserId : null;
+}
+
+/**
+ * v1.63.0 fix round. The amount a row shows under this filter and viewer: the share under a person
+ * scope (scopedAmountSql), else the whole charge. One expression for the rows, the footer sums, the
+ * amount search and the amount sort, so the four cannot disagree.
+ */
+function rowAmountSql(filter: Pick<TransactionFilter, 'attributedUserId'>, viewer: Viewer): SQL {
+  const person = sharePerson(filter, viewer);
+  return person === null ? sql`${transactions.amountCents}` : scopedAmountSql(person);
 }
 
 /**
@@ -513,6 +546,9 @@ function buildWhere(filter: TransactionFilter, viewer: Viewer): SQL | undefined 
      * every search that was never about an amount, with no extra state to keep in sync.
      */
     const amountCents = parseAmountToCents(trimmedSearch);
+    // v1.63.0 fix round: under a person scope the amount searched is the share the row shows
+    // (rowAmountSql), so "30.00" finds Sam's $30 part of a $300 charge and "300" does not.
+    const shownAmount = rowAmountSql(filter, viewer);
     const clause = or(
       sql`upper(${transactions.rawDescription}) like ${needle} escape ${LIKE_ESCAPE}`,
       sql`upper(${transactions.normalizedMerchant}) like ${needle} escape ${LIKE_ESCAPE}`,
@@ -524,7 +560,7 @@ function buildWhere(filter: TransactionFilter, viewer: Viewer): SQL | undefined 
       // index exists because it also covers OCR'd receipt text, which has no analogue here.
       sql`upper(coalesce(${transactions.notes}, '')) like ${needle} escape ${LIKE_ESCAPE}`,
       // or() drops `undefined` arms silently (drizzle-orm), so a non-money query adds nothing here.
-      amountCents === null ? undefined : sql`abs(${transactions.amountCents}) = ${amountCents}`,
+      amountCents === null ? undefined : sql`abs(${shownAmount}) = ${amountCents}`,
     );
     if (clause) clauses.push(clause);
   }
@@ -589,7 +625,7 @@ function buildWhere(filter: TransactionFilter, viewer: Viewer): SQL | undefined 
  * existing default's own desc/desc and asc/asc pairs: determinism is what pagination needs, and
  * either choice is deterministic.
  */
-function orderByFor(filter: TransactionFilter): SQL[] {
+function orderByFor(filter: TransactionFilter, amount: SQL): SQL[] {
   if (filter.sort === undefined) {
     return filter.reviewOnly
       ? [asc(transactions.date), asc(transactions.id)]
@@ -598,7 +634,9 @@ function orderByFor(filter: TransactionFilter): SQL[] {
   const dir = filter.direction === 'asc' ? asc : desc;
   switch (filter.sort) {
     case 'amount':
-      return [dir(transactions.amountCents), dir(transactions.id)];
+      // v1.63.0 fix round: the amount the row shows (rowAmountSql), so under a person scope the list
+      // is ordered by the shares on screen, not by charges the reader never sees whole.
+      return [dir(amount), dir(transactions.id)];
     case 'category':
       // Uncategorized last in BOTH directions (see TransactionFilter.direction). A leading
       // always-ascending 0/1 rank does that in one expression: named rows rank 0 and sort among
@@ -623,7 +661,7 @@ export function listTransactions(filter: TransactionFilter, viewer: Viewer): Tra
   // v1.63.0: under a person scope each row is read at that person's share, and the footer sums the
   // same expression, so it adds up exactly what the rows show.
   const person = sharePerson(filter, viewer);
-  const amount = person === null ? transactions.amountCents : scopedAmountSql(person);
+  const amount = rowAmountSql(filter, viewer);
 
   // F-02 (v1.31.0): the count and the two filtered sums ride the SAME query as `where` -- one more
   // pass over an already-scanned set of rows, not a second query, and (the point of doing it here
@@ -647,7 +685,7 @@ export function listTransactions(filter: TransactionFilter, viewer: Viewer): Tra
   // default -- ruling R1's oldest-first while working the queue, newest-first otherwise -- when no
   // `sort` is asked for. See that function for why every ordering ends in `id`.
   const rows = (where ? query.where(where) : query)
-    .orderBy(...orderByFor(filter))
+    .orderBy(...orderByFor(filter, amount))
     .limit(pageSize)
     .offset((page - 1) * pageSize)
     .all();
@@ -1240,13 +1278,17 @@ export function merchantRowIds(normalizedMerchant: string): number[] {
  * viewer would let them rename, annotate or link somebody else's charge. What a self viewer may
  * READ of such a row is getTransactionShare's answer below.
  *
- * v1.63.0: a self viewer reads their own row at their share (a part of it may be set to someone
- * else), with `partial` saying so and no whole amount.
+ * v1.63.0 fix round: `amountCents` is the WHOLE charge, for every viewer. This is a server-side
+ * read, and its callers need the charge itself: a loan opened from the row is seeded from it and
+ * assignTransactionToLoan applies the whole of it, the over-link warning compares the links with
+ * it, and a warranty's price is what the purchase cost. Reading it at a self viewer's share opened a
+ * loan from a half-shared -$500 payment at $0. Anything shown in a list reads
+ * getTransactionShare (or listTransactions) instead.
  */
 export function getTransaction(id: number, viewer: Viewer): TransactionRow | null {
   const scope = ownerScope(viewer);
   const where = scope === null ? eq(transactions.id, id) : and(eq(transactions.id, id), eq(transactions.attributedUserId, scope));
-  return baseQuery(selectionFor(scope, scope)).where(where).get() ?? null;
+  return baseQuery(selectionFor(null, scope)).where(where).get() ?? null;
 }
 
 /**

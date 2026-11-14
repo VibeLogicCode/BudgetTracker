@@ -198,6 +198,38 @@ describe('POST /api/backup/restore-upload (start)', () => {
     expect(restoreDirs()).toEqual([]);
   });
 
+  it('v1.63.0 fix round: refuses a start body over 4 KB that declares no length, without reading past the cap', async () => {
+    // A streamed (chunked) body: no content-length, so only the capped read can refuse it.
+    const json = JSON.stringify({ name: 'budget-2026-03-09.tar.gz', bytes: 100, confirm: true, pad: 'x'.repeat(8192) });
+    let pulled = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const start = pulled;
+        pulled += 1024;
+        if (start >= json.length) controller.close();
+        else controller.enqueue(new TextEncoder().encode(json.slice(start, start + 1024)));
+      },
+    });
+    const req = new Request(`${BASE}/api/backup/restore-upload`, {
+      method: 'POST',
+      headers: { host: 'nas.local:3000', origin: BASE, cookie: `${SESSION_COOKIE_NAME}=${adminToken}`, 'content-type': 'application/json' },
+      body,
+      duplex: 'half',
+    } as RequestInit);
+    expect(req.headers.get('content-length')).toBeNull();
+    const response = await START(req);
+    expect(response.status).toBe(413);
+    expect(pulled).toBeLessThan(json.length);
+    expect(restoreDirs()).toEqual([]);
+  });
+
+  it('refuses a start body declared over 4 KB before reading it', async () => {
+    const response = await START(
+      startRequest({ name: 'budget-2026-03-09.tar.gz', bytes: 100, confirm: true }, { headers: { 'content-length': '5000' } }),
+    );
+    expect(response.status).toBe(413);
+  });
+
   it('refuses low space with 507 and the sentence', async () => {
     vi.spyOn(fs, 'statfsSync').mockReturnValue({ bavail: 1, bsize: 4096 } as fs.StatsFs);
     const response = await START(startRequest({ name: 'budget-2026-03-09.tar.gz', bytes: 100, confirm: true }));

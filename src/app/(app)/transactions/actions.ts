@@ -18,7 +18,7 @@ import {
 } from '@/lib/loans';
 import { formatCents, parseAmountToCents } from '@/lib/money';
 import { getSplits, setTransactionSplits, UNKNOWN_SPLIT_PERSON_ERROR } from '@/lib/splits';
-import { effectivePartPerson } from '@/lib/split-person';
+import { effectivePartPerson, splitPersonOf, type SplitPerson } from '@/lib/split-person';
 import { getWarrantyItem } from '@/lib/warranty/items';
 import { isLoanRepayment, loanAssignedMessage, loanClampWarning, LOAN_DIRECTIONS } from '@/lib/warranty/constants';
 import { isIsoDate } from '@/lib/dates';
@@ -1457,8 +1457,14 @@ const splitPartSchema = z.object({
   categoryId: z.number().int().positive(),
   amountCents: z.number().int(),
   note: z.string().nullable().optional(),
-  /** v1.63.0. Omitted is follow, so a client from before this release keeps working. */
-  person: z.union([z.literal('follow'), z.literal('household'), z.number().int().positive()]).optional(),
+  /**
+   * v1.63.0. Omitted is follow, so a client from before this release keeps working. Fix round:
+   * `keep` (with `splitId`) is what an editor that cannot choose a person posts for a stored part --
+   * the part keeps the person it has. A `splitId` that is not one of this transaction's parts keeps
+   * nothing and reads as follow.
+   */
+  person: z.union([z.literal('follow'), z.literal('household'), z.literal('keep'), z.number().int().positive()]).optional(),
+  splitId: z.number().int().positive().optional(),
 });
 const splitPartsSchema = z.array(splitPartSchema);
 
@@ -1512,11 +1518,19 @@ export async function saveSplitsAction(_prev: ActionState, formData: FormData): 
 
   const partsParsed = splitPartsSchema.safeParse(rawParts);
   if (!partsParsed.success) return { error: 'Invalid split parts.' };
+  // `keep` resolves to the stored part's own person BEFORE the gates below, so it passes exactly
+  // where posting that person outright would: a self viewer keeps only what is already theirs.
+  const stored = new Map(existing.map((part) => [part.id, part]));
+  const personOf = (part: (typeof partsParsed.data)[number]): SplitPerson => {
+    if (part.person !== 'keep') return part.person ?? 'follow';
+    const kept = part.splitId === undefined ? undefined : stored.get(part.splitId);
+    return kept === undefined ? 'follow' : splitPersonOf(kept);
+  };
   const parts = partsParsed.data.map((part) => ({
     categoryId: part.categoryId,
     amountCents: part.amountCents,
     note: part.note ?? null,
-    person: part.person ?? ('follow' as const),
+    person: personOf(part),
   }));
 
   if (scope !== null) {

@@ -1239,11 +1239,16 @@ export function TransactionsClient({
   /** v1.63.0. A self viewer sees a row through a part of theirs without owning it; every action on it is refused server-side. */
   const notYours = (row: TransactionRow): boolean => selfScoped && viewerId !== null && row.attributedUserId !== viewerId;
 
-  /** v1.63.0. The name of a part's person, for the row's split summary. */
+  /**
+   * v1.63.0. The name of a part's person, for the row's split summary. A self viewer is handed no
+   * roster, so their own part reads "You" and anyone else's "Someone else".
+   */
   const partPersonName = (row: TransactionRow, personId: number | null): string => {
     if (personId === null) return 'Household';
     if (personId === row.attributedUserId && row.attributedUserName) return row.attributedUserName;
-    return people.find((person) => person.id === personId)?.name ?? 'Someone';
+    const named = people.find((person) => person.id === personId)?.name;
+    if (named !== undefined) return named;
+    return personId === viewerId ? 'You' : 'Someone else';
   };
 
   /**

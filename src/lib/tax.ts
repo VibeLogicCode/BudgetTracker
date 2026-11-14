@@ -7,6 +7,7 @@ import { netSpentCents } from '@/lib/money';
 import { toCsv, UNATTRIBUTED_LABEL } from '@/lib/reports';
 import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY, EFFECTIVE_PERSON, partPersonClause, personRowClause } from '@/lib/splits';
 import { SPEND_ROW_WHERE } from '@/lib/spend-where';
+import { OTHER_ACCOUNT_LABEL } from '@/lib/transactions';
 
 /**
  * Tax-relevant categories + the tax-year report (spec 2026-08-22, v1.7.0, Task 15). Split out
@@ -263,7 +264,11 @@ export interface TaxDetailRow {
   personName: string;
   /** EFFECTIVE_AMOUNT, signed as stored: spend negative, a refund positive. */
   amountCents: number;
-  /** The part's note, else the transaction's. */
+  /**
+   * The part's note, else the transaction's. v1.63.0 fix round: for a self viewer's part of a charge
+   * that is not theirs, the part's own note only (and OTHER_ACCOUNT_LABEL for the account), so the
+   * transaction's person's note and account never reach them.
+   */
   note: string | null;
 }
 
@@ -312,6 +317,7 @@ export function taxDetailRows(year: number, viewer: Viewer): TaxDetailRow[] {
       amountCents: EFFECTIVE_AMOUNT,
       partNote: transactionSplits.note,
       transactionNote: transactions.notes,
+      ownerId: transactions.attributedUserId,
     })
     .from(transactions)
     .innerJoin(accounts, eq(accounts.id, transactions.accountId))
@@ -328,6 +334,8 @@ export function taxDetailRows(year: number, viewer: Viewer): TaxDetailRow[] {
     .orderBy(asc(transactions.date), asc(transactions.id), asc(transactionSplits.id))
     .all();
 
+  const own = ownerScope(viewer);
+
   // One people read for the whole year, not one per row.
   const names = new Map(getDb().select({ id: users.id, name: users.name }).from(users).all().map((user) => [user.id, user.name]));
 
@@ -335,12 +343,14 @@ export function taxDetailRows(year: number, viewer: Viewer): TaxDetailRow[] {
     const category = row.categoryId === null ? undefined : byId.get(row.categoryId);
     if (!category) return [];
     const description = row.displayDescription !== null && row.displayDescription.length > 0 ? row.displayDescription : row.rawDescription;
+    // A self viewer reaches a charge that is not theirs only through a part of theirs.
+    const othersCharge = own !== null && row.ownerId !== own;
     return [
       {
         txnId: row.txnId,
         splitId: row.splitId,
         date: row.date,
-        accountName: row.accountName,
+        accountName: othersCharge ? OTHER_ACCOUNT_LABEL : row.accountName,
         description,
         categoryId: category.id,
         categoryPath: path(category),
@@ -348,7 +358,7 @@ export function taxDetailRows(year: number, viewer: Viewer): TaxDetailRow[] {
         personId: row.personId,
         personName: row.personId === null ? UNATTRIBUTED_LABEL : (names.get(row.personId) ?? UNATTRIBUTED_LABEL),
         amountCents: row.amountCents,
-        note: row.partNote ?? row.transactionNote ?? null,
+        note: othersCharge ? row.partNote : (row.partNote ?? row.transactionNote ?? null),
       },
     ];
   });

@@ -1016,7 +1016,8 @@ describe('transactionsCsv: a split part person (v1.63.0)', () => {
     expect(csv.trim().split('\r\n')).toEqual([
       HEADER,
       '2026-03-12,Joint chequing,FUEL STOP 12,FUEL STOP 12,-61.30,Transport,Sam,no,manual,',
-      '2026-03-09,Joint chequing,MAPLE GROCER (split 1/1),MAPLE GROCER,-40.00,Dining,Sam,no,manual,',
+      // v1.63.0 fix round: the charge is Alex's, so its account name does not reach Sam either.
+      '2026-03-09,—,MAPLE GROCER (split 1/1),MAPLE GROCER,-40.00,Dining,Sam,no,manual,',
     ]);
     expect(csv).not.toContain('Alex');
     expect(csv).not.toContain('-150.00');

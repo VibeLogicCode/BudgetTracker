@@ -379,3 +379,64 @@ describe('saveSplitsAction: a part belongs to a person (v1.63.0)', () => {
     expect(getSplits(f.maple).every((p) => p.personSet === false)).toBe(true);
   });
 });
+
+// v1.63.0 fix round: an editor that cannot choose a person (a self viewer's) posts `keep` for a
+// stored part, and the part keeps the person it has instead of being reset to follow.
+describe('saveSplitsAction: keep (v1.63.0 fix round)', () => {
+  function as(f: SplitPersonFixture, id: number, name: string, role: 'admin' | 'member', visibility: 'household' | 'self') {
+    current = f.t;
+    currentUser = { id, name, username: name.toLowerCase(), role, visibility };
+  }
+
+  it("a self viewer's re-save keeps a part set to himself set, not following", async () => {
+    const f = buildSplitPersonFixture();
+    as(f, f.sam, 'Sam', 'member', 'self');
+    await saveSplitsAction({}, formData({ txnId: String(f.fuel), parts: JSON.stringify([
+      { categoryId: f.transport, amountCents: -3000, person: 'follow' },
+      { categoryId: f.dining, amountCents: -3130, person: f.sam },
+    ]) }));
+    const [transport, dining] = getSplits(f.fuel);
+    const result = await saveSplitsAction({}, formData({ txnId: String(f.fuel), parts: JSON.stringify([
+      { categoryId: f.transport, amountCents: -4000, person: 'keep', splitId: transport.id },
+      { categoryId: f.dining, amountCents: -2130, person: 'keep', splitId: dining.id },
+    ]) }));
+    expect(result.error).toBeUndefined();
+    expect(getSplits(f.fuel).map((p) => [p.amountCents, p.personSet, p.attributedUserId])).toEqual([
+      [-4000, false, null],
+      [-2130, true, f.sam],
+    ]);
+  });
+
+  it("keep holds a household viewer's stored people too, and an id that is not this charge's part reads as follow", async () => {
+    const f = buildSplitPersonFixture();
+    as(f, f.alex, 'Alex', 'admin', 'household');
+    const result = await saveSplitsAction({}, formData({ txnId: String(f.maple), parts: JSON.stringify([
+      { categoryId: f.groceries, amountCents: -8000, person: 'keep', splitId: f.parts.groceries },
+      { categoryId: f.dining, amountCents: -4000, person: 'keep', splitId: f.parts.dining },
+      { categoryId: f.supplies, amountCents: -3000, person: 'keep', splitId: 999999 },
+    ]) }));
+    expect(result.error).toBeUndefined();
+    expect(getSplits(f.maple).map((p) => [p.personSet, p.attributedUserId])).toEqual([
+      [false, null],
+      [true, f.sam],
+      [false, null],
+    ]);
+  });
+
+  it("keep gives a self viewer nothing the gates refuse: another charge's part set to him is not his to keep here", async () => {
+    const f = buildSplitPersonFixture();
+    as(f, f.sam, 'Sam', 'member', 'self');
+    // MAPLE GROCER's Dining part is set to Sam; naming it on his own FUEL STOP 12 keeps nothing.
+    const result = await saveSplitsAction({}, formData({ txnId: String(f.fuel), parts: JSON.stringify([
+      { categoryId: f.transport, amountCents: -3000, person: 'keep', splitId: f.parts.dining },
+      { categoryId: f.dining, amountCents: -3130, person: 'follow' },
+    ]) }));
+    expect(result.error).toBeUndefined();
+    expect(getSplits(f.fuel).every((p) => p.personSet === false)).toBe(true);
+    // And his refusal on MAPLE GROCER itself stands, keep or not.
+    const refused = await saveSplitsAction({}, formData({ txnId: String(f.maple), parts: JSON.stringify([
+      { categoryId: f.dining, amountCents: -15000, person: 'keep', splitId: f.parts.dining },
+    ]) }));
+    expect(refused.error).toBe(NOT_YOURS_ERROR);
+  });
+});

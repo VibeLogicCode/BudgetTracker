@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { useActionState, useRef, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { SubmitButton } from '@/components/SubmitButton';
 import { ImportIcon } from '@/components/icons';
@@ -101,6 +101,12 @@ function RestorePanel({
 
 const UPLOAD_URL = '/api/backup/restore-upload';
 const MIB = 1024 * 1024;
+/**
+ * v1.63.0 fix round. From this size the card says, before the upload starts, that checking the file
+ * takes a while and the app pauses meanwhile: the server checks it in one synchronous pass (an
+ * accepted trade-off), so every other page waits for it.
+ */
+const LARGE_UPLOAD_BYTES = 512 * MIB;
 
 const fileInputClass =
   'text-sm text-muted file:mr-3 file:rounded-md file:border-0 file:bg-accent-soft file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-accent-soft-fg';
@@ -172,6 +178,12 @@ function RestoreFromFileCard({
   const [phase, setPhase] = useState<'idle' | 'uploading' | 'checking'>('idle');
   const [sent, setSent] = useState(0);
   const [error, setError] = useState<string | undefined>(undefined);
+  /**
+   * v1.63.0 fix round. What the live region says. Coarse on purpose: the start, every tenth of the
+   * file, then the check -- never each progress event, which would talk over everything else.
+   */
+  const [announcement, setAnnouncement] = useState('');
+  const tenthsAnnounced = useRef(0);
 
   const tooLarge = file !== null && file.size > maxBytes;
   const busy = phase !== 'idle';
@@ -186,13 +198,27 @@ function RestoreFromFileCard({
   function stop(message: unknown, id: string | null) {
     if (id !== null) void send('DELETE', `${UPLOAD_URL}/${encodeURIComponent(id)}`, null, null);
     setError(typeof message === 'string' && message.length > 0 ? message : 'The upload stopped. Nothing was changed.');
+    // The error itself is an alert; the live region goes quiet rather than say it twice.
+    setAnnouncement('');
     setPhase('idle');
+  }
+
+  /** The bytes sent so far, for the bar, and a word for the live region at each new tenth. */
+  function progress(bytes: number, total: number) {
+    setSent(bytes);
+    const tenths = total > 0 ? Math.floor((bytes * 10) / total) : 10;
+    if (tenths > tenthsAnnounced.current && tenths < 10) {
+      tenthsAnnounced.current = tenths;
+      setAnnouncement(`Uploaded ${tenths * 10}%.`);
+    }
   }
 
   async function upload(chosen: File) {
     const total = chosen.size;
     setError(undefined);
     setSent(0);
+    tenthsAnnounced.current = 0;
+    setAnnouncement('Upload started.');
     setPhase('uploading');
 
     const start = await send('POST', UPLOAD_URL, JSON.stringify({ name: chosen.name, bytes: total, confirm: true }), 'application/json');
@@ -209,20 +235,20 @@ function RestoreFromFileCard({
         `${base}?offset=${from}`,
         chosen.slice(from, Math.min(from + chunkBytes, total)),
         'application/octet-stream',
-        (loaded) => setSent(from + loaded),
+        (loaded) => progress(from + loaded, total),
       );
       const received = piece.reply.received;
       const reported = typeof received === 'number' && received >= 0 && received <= total ? received : null;
       if (piece.status === 200 && reported !== null && reported > from) {
         offset = reported;
-        setSent(offset);
+        progress(offset, total);
         retried = false;
         continue;
       }
       // The server already holds more than this piece started from: carry on from there.
       if (piece.status === 409 && reported !== null && reported > from) {
         offset = reported;
-        setSent(offset);
+        progress(offset, total);
         continue;
       }
       // One automatic retry, from wherever the server says the upload stands.
@@ -232,6 +258,7 @@ function RestoreFromFileCard({
     }
 
     setPhase('checking');
+    setAnnouncement('Upload finished. Checking the backup. A large archive can take a few minutes.');
     const finish = await send('POST', base, null, null);
     if (finish.status === 200 && finish.reply.restarting === true) {
       onRestarting(
@@ -273,6 +300,9 @@ function RestoreFromFileCard({
         {file && !tooLarge ? (
           <div className="flex flex-col gap-3 border-l-2 border-warning bg-warning-soft/40 px-4 py-4">
             <RestoreWarnings name={file.name} />
+            {file.size >= LARGE_UPLOAD_BYTES ? (
+              <p className="text-ink">Checking a file this size can take a few minutes, and the app pauses for everyone until it is done.</p>
+            ) : null}
             <FormError message={error} />
             <label className="flex items-center gap-2 text-ink">
               <input
@@ -294,18 +324,29 @@ function RestoreFromFileCard({
                 Upload, restore and restart
               </button>
               {phase === 'uploading' ? (
-                <span className="tabnum text-xs text-muted" aria-live="polite">
-                  Uploading {Math.floor(sent / MIB)} of {Math.ceil(file.size / MIB)} MB
+                <span className="flex items-center gap-2">
+                  <progress
+                    max={file.size}
+                    value={Math.min(sent, file.size)}
+                    aria-label="Upload progress"
+                    className="h-2 w-32 accent-accent"
+                  />
+                  <span className="tabnum text-xs text-muted">
+                    Uploading {Math.floor(sent / MIB)} of {Math.ceil(file.size / MIB)} MB
+                  </span>
                 </span>
               ) : null}
               {phase === 'checking' ? (
-                <span className="text-xs text-muted" aria-live="polite">
-                  Checking the backup. A large archive can take a few minutes.
-                </span>
+                <span className="text-xs text-muted">Checking the backup. A large archive can take a few minutes.</span>
               ) : null}
             </div>
           </div>
         ) : null}
+        {/* Present from the first render, so the first announcement is heard: a live region added
+            at the same moment as its text is often not read at all. */}
+        <p role="status" aria-live="polite" className="sr-only" data-testid="upload-announcer">
+          {announcement}
+        </p>
       </CardBody>
     </Card>
   );

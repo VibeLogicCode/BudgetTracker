@@ -124,8 +124,9 @@ describe('v1.63.0: a self viewer and a split part set to them', () => {
     current = fx.t;
     expect(getTransaction(fx.maple, fx.self(fx.sam))).toBeNull();
     expect(getTransaction(fx.fuel, fx.self(fx.sam))).toMatchObject({ amountCents: -6130, partial: false });
-    // Alex keeps his own charge, read at his share of it.
-    expect(getTransaction(fx.maple, fx.self(fx.alex))).toMatchObject({ amountCents: -8000, partial: true, attributedUserName: 'Alex', parentAmountCents: null });
+    // Fix round: Alex's own charge is read WHOLE -- a server-side read, whose callers (a loan seed,
+    // the over-link warning, a warranty price) need the charge itself, not his share of it.
+    expect(getTransaction(fx.maple, fx.self(fx.alex))).toMatchObject({ amountCents: -15000, attributedUserName: 'Alex' });
     expect(getTransaction(fx.maple, fx.admin)).toMatchObject({ amountCents: -15000, partial: false, parentAmountCents: -15000 });
   });
 
@@ -153,5 +154,76 @@ describe('v1.63.0: a self viewer and a split part set to them', () => {
     expect(sam.outCents).toBe(-6130);
     const alex = listTransactions({}, fx.self(fx.alex));
     expect(alex.rows.map((row) => [row.id, row.amountCents, row.partial])).toEqual([[fx.maple, -15000, false]]);
+  });
+});
+
+/**
+ * v1.63.0 fix round. What a self viewer receives of a row they reach only through a part, and the
+ * amount search and sort under a person scope.
+ */
+describe('v1.63.0 fix round: rows reached through a part, and the share in search and sort', () => {
+  let current: TestDb | null = null;
+  afterEach(() => {
+    current?.cleanup();
+    current = null;
+  });
+
+  it('a self viewer gets no note, account name or person id on a row that is not theirs, and keeps their own', () => {
+    const fx = buildSplitPersonFixture();
+    current = fx.t;
+    updateTransactionNotes(fx.maple, 'reimburse from the trip fund');
+    updateTransactionNotes(fx.fuel, 'work trip');
+    const rows = listTransactions({}, fx.self(fx.sam)).rows;
+    expect(rows.find((row) => row.id === fx.maple)).toMatchObject({ notes: null, attributedUserId: null, attributedUserName: null, accountName: '—' });
+    expect(rows.find((row) => row.id === fx.fuel)).toMatchObject({ notes: 'work trip', attributedUserId: fx.sam, accountName: 'Joint chequing' });
+    expect(getTransactionShare(fx.maple, fx.self(fx.sam))).toMatchObject({ notes: null, attributedUserId: null, accountName: '—' });
+    expect(JSON.stringify(rows)).not.toContain('trip fund');
+    // A household viewer, person filter or not, still reads every field.
+    expect(listTransactions({ attributedUserId: fx.sam }, fx.admin).rows.find((row) => row.id === fx.maple)).toMatchObject({
+      notes: 'reimburse from the trip fund',
+      attributedUserId: fx.alex,
+      accountName: 'Joint chequing',
+    });
+  });
+
+  function withSharedBill(fx: ReturnType<typeof buildSplitPersonFixture>): number {
+    const bill = fx.add({ date: '2026-03-15', description: 'HYDRO BILL', amountCents: -30000, categoryId: fx.groceries, person: fx.alex });
+    setTransactionSplits({
+      txnId: bill,
+      parts: [
+        { categoryId: fx.groceries, amountCents: -27000, person: 'follow' },
+        { categoryId: fx.dining, amountCents: -3000, person: fx.sam },
+      ],
+      userId: fx.alex,
+    });
+    return bill;
+  }
+
+  it('an amount search under a person scope matches the share the row shows, not the whole charge', () => {
+    const fx = buildSplitPersonFixture();
+    current = fx.t;
+    const bill = withSharedBill(fx);
+    const scopes: [Record<string, number>, Viewer][] = [
+      [{ attributedUserId: fx.sam }, fx.admin],
+      [{}, fx.self(fx.sam)],
+    ];
+    for (const [filter, viewer] of scopes) {
+      expect(listTransactions({ ...filter, search: '30.00' }, viewer).rows.map((row) => [row.id, row.amountCents])).toEqual([[bill, -3000]]);
+      expect(listTransactions({ ...filter, search: '300' }, viewer).rows).toEqual([]);
+    }
+    // With no person scope the whole charge is what shows, and what an amount search finds.
+    expect(listTransactions({ search: '300' }, fx.admin).rows.map((row) => row.id)).toEqual([bill]);
+  });
+
+  it('the amount sort under a person scope orders by the share', () => {
+    const fx = buildSplitPersonFixture();
+    current = fx.t;
+    const bill = withSharedBill(fx);
+    // Sam's shares: HYDRO BILL -30.00, MAPLE GROCER -40.00, FUEL STOP 12 -61.30. The whole charges
+    // (-300.00, -150.00, -61.30) put them in the opposite order.
+    const expected = [bill, fx.maple, fx.fuel];
+    expect(listTransactions({ attributedUserId: fx.sam, sort: 'amount', direction: 'desc' }, fx.admin).rows.map((row) => row.id)).toEqual(expected);
+    expect(listTransactions({ sort: 'amount', direction: 'desc' }, fx.self(fx.sam)).rows.map((row) => row.id)).toEqual(expected);
+    expect(listTransactions({ sort: 'amount', direction: 'asc' }, fx.self(fx.sam)).rows.map((row) => row.id)).toEqual([...expected].reverse());
   });
 });

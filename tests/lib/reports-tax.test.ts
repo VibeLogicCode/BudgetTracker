@@ -492,4 +492,21 @@ describe('v1.63.0: taxDetailRows', () => {
     fx.t.sqlite.prepare('update categories set tax_relevant = 0').run();
     expect(taxDetailRows(2026, fx.viewers.admin)).toEqual([]);
   });
+
+  it("v1.63.0 fix round: a self viewer's part of someone else's charge carries only the part's note and no account name", () => {
+    fx = buildYearEndFixture();
+    // The flagged Charity part of Alex's COMMUNITY FUND is set to Sam; the charge stays Alex's.
+    fx.t.sqlite.prepare('update transaction_splits set person_set = 1, attributed_user_id = ? where txn_id = ? and category_id = ?').run(fx.sam, fx.txn.fund, fx.charity);
+    fx.t.sqlite.prepare('update transactions set notes = ? where id = ?').run('Annual pledge', fx.txn.fund);
+    const samRow = () => taxDetailRows(2026, fx!.viewers.self(fx!.sam)).find((row) => row.txnId === fx!.txn.fund);
+    expect(samRow()).toMatchObject({ note: null, accountName: '—', personName: 'Sam', amountCents: -6000 });
+    fx.t.sqlite.prepare('update transaction_splits set note = ? where txn_id = ? and category_id = ?').run('Gala ticket', fx.txn.fund, fx.charity);
+    expect(samRow()).toMatchObject({ note: 'Gala ticket', accountName: '—' });
+    // A household viewer still reads the account, and the transaction's note under an empty part note.
+    fx.t.sqlite.prepare('update transaction_splits set note = null where txn_id = ?').run(fx.txn.fund);
+    expect(taxDetailRows(2026, fx.viewers.admin).find((row) => row.txnId === fx!.txn.fund)).toMatchObject({
+      note: 'Annual pledge',
+      accountName: 'Joint chequing',
+    });
+  });
 });

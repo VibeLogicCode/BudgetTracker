@@ -476,4 +476,71 @@ describe('Restore from a file', () => {
     );
     expect((screen.getByLabelText('Backup file to restore') as HTMLInputElement).disabled).toBe(true);
   });
+
+  it('v1.63.0 fix round: a progress bar, and a live region there before the upload that speaks only at coarse steps', async () => {
+    const said: string[] = [];
+    answer = (request) => {
+      if (request.method === 'POST' && request.url === START) return [200, { id: ID, chunkBytes: 1 }];
+      if (request.method === 'PUT') return null; // answered by hand below
+      return [200, restarting];
+    };
+    render(<BackupsClient backups={backups} retention={14} upload={{ maxBytes: 64, chunkBytes: 1 }} restore={noRestore} />);
+    const announcer = screen.getByTestId('upload-announcer');
+    // Present, polite and empty before anything is chosen or sent.
+    expect(announcer.getAttribute('aria-live')).toBe('polite');
+    expect(announcer.textContent).toBe('');
+    const observer = new MutationObserver(() => {
+      if (announcer.textContent) said.push(announcer.textContent);
+    });
+    observer.observe(announcer, { childList: true, subtree: true, characterData: true });
+
+    chooseFile(fileOf(20));
+    expect(screen.getByTestId('upload-announcer')).toBe(announcer);
+    startUpload();
+
+    // Twenty one-byte pieces, each answered with its progress event first.
+    for (let index = 0; index < 20; index += 1) {
+      const piece = await waitFor(() => {
+        const found = requests.find((request) => request.method === 'PUT' && offsetOf(request) === index);
+        expect(found).toBeTruthy();
+        return found!;
+      });
+      if (index === 10) {
+        const bar = screen.getByRole('progressbar', { name: 'Upload progress' }) as HTMLProgressElement;
+        expect(bar.tagName).toBe('PROGRESS');
+        expect(bar.max).toBe(20);
+        expect(bar.value).toBe(10);
+        expect(screen.getByText('Uploading 0 of 1 MB')).toBeTruthy();
+      }
+      act(() => piece.respond(200, { received: index + 1 }));
+    }
+    expect(await screen.findByText(restarting.message)).toBeTruthy();
+    observer.disconnect();
+
+    expect(said).toEqual([
+      'Upload started.',
+      'Uploaded 10%.',
+      'Uploaded 20%.',
+      'Uploaded 30%.',
+      'Uploaded 40%.',
+      'Uploaded 50%.',
+      'Uploaded 60%.',
+      'Uploaded 70%.',
+      'Uploaded 80%.',
+      'Uploaded 90%.',
+      'Upload finished. Checking the backup. A large archive can take a few minutes.',
+    ]);
+  });
+
+  it('v1.63.0 fix round: says before a large upload that checking it pauses the app, and not before a small one', () => {
+    render(<BackupsClient backups={backups} retention={14} upload={limits} restore={noRestore} />);
+    chooseFile(fileOf(10));
+    expect(screen.queryByText(/the app pauses/)).toBeNull();
+    const large = fileOf(10, 'budget-2026-08-17.tar.gz');
+    Object.defineProperty(large, 'size', { value: 600 * MIB });
+    chooseFile(large);
+    expect(
+      screen.getByText('Checking a file this size can take a few minutes, and the app pauses for everyone until it is done.'),
+    ).toBeTruthy();
+  });
 });

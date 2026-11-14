@@ -1,9 +1,10 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
-import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
+import { categoryIdByName, createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
 import { createLoanFromTransaction, paymentLinksForTransaction } from '@/lib/loans';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { LOAN_TYPE_UNAVAILABLE_ERROR } from '@/lib/warranty/constants';
+import { setTransactionSplits } from '@/lib/splits';
 import type { Viewer } from '@/lib/auth/viewer';
 
 const NOW = '2026-08-28T12:00:00.000Z';
@@ -250,5 +251,32 @@ describe('createLoanFromTransaction — rollback (ruling A4)', () => {
     const { db, viewer } = setup();
     expect(() => createLoanFromTransaction({ txnId: 999_999, name: 'Ghost', direction: 'lent' }, viewer)).toThrow();
     expect(loanItems(db)).toEqual([]);
+  });
+});
+
+/**
+ * v1.63.0 fix round. getTransaction read a self viewer's own row at their SHARE, so a loan opened
+ * from a payment half set to someone else was seeded from half the charge while
+ * assignTransactionToLoan applied all of it: the loan opened at $0.
+ */
+describe('createLoanFromTransaction — a split payment with a part set to someone else (v1.63.0)', () => {
+  it("a self viewer's owed loan opens at the whole payment, not at zero", () => {
+    const { db, accountId, userId } = setup();
+    const sam = insertTestUser(db.db, { username: 'sam' });
+    const txnId = addTxn(db, accountId, userId, -50_000, { attributedUserId: userId, description: 'LOAN PAYMENT 0417' });
+    const other = categoryIdByName(db.db, 'Groceries');
+    setTransactionSplits({
+      txnId,
+      parts: [
+        { categoryId: other, amountCents: -25_000, person: 'follow' },
+        { categoryId: other, amountCents: -25_000, person: sam },
+      ],
+      userId,
+    });
+    const selfViewer: Viewer = { id: userId, role: 'member', visibility: 'self' };
+    const result = createLoanFromTransaction({ txnId, name: 'Car loan', direction: 'owed' }, selfViewer);
+    expect(result.appliedCents).toBe(50_000);
+    expect(result.balanceAfterCents).toBe(50_000);
+    expect(loanItems(db)[0]!.balance).toBe(50_000);
   });
 });

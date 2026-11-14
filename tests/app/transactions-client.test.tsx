@@ -5496,4 +5496,23 @@ describe('A split part belongs to a person (v1.63.0)', () => {
     expect(scope.queryByRole('button', { name: /^Actions for/ })).toBeNull();
     expect(scope.getByText('Split · 1 part')).toBeTruthy();
   });
+
+  it("self view (fix round): their own part reads You and anyone else's Someone else, never Someone", () => {
+    render(
+      <TransactionsClient
+        // The row as the page now sends it for a charge that is not theirs: no person id, no name.
+        page={pageWithRow({ ...alexRow, amountCents: -4000, attributedUserId: null, attributedUserName: null, partial: true })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={categories}
+        people={[]}
+        today="2026-03-09"
+        splits={{ 1: [sharedParts[1], { ...sharedParts[1], id: 503, categoryId: 42, attributedUserId: 9 }] }}
+        selfScoped
+        viewerId={5}
+      />,
+    );
+    const scope = rowScope();
+    expect(scope.getByText('Dining · You · Groceries · Someone else')).toBeTruthy();
+    expect(scope.queryByText(/Someone(?! else)/)).toBeNull();
+  });
 });

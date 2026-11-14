@@ -32,9 +32,11 @@ interface SplitPartDraft {
   note: string;
   /** The person select's value: 'follow', 'household' or a user id as text. */
   person: string;
+  /** v1.63.0 fix round. The stored part this draft was seeded from, or null for a part added here. */
+  splitId: number | null;
 }
 
-const blankSplitPart = (): SplitPartDraft => ({ categoryId: '', amount: '', note: '', person: 'follow' });
+const blankSplitPart = (): SplitPartDraft => ({ categoryId: '', amount: '', note: '', person: 'follow', splitId: null });
 
 const personValue = (person: SplitPerson): string => String(person);
 
@@ -68,8 +70,10 @@ export function SplitDialog({
    */
   categories: CategoryLike[];
   /**
-   * v1.63.0. Who a part can belong to. Null (a self-scoped viewer) shows no person select and every
-   * part follows the transaction.
+   * v1.63.0. Who a part can belong to. Null (a self-scoped viewer) shows no person select: a part
+   * added here follows the transaction, and a stored part posts `keep` with its own id, so
+   * saveSplitsAction keeps whatever person it already has (fix round: it used to post `follow`,
+   * resetting it).
    */
   people?: { id: number; name: string }[] | null;
   /** The transaction's own person, for the 'Same as the transaction' choice; null reads as Household. */
@@ -86,6 +90,7 @@ export function SplitDialog({
           amount: (Math.abs(part.amountCents) / 100).toFixed(2),
           note: part.note ?? '',
           person: personValue(splitPersonOf(part)),
+          splitId: part.id,
         }))
       : [blankSplitPart(), blankSplitPart()],
   );
@@ -113,12 +118,15 @@ export function SplitDialog({
   // A blank row added by "Add a part" and never given a category is dropped rather than
   // submitted (and left out of the remainder math below) -- it was never really a part.
   const activeSplitParts = parts.filter((part) => part.categoryId !== '');
-  const splitPartsPayload = activeSplitParts.map((part) => ({
-    categoryId: Number(part.categoryId),
-    amountCents: draftPartCents(part),
-    note: part.note.trim() === '' ? null : part.note.trim(),
-    person: people === null ? 'follow' : part.person === 'follow' || part.person === 'household' ? part.person : Number(part.person),
-  }));
+  const splitPartsPayload = activeSplitParts.map((part) => {
+    const base = {
+      categoryId: Number(part.categoryId),
+      amountCents: draftPartCents(part),
+      note: part.note.trim() === '' ? null : part.note.trim(),
+    };
+    if (people === null) return part.splitId === null ? { ...base, person: 'follow' } : { ...base, person: 'keep', splitId: part.splitId };
+    return { ...base, person: part.person === 'follow' || part.person === 'household' ? part.person : Number(part.person) };
+  });
   const splitRemainderCents = target.amountCents - sumCents(activeSplitParts.map(draftPartCents));
 
   return (

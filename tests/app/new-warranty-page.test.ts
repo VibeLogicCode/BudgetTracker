@@ -3,8 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { sql } from 'drizzle-orm';
-import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
+import { categoryIdByName, createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 import { nowIso } from '@/lib/clock';
+import { setTransactionSplits } from '@/lib/splits';
 
 /**
  * v1.13.0 fix round 1 (controller ruling). `src/app/(app)/warranties/new/page.tsx` used to call
@@ -91,6 +92,25 @@ describe('NewWarrantyPage prefill', () => {
       searchParams: Promise.resolve({ transactionId: String(txnId) }),
     })) as unknown as NewWarrantyClientElement;
     expect(element.props.prefill).toMatchObject({ transactionId: txnId });
+  });
+
+  it('v1.63.0 fix round: a self viewer prefills the whole price of their own charge, even with a part set to someone else', async () => {
+    const txnId = insertTransaction(otherId);
+    const groceries = categoryIdByName(current!.db, 'Groceries');
+    setTransactionSplits({
+      txnId,
+      parts: [
+        { categoryId: groceries, amountCents: -100000, person: 'follow' },
+        { categoryId: groceries, amountCents: -29999, person: ownerId },
+      ],
+      userId: otherId,
+    });
+    currentUser = { id: otherId, name: 'Bob', username: 'bob', role: 'member', visibility: 'self' };
+
+    const element = (await NewWarrantyPage({
+      searchParams: Promise.resolve({ transactionId: String(txnId) }),
+    })) as unknown as NewWarrantyClientElement;
+    expect(element.props.prefill).toMatchObject({ transactionId: txnId, priceCents: 129999 });
   });
 
   it('an unknown transaction id also renders an empty prefill, not a 404 (unchanged behaviour)', async () => {

@@ -9,6 +9,31 @@ export const dynamic = 'force-dynamic';
 /** The start request is a few dozen bytes of JSON; nothing bigger is read. */
 const START_BODY_MAX_BYTES = 4096;
 
+const tooLarge = () => Response.json({ error: 'That request is too large.' }, { status: 413 });
+
+/**
+ * v1.63.0 fix round. The body as text, read up to `max` bytes and no further: null when it is
+ * longer. The declared length alone is not enough -- a chunked request declares none -- so the
+ * read itself stops at the cap, whatever the headers say.
+ */
+async function readCapped(request: Request, max: number): Promise<string | null> {
+  if (request.body === null) return '';
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 const startSchema = z.object({
   name: z.string().trim().min(1).max(255),
   bytes: z.number().int().nonnegative(),
@@ -33,13 +58,19 @@ export async function POST(request: Request): Promise<Response> {
   const user = gate(request);
   if (user instanceof Response) return user;
 
-  const declared = Number(request.headers.get('content-length') ?? '');
-  if (Number.isFinite(declared) && declared > START_BODY_MAX_BYTES) {
-    return Response.json({ error: 'That request is too large.' }, { status: 413 });
+  // A declared length over the cap is refused before anything is read; the read is capped anyway.
+  const declared = request.headers.get('content-length');
+  if (declared !== null && Number(declared) > START_BODY_MAX_BYTES) return tooLarge();
+  let text: string | null;
+  try {
+    text = await readCapped(request, START_BODY_MAX_BYTES);
+  } catch {
+    return Response.json({ error: 'That request was not valid JSON.' }, { status: 400 });
   }
+  if (text === null) return tooLarge();
   let body: unknown;
   try {
-    body = await request.json();
+    body = JSON.parse(text);
   } catch {
     return Response.json({ error: 'That request was not valid JSON.' }, { status: 400 });
   }

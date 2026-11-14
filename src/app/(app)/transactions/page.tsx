@@ -274,7 +274,13 @@ export default async function TransactionsPage({
         }
         return [...byItem.values()];
       })()}
-      loanLinks={Object.fromEntries(loanLinksForTransactions(page.rows.map((row) => row.id)))}
+      // v1.63.0 fix round: a self viewer gets no loan link on a row they reach only through a part
+      // of theirs -- its loan's name, amount and what it moved are the transaction's person's.
+      loanLinks={(() => {
+        const own = ownerScope(viewer);
+        const ids = page.rows.filter((row) => own === null || row.attributedUserId === own).map((row) => row.id);
+        return Object.fromEntries(loanLinksForTransactions(ids));
+      })()}
       // v1.63.0 (S4): a self viewer receives only the parts that are theirs, so another person's
       // category and amount never reach them. A household viewer receives every part.
       splits={(() => {
