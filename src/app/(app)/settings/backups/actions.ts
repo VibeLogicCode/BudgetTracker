@@ -7,9 +7,8 @@ import { CROSS_ORIGIN_ERROR, isSameOrigin } from '@/lib/auth/csrf';
 import { requireAdmin } from '@/lib/auth/session';
 import { pruneBackups, runNightlyJob, setBackupRetention } from '@/lib/backup';
 import { ARCHIVE_NAME_RE, LEGACY_NAME_RE } from '@/lib/backup/archive';
-import { RESTART_DELAY_MS, RESTART_EXIT_CODE, stageRestore } from '@/lib/backup/restore';
-import { closeDb } from '@/db/client';
-import { stopScheduler } from '@/lib/scheduler';
+import { stageRestore } from '@/lib/backup/restore';
+import { armRestart } from '@/lib/backup/restart';
 
 export interface BackupActionState {
   error?: string;
@@ -91,21 +90,4 @@ export async function stageRestoreAction(
     restarting: true,
     message: `Restoring ${request.sourceName} — the app will restart. Refresh this page in about 30 seconds.`,
   };
-}
-
-/**
- * MUST-20.28. Armed only AFTER stageRestoreAction has its return value ready — the caller
- * arms this and then returns, so the exit can never pre-empt the HTTP response. unref()'d: the
- * listening HTTP server keeps the event loop alive on its own, so an unref'd timer still fires;
- * and if the process were already exiting for some other reason, being unref'd is exactly what
- * stops this timer from delaying that.
- */
-function armRestart(): void {
-  setTimeout(() => {
-    stopScheduler();
-    // MUST-20.29: checkpoints and removes the WAL, so the safety copy the boot hook takes is
-    // one self-contained file rather than a database plus a log that must travel with it.
-    closeDb();
-    process.exit(RESTART_EXIT_CODE);
-  }, RESTART_DELAY_MS).unref();
 }

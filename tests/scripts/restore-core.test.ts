@@ -11,6 +11,7 @@ import {
   readAppliedMigrations,
   readLocalMigrations,
   restoreFromArtifact,
+  sha256File,
   validateArtifact,
   verifyArchive,
 } from '../../scripts/restore-core.ts';
@@ -591,5 +592,41 @@ describe('verifyArchive: the check a new backup must pass before it replaces any
     const junk = path.join(work, 'junk.tar.gz');
     fs.writeFileSync(junk, Buffer.alloc(64, 0x41));
     expect(() => verifyArchive(junk, path.join(work, 'verify-junk'))).toThrowError(RestoreError);
+  });
+});
+
+/**
+ * v1.63.0 C1. The checksum staging and the boot hook record and compare reads the file in pieces:
+ * fs.readFileSync held the whole archive in memory and refuses anything over 2 GiB, so a large
+ * backup could not be restored through the app at all.
+ */
+describe('sha256File streams the file', () => {
+  const hashOf = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
+
+  it('hashes a 3 MiB file like createHash over its bytes, without reading it whole', () => {
+    // Not a multiple of the 1 MiB read size, so the last piece is a short one.
+    const bytes = Buffer.alloc(3 * 1024 * 1024 + 17);
+    for (let i = 0; i < bytes.length; i += 1) bytes[i] = (i * 31 + 7) & 0xff;
+    const file = path.join(work, 'three-mib.bin');
+    fs.writeFileSync(file, bytes);
+    const spy = vi.spyOn(fs, 'readFileSync');
+    try {
+      expect(sha256File(file)).toBe(hashOf(bytes));
+      expect(spy.mock.calls.filter(([target]) => String(target) === file)).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('hashes an empty file like createHash over no bytes', () => {
+    const file = path.join(work, 'empty.bin');
+    fs.writeFileSync(file, Buffer.alloc(0));
+    const spy = vi.spyOn(fs, 'readFileSync');
+    try {
+      expect(sha256File(file)).toBe(hashOf(Buffer.alloc(0)));
+      expect(spy.mock.calls.filter(([target]) => String(target) === file)).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

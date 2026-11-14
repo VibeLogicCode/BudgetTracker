@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup, fireEvent, screen, within } from '@testing-library/react';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { act, render, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { RestoreOutcome } from '@/lib/backup/restore';
 import { BackupsClient } from '@/app/(app)/settings/backups/backups-client';
 
@@ -20,10 +20,12 @@ const backups = [
   { name: 'budget-2026-08-15.tar.gz', bytes: 4_100_000, modifiedAt: '2026-08-15T06:00:00.000Z' },
 ];
 const noRestore = { staged: null, result: null };
+/** v1.63.0: the page passes the restore upload's limits; these are the real ones. */
+const limits = { maxBytes: 4 * 1024 * 1024 * 1024, chunkBytes: 8 * 1024 * 1024 };
 
 describe('MUST-20.35: the confirm step', () => {
   it('names the backup and keeps the submit disabled until the box is ticked', () => {
-    render(<BackupsClient backups={backups} retention={14} restore={noRestore} />);
+    render(<BackupsClient backups={backups} retention={14} upload={limits} restore={noRestore} />);
 
     const row = screen.getByText('budget-2026-08-16.tar.gz').closest('li')!;
     fireEvent.click(within(row).getByRole('button', { name: /^restore$/i }));
@@ -48,7 +50,7 @@ describe('MUST-20.35: the confirm step', () => {
   });
 
   it('opens at most one panel at a time and Cancel collapses it', () => {
-    render(<BackupsClient backups={backups} retention={14} restore={noRestore} />);
+    render(<BackupsClient backups={backups} retention={14} upload={limits} restore={noRestore} />);
     fireEvent.click(screen.getAllByRole('button', { name: /^restore$/i })[0]);
     fireEvent.click(screen.getAllByRole('button', { name: /^restore$/i })[0]);
     expect(screen.getAllByRole('checkbox')).toHaveLength(1);
@@ -57,7 +59,7 @@ describe('MUST-20.35: the confirm step', () => {
   });
 
   it('unchecking the box after ticking it disables the submit button again', () => {
-    render(<BackupsClient backups={backups} retention={14} restore={noRestore} />);
+    render(<BackupsClient backups={backups} retention={14} upload={limits} restore={noRestore} />);
     fireEvent.click(screen.getAllByRole('button', { name: /^restore$/i })[0]);
     const checkbox = screen.getByRole('checkbox');
     const submit = screen.getByRole('button', { name: /restore and restart/i }) as HTMLButtonElement;
@@ -70,7 +72,7 @@ describe('MUST-20.35: the confirm step', () => {
 
 describe('MUST-20.30: the restarting notice', () => {
   it('replaces the page after a successful submit and leaves nothing to click', async () => {
-    render(<BackupsClient backups={backups} retention={14} restore={noRestore} />);
+    render(<BackupsClient backups={backups} retention={14} upload={limits} restore={noRestore} />);
 
     fireEvent.click(screen.getAllByRole('button', { name: /^restore$/i })[0]);
     fireEvent.click(screen.getByRole('checkbox'));
@@ -85,7 +87,7 @@ describe('MUST-20.30: the restarting notice', () => {
     render(
       <BackupsClient
         backups={backups}
-        retention={14}
+        retention={14} upload={limits}
         restore={{
           staged: {
             version: 1,
@@ -129,7 +131,7 @@ describe('MUST-20.35: the result banner', () => {
       receiptsTouched: 0,
       error: null,
     };
-    render(<BackupsClient backups={backups} retention={14} restore={{ staged: null, result }} />);
+    render(<BackupsClient backups={backups} retention={14} upload={limits} restore={{ staged: null, result }} />);
     expect(screen.getByText(/Restored budget-2026-08-16\.tar\.gz/)).toBeTruthy();
     expect(screen.getByText(/128 receipt files/)).toBeTruthy();
     expect(screen.getByText(/budget\.pre-restore-2026-08-16T21-04-49-772Z\.db/)).toBeTruthy();
@@ -153,7 +155,7 @@ describe('MUST-20.35: the result banner', () => {
       receiptsTouched: 0,
       error: 'The archive contains no budget.db.',
     } satisfies RestoreOutcome;
-    render(<BackupsClient backups={backups} retention={14} restore={{ staged: null, result }} />);
+    render(<BackupsClient backups={backups} retention={14} upload={limits} restore={{ staged: null, result }} />);
     expect(screen.getByText('The archive contains no budget.db.')).toBeTruthy();
   });
 });
@@ -164,7 +166,7 @@ describe('the last backup failure', () => {
     render(
       <BackupsClient
         backups={backups}
-        retention={14}
+        retention={14} upload={limits}
         restore={noRestore}
         health={{
           lastBackupAt: '2026-08-16T06:00:00.000Z',
@@ -182,11 +184,296 @@ describe('the last backup failure', () => {
     render(
       <BackupsClient
         backups={backups}
-        retention={14}
+        retention={14} upload={limits}
         restore={noRestore}
         health={{ lastBackupAt: '2026-08-16T06:00:00.000Z', ageHours: 7, state: 'ok', failureReason: null }}
       />,
     );
     expect(screen.queryByText(/The last backup failed/)).toBeNull();
+  });
+});
+
+/**
+ * v1.63.0 C6: Restore from a file. The upload goes through XMLHttpRequest (for progress), so the
+ * tests swap in a fake one that records every request and answers it on the test's terms.
+ */
+describe('Restore from a file', () => {
+  const MIB = 1024 * 1024;
+  const ID = '0b9d2c4e-7f1a-4c3b-9e8d-5a6b7c8d9e0f';
+  const START = '/api/backup/restore-upload';
+  const SESSION = `${START}/${ID}`;
+
+  interface FakeRequest {
+    method: string;
+    url: string;
+    body: unknown;
+    headers: Record<string, string>;
+    respond: (status: number, reply: unknown) => void;
+    fail: () => void;
+  }
+  type Answer = [number, unknown] | 'network' | null;
+
+  let requests: FakeRequest[] = [];
+  let answer: (request: FakeRequest, index: number) => Answer = () => null;
+
+  class FakeXhr {
+    status = 0;
+    responseText = '';
+    upload: { onprogress: ((event: { loaded: number }) => void) | null } = { onprogress: null };
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    onabort: (() => void) | null = null;
+    private method = '';
+    private url = '';
+    private headers: Record<string, string> = {};
+
+    open(method: string, url: string) {
+      this.method = method;
+      this.url = url;
+    }
+
+    setRequestHeader(name: string, value: string) {
+      this.headers[name.toLowerCase()] = value;
+    }
+
+    send(body: unknown) {
+      const request: FakeRequest = {
+        method: this.method,
+        url: this.url,
+        body,
+        headers: this.headers,
+        respond: (status, reply) => {
+          if (body instanceof Blob) this.upload.onprogress?.({ loaded: body.size });
+          this.status = status;
+          this.responseText = JSON.stringify(reply);
+          this.onload?.();
+        },
+        fail: () => this.onerror?.(),
+      };
+      requests.push(request);
+      const given = answer(request, requests.length - 1);
+      if (given === 'network') setTimeout(() => request.fail(), 0);
+      else if (given !== null) setTimeout(() => request.respond(given[0], given[1]), 0);
+    }
+  }
+
+  const offsetOf = (request: FakeRequest) => Number(new URL(request.url, 'http://nas.local').searchParams.get('offset'));
+  const sizeOf = (request: FakeRequest) => (request.body instanceof Blob ? request.body.size : 0);
+  const sequence = () => requests.map((request) => `${request.method} ${request.url}`);
+
+  function chooseFile(file: File) {
+    fireEvent.change(screen.getByLabelText('Backup file to restore'), { target: { files: [file] } });
+  }
+
+  function fileOf(bytes: number, name = 'budget-2026-08-16.tar.gz'): File {
+    return new File([new Uint8Array(bytes)], name);
+  }
+
+  function startUpload() {
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Upload, restore and restart' }));
+  }
+
+  const restarting = {
+    restarting: true,
+    message: 'Restoring uploaded: budget-2026-08-16.tar.gz. The app will restart. Refresh this page in about 30 seconds.',
+  };
+
+  beforeEach(() => {
+    requests = [];
+    answer = () => null;
+    vi.stubGlobal('XMLHttpRequest', FakeXhr);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('says exactly what the row restore says, from one component', () => {
+    render(<BackupsClient backups={backups} retention={14} upload={limits} restore={noRestore} />);
+    const row = screen.getByText('budget-2026-08-16.tar.gz').closest('li')!;
+    fireEvent.click(within(row).getByRole('button', { name: /^restore$/i }));
+    chooseFile(fileOf(10));
+
+    const warnings = screen.getAllByTestId('restore-warnings');
+    expect(warnings).toHaveLength(2);
+    expect(row.contains(warnings[0])).toBe(true);
+    expect(warnings[1].textContent).toBe(warnings[0].textContent);
+    expect(warnings[1].textContent).toMatch(/replaces all data currently in the app/);
+    expect(warnings[1].textContent).toMatch(/everyone signs in again/);
+  });
+
+  it('names the file and its size, and needs the box ticked', () => {
+    render(<BackupsClient backups={backups} retention={14} upload={limits} restore={noRestore} />);
+    chooseFile(fileOf(3 * MIB));
+    expect(screen.getByText('3 MB', { exact: false })).toBeTruthy();
+    const submit = screen.getByRole('button', { name: 'Upload, restore and restart' }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(submit.disabled).toBe(false);
+  });
+
+  it('refuses a file over the limit before anything is sent', () => {
+    render(<BackupsClient backups={backups} retention={14} upload={{ maxBytes: 8, chunkBytes: 4 }} restore={noRestore} />);
+    chooseFile(fileOf(10, 'too-big.tar.gz'));
+    expect(screen.getByText(/a restore from a file takes at most/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Upload, restore and restart' })).toBeNull();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(requests).toEqual([]);
+  });
+
+  it('starts, sends the pieces in order at their offsets, shows progress, then finishes', async () => {
+    answer = (request) => {
+      if (request.method === 'POST' && request.url === START) return [200, { id: ID, chunkBytes: MIB }];
+      if (request.method === 'PUT') return offsetOf(request) === MIB ? null : [200, { received: offsetOf(request) + sizeOf(request) }];
+      if (request.method === 'POST' && request.url === SESSION) return [200, restarting];
+      return [200, {}];
+    };
+    render(<BackupsClient backups={backups} retention={14} upload={{ maxBytes: 64 * MIB, chunkBytes: MIB }} restore={noRestore} />);
+    chooseFile(fileOf(3 * MIB));
+    startUpload();
+
+    const held = await waitFor(() => {
+      const found = requests.find((request) => request.method === 'PUT' && offsetOf(request) === MIB);
+      expect(found).toBeTruthy();
+      return found!;
+    });
+    expect(screen.getByText('Uploading 1 of 3 MB')).toBeTruthy();
+    act(() => held.respond(200, { received: 2 * MIB }));
+
+    expect(await screen.findByText(/Refresh this page in about 30 seconds/)).toBeTruthy();
+    expect(sequence()).toEqual([
+      `POST ${START}`,
+      `PUT ${SESSION}?offset=0`,
+      `PUT ${SESSION}?offset=${MIB}`,
+      `PUT ${SESSION}?offset=${2 * MIB}`,
+      `POST ${SESSION}`,
+    ]);
+    expect(JSON.parse(requests[0].body as string)).toEqual({ name: 'budget-2026-08-16.tar.gz', bytes: 3 * MIB, confirm: true });
+    expect(requests[0].headers['content-type']).toBe('application/json');
+    for (const piece of requests.slice(1, 4)) {
+      expect(piece.headers['content-type']).toBe('application/octet-stream');
+      expect(sizeOf(piece)).toBe(MIB);
+    }
+  });
+
+  it('swaps the page for the restarting notice on success', async () => {
+    answer = (request) => {
+      if (request.method === 'POST' && request.url === START) return [200, { id: ID, chunkBytes: 4 }];
+      if (request.method === 'PUT') return [200, { received: offsetOf(request) + sizeOf(request) }];
+      return [200, restarting];
+    };
+    render(<BackupsClient backups={backups} retention={14} upload={{ maxBytes: 64, chunkBytes: 4 }} restore={noRestore} />);
+    chooseFile(fileOf(10));
+    startUpload();
+
+    expect(await screen.findByText(restarting.message)).toBeTruthy();
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.queryByRole('link')).toBeNull();
+  });
+
+  it('shows a refused archive in the card and drops the upload', async () => {
+    const refusal = 'That file is neither a .tar.gz archive nor a SQLite backup. Nothing was changed.';
+    answer = (request) => {
+      if (request.method === 'POST' && request.url === START) return [200, { id: ID, chunkBytes: 4 }];
+      if (request.method === 'PUT') return [200, { received: offsetOf(request) + sizeOf(request) }];
+      if (request.method === 'POST') return [422, { error: refusal }];
+      return [404, { error: 'That upload was not found. Start it again.' }];
+    };
+    render(<BackupsClient backups={backups} retention={14} upload={{ maxBytes: 64, chunkBytes: 4 }} restore={noRestore} />);
+    chooseFile(fileOf(10));
+    startUpload();
+
+    expect(await screen.findByText(refusal)).toBeTruthy();
+    expect(sequence().at(-1)).toBe(`DELETE ${SESSION}`);
+    expect(screen.getByLabelText('Backup file to restore')).toBeTruthy();
+  });
+
+  it('retries a failed piece once, from where the server says the upload stands', async () => {
+    let failedOnce = false;
+    answer = (request) => {
+      if (request.method === 'POST' && request.url === START) return [200, { id: ID, chunkBytes: 4 }];
+      if (request.method === 'PUT' && offsetOf(request) === 4) {
+        // The piece arrived but the answer was lost: the retry hears that the server is ahead.
+        if (!failedOnce) {
+          failedOnce = true;
+          return 'network';
+        }
+        return [409, { error: 'The upload has 8 bytes so far; send the next piece from there.', received: 8 }];
+      }
+      if (request.method === 'PUT') return [200, { received: offsetOf(request) + sizeOf(request) }];
+      return [200, restarting];
+    };
+    render(<BackupsClient backups={backups} retention={14} upload={{ maxBytes: 64, chunkBytes: 4 }} restore={noRestore} />);
+    chooseFile(fileOf(10));
+    startUpload();
+
+    expect(await screen.findByText(restarting.message)).toBeTruthy();
+    expect(sequence()).toEqual([
+      `POST ${START}`,
+      `PUT ${SESSION}?offset=0`,
+      `PUT ${SESSION}?offset=4`,
+      `PUT ${SESSION}?offset=4`,
+      `PUT ${SESSION}?offset=8`,
+      `POST ${SESSION}`,
+    ]);
+  });
+
+  it('gives up after the one retry, says why and drops the upload', async () => {
+    answer = (request) => {
+      if (request.method === 'POST' && request.url === START) return [200, { id: ID, chunkBytes: 4 }];
+      if (request.method === 'PUT' && offsetOf(request) === 4) return [500, { error: 'The upload could not be handled. Nothing was changed.' }];
+      if (request.method === 'PUT') return [200, { received: offsetOf(request) + sizeOf(request) }];
+      return [200, {}];
+    };
+    render(<BackupsClient backups={backups} retention={14} upload={{ maxBytes: 64, chunkBytes: 4 }} restore={noRestore} />);
+    chooseFile(fileOf(10));
+    startUpload();
+
+    expect(await screen.findByText('The upload could not be handled. Nothing was changed.')).toBeTruthy();
+    expect(sequence()).toEqual([
+      `POST ${START}`,
+      `PUT ${SESSION}?offset=0`,
+      `PUT ${SESSION}?offset=4`,
+      `PUT ${SESSION}?offset=4`,
+      `DELETE ${SESSION}`,
+    ]);
+  });
+
+  it('shows a refused start in the card and sends nothing more', async () => {
+    const lowSpace = 'This restore needs about 3.1 GB free on the data volume; 1.2 GB is free. Nothing was changed.';
+    answer = () => [507, { error: lowSpace }];
+    render(<BackupsClient backups={backups} retention={14} upload={{ maxBytes: 64, chunkBytes: 4 }} restore={noRestore} />);
+    chooseFile(fileOf(10));
+    startUpload();
+
+    expect(await screen.findByText(lowSpace)).toBeTruthy();
+    expect(sequence()).toEqual([`POST ${START}`]);
+  });
+
+  it('is disabled while a restore is staged', () => {
+    render(
+      <BackupsClient
+        backups={backups}
+        retention={14}
+        upload={limits}
+        restore={{
+          staged: {
+            version: 1,
+            payload: 'payload',
+            sourceName: 'uploaded: budget-2026-08-16.tar.gz',
+            kind: 'archive',
+            bytes: 4_194_304,
+            sha256: '0'.repeat(64),
+            appliedMigrations: 4,
+            requestedByUserId: 3,
+            requestedByUsername: 'alex',
+            requestedAt: '2026-08-16T21:04:11.482Z',
+            appVersion: '1.63.0',
+          },
+          result: null,
+        }}
+      />,
+    );
+    expect((screen.getByLabelText('Backup file to restore') as HTMLInputElement).disabled).toBe(true);
   });
 });

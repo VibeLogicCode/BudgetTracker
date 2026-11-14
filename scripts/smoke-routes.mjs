@@ -95,12 +95,14 @@ export const API_GETS = [
   ['/api/warranties/receipts/999999', [401], [404]],
 ];
 
-// The 11 POST-only routes (spec text says twelve; the actual route.ts files under src/app/api
-// export exactly eleven POST handlers with no GET -- verified by grepping every
-// `export (async )?function GET|POST` in src/app/api, not assumed from the review prose).
-// A GET against each still proves the module loaded and the route registered (Next's own
-// 405 for an unimplemented method on an existing route file).
+// The POST-only routes (spec text said twelve when there were eleven route.ts files under
+// src/app/api exporting a POST handler with no GET -- verified by grepping every
+// `export (async )?function GET|POST` in src/app/api, not assumed from the review prose; v1.63.0
+// adds the restore upload's start, the twelfth). A GET against each still proves the module
+// loaded and the route registered (Next's own 405 for an unimplemented method on an existing
+// route file).
 export const POST_ONLY_ROUTES = [
+  '/api/backup/restore-upload',
   '/api/auth/logout',
   '/api/import/preview',
   '/api/import/raw-preview',

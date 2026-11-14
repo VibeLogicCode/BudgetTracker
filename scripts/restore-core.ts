@@ -208,8 +208,29 @@ export function touchReceiptFiles(receiptsPath: string, now: Date): number {
   return touched;
 }
 
+const HASH_CHUNK_BYTES = 1024 * 1024;
+
+/**
+ * v1.63.0: read in 1 MiB pieces, never the whole file. fs.readFileSync held the archive in memory
+ * and refuses any file over 2 GiB, so a large backup could not be staged or revalidated at boot.
+ * Still synchronous: both callers (staging and the boot hook) are synchronous.
+ */
 export function sha256File(filePath: string): string {
-  return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+  const hash = createHash('sha256');
+  const buffer = Buffer.alloc(HASH_CHUNK_BYTES);
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    let position = 0;
+    for (;;) {
+      const read = fs.readSync(fd, buffer, 0, buffer.length, position);
+      if (read === 0) break;
+      hash.update(buffer.subarray(0, read));
+      position += read;
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  return hash.digest('hex');
 }
 
 export interface MigrationCounts {

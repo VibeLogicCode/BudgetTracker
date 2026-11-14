@@ -14,6 +14,19 @@ vi.mock('@/lib/backup/restore', async (importOriginal) => ({
   stageRestore: (...args: unknown[]) => stageRestore(...args),
 }));
 
+// v1.63.0 C5: the restart lives in its own module now (the upload route arms it too). The real one
+// still runs underneath, so the timer and exit-code tests below exercise it unchanged.
+const armRestartCalls = vi.fn();
+vi.mock('@/lib/backup/restart', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/lib/backup/restart')>();
+  return {
+    armRestart: () => {
+      armRestartCalls();
+      real.armRestart();
+    },
+  };
+});
+
 import { stageRestoreAction } from '@/app/(app)/settings/backups/actions';
 
 function form(fields: Record<string, string>): FormData {
@@ -28,6 +41,7 @@ beforeEach(() => {
   headerBag.value = sameOrigin();
   requireAdmin.mockClear();
   stageRestore.mockReset();
+  armRestartCalls.mockClear();
   stageRestore.mockReturnValue({
     sourceName: 'budget-2026-08-16.tar.gz',
     kind: 'archive',
@@ -121,12 +135,25 @@ describe('MUST-20.28: the restart is armed once, after the response', () => {
     }
   });
 
+  it('arms it through the shared restart module, once', async () => {
+    vi.useFakeTimers();
+    try {
+      const state = await stageRestoreAction({}, form({ name: 'budget-2026-08-16.tar.gz', confirm: 'on' }));
+      expect(state.restarting).toBe(true);
+      expect(armRestartCalls).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it('does not arm the timer when validation fails', async () => {
     vi.useFakeTimers();
     try {
       const state = await stageRestoreAction({}, form({ name: 'not-a-backup', confirm: 'on' }));
       expect(state.error).toBeDefined();
       expect(vi.getTimerCount()).toBe(0);
+      expect(armRestartCalls).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

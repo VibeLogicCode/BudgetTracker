@@ -28,6 +28,10 @@ import {
   type RestoreResult,
 } from '../../../scripts/restore-core.ts';
 
+/** Re-exported so src/lib/backup/restore-upload.ts can tell a refusal from a fault without
+ *  importing scripts/ itself: this file stays the one bridge (MUST-20.5). */
+export { RestoreError };
+
 export const RESTART_DELAY_MS = 1500;
 /** EX_TEMPFAIL. Non-zero so an `on-failure` restart policy also brings the container back;
  *  `always` / `unless-stopped` (what docker-compose.yml ships) restart on any exit code. */
@@ -217,7 +221,7 @@ function commitJsonPathOf(dir: string): string {
  * directory entry is best-effort fsync'd afterward (wrapped in its own try/catch: Windows,
  * and some filesystems, refuse to open a directory for reading at all).
  */
-function writeJsonAtomically(target: string, value: unknown): void {
+export function writeJsonAtomically(target: string, value: unknown): void {
   const partial = `${target}.partial`;
   const fd = fs.openSync(partial, 'w');
   try {
@@ -387,62 +391,65 @@ function resolveBackupPath(backupName: string): string {
   throw new RestoreError(`Refusing unsafe backup filename: ${backupName}`);
 }
 
+const ALREADY_STAGED = 'A restore is already staged; restart the app to apply it.';
+/** The directory shape every restore staging directory under DATA_DIR/tmp takes. The nightly
+ *  sweep (purgeStagedFiles) removes an abandoned one by its `-restore` suffix. */
+export const RESTORE_TMP_DIR_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-restore$/;
+/** restore-request.json's sourceName holds at most this many characters (requestSchema). */
+const SOURCE_NAME_MAX = 120;
+const UPLOADED_PREFIX = 'uploaded: ';
+
+function newRestoreTmpDir(): string {
+  return path.join(tempDir(), `${randomUUID()}-restore`);
+}
+
 /**
- * MUST-20.9/20.10/20.14: validate the artifact, build tmp/<uuid>-restore/ (payload
- * hard-linked from backups/, marker written atomically), then commit it with a single
- * rename to restore-staged/ — one atomic filesystem operation is the commit point, so
- * restore-staged/ either does not exist or exists complete.
+ * MUST-20.9/20.10/20.14, shared by a listed backup and an uploaded one (v1.63.0): refuse while a
+ * restore is pending, validate `payload` in full in its own scratch directory, put it in
+ * `stagingPath` as `payload` (a listed backup is hard-linked, an upload is already there), write
+ * the marker atomically, then commit with a single rename to restore-staged/ -- one atomic
+ * filesystem operation is the commit point, so restore-staged/ either does not exist or exists
+ * complete. Any failure removes `stagingPath`.
  */
-export function stageRestore(args: {
-  backupName: string;
-  userId: number;
-  username: string;
-  now?: Date;
-}): RestoreRequest {
-  const now = args.now ?? new Date();
-  const dataDir = readEnv().dataDir;
-
-  if (fs.existsSync(stagedDir()) || fs.existsSync(applyingDir())) {
-    throw new RestoreError('A restore is already staged; restart the app to apply it.');
-  }
-
-  const backupPath = resolveBackupPath(args.backupName);
-  let stats: fs.Stats;
+function stageInto(
+  stagingPath: string,
+  payload: string,
+  sourceName: string,
+  user: { userId: number; username: string },
+  now: Date,
+): RestoreRequest {
   try {
-    stats = fs.statSync(backupPath);
-  } catch {
-    throw new RestoreError(`No such backup: ${args.backupName}`);
-  }
-  if (!stats.isFile()) throw new RestoreError(`No such backup: ${args.backupName}`);
+    if (isRestorePending()) throw new RestoreError(ALREADY_STAGED);
 
-  const validateScratch = path.join(dataDir, 'tmp', `${randomUUID()}-restore`);
-  let report;
-  try {
-    report = validateArtifact(backupPath, { scratchDir: validateScratch, migrationsFolder: migrationsFolder() });
-  } finally {
-    fs.rmSync(validateScratch, { recursive: true, force: true });
-  }
-
-  const stagingPath = path.join(dataDir, 'tmp', `${randomUUID()}-restore`);
-  fs.mkdirSync(stagingPath, { recursive: true });
-  try {
-    const payloadPath = payloadPathOf(stagingPath);
+    const validateScratch = newRestoreTmpDir();
+    let report;
     try {
-      fs.linkSync(backupPath, payloadPath);
-    } catch {
-      fs.copyFileSync(backupPath, payloadPath);
+      report = validateArtifact(payload, { scratchDir: validateScratch, migrationsFolder: migrationsFolder() });
+    } finally {
+      fs.rmSync(validateScratch, { recursive: true, force: true });
+    }
+
+    fs.mkdirSync(stagingPath, { recursive: true });
+    const payloadPath = payloadPathOf(stagingPath);
+    if (path.resolve(payload) !== path.resolve(payloadPath)) {
+      try {
+        fs.linkSync(payload, payloadPath);
+      } catch {
+        fs.copyFileSync(payload, payloadPath);
+      }
     }
 
     const request: RestoreRequest = {
       version: 1,
       payload: 'payload',
-      sourceName: args.backupName,
+      sourceName,
       kind: report.kind,
       bytes: report.bytes,
       sha256: report.sha256,
       appliedMigrations: report.appliedMigrations,
-      requestedByUserId: args.userId,
-      requestedByUsername: args.username,
+      requestedByUserId: user.userId,
+      requestedByUsername: user.username,
       requestedAt: now.toISOString(),
       appVersion: APP_VERSION,
     };
@@ -459,6 +466,64 @@ export function stageRestore(args: {
     fs.rmSync(stagingPath, { recursive: true, force: true });
     throw error;
   }
+}
+
+/** MUST-20.2: a listed backup, by name, from ${DATA_DIR}/backups. */
+export function stageRestore(args: {
+  backupName: string;
+  userId: number;
+  username: string;
+  now?: Date;
+}): RestoreRequest {
+  const now = args.now ?? new Date();
+
+  if (isRestorePending()) throw new RestoreError(ALREADY_STAGED);
+
+  const backupPath = resolveBackupPath(args.backupName);
+  let stats: fs.Stats;
+  try {
+    stats = fs.statSync(backupPath);
+  } catch {
+    throw new RestoreError(`No such backup: ${args.backupName}`);
+  }
+  if (!stats.isFile()) throw new RestoreError(`No such backup: ${args.backupName}`);
+
+  return stageInto(newRestoreTmpDir(), backupPath, args.backupName, { userId: args.userId, username: args.username }, now);
+}
+
+/**
+ * The marker's name for an uploaded file: `uploaded: <name>`, where the browser-supplied name
+ * keeps only `[A-Za-z0-9._ -]` (anything else becomes `_`) and the whole fits the marker's 120.
+ */
+export function uploadedSourceName(originalName: string): string {
+  const safe = originalName.replace(/[^A-Za-z0-9._ -]/g, '_').slice(0, SOURCE_NAME_MAX - UPLOADED_PREFIX.length);
+  return `${UPLOADED_PREFIX}${safe.length > 0 ? safe : '_'}`;
+}
+
+/**
+ * v1.63.0: stages a file uploaded through the browser (src/lib/backup/restore-upload.ts), already
+ * sitting in `uploadDir` as `payload`, through exactly the checks a listed backup passes. The boot
+ * hook then revalidates and applies it like any other staged restore. `uploadDir` must be a
+ * `<uuid>-restore` directory directly under DATA_DIR/tmp; it is removed on any refusal.
+ */
+export function stageUploadedRestore(args: {
+  uploadDir: string;
+  originalName: string;
+  userId: number;
+  username: string;
+  now?: Date;
+}): RestoreRequest {
+  const uploadDir = path.resolve(args.uploadDir);
+  if (path.dirname(uploadDir) !== path.resolve(tempDir()) || !RESTORE_TMP_DIR_RE.test(path.basename(uploadDir))) {
+    throw new RestoreError('Refusing to stage an upload from outside the staging directory. Nothing was changed.');
+  }
+  return stageInto(
+    uploadDir,
+    payloadPathOf(uploadDir),
+    uploadedSourceName(args.originalName),
+    { userId: args.userId, username: args.username },
+    args.now ?? new Date(),
+  );
 }
 
 /**

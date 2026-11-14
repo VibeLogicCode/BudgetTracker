@@ -82,6 +82,54 @@ export async function runApiChecks(runner, baseUrl, validToken) {
   for (const pathname of POST_ONLY_ROUTES) {
     await expectStatus(runner, baseUrl, `api 405     ${pathname}`, pathname, { cookie: validToken }, [405]);
   }
+  await checkRestoreUpload(runner, baseUrl, validToken);
+}
+
+const MIB = 1024 * 1024;
+
+/**
+ * v1.63.0: the restore upload sends 8 MiB pieces because Next clones every body src/proxy.ts runs
+ * on and keeps only the first 10 MB (src/lib/backup/restore-upload.ts). Only a real server can
+ * prove one whole piece survives that clone: start a session, send one 8 MiB piece, expect every
+ * byte received, then cancel. checkNoServerErrors() also looks for the clone's own warning.
+ *
+ * The declared total is one byte over one piece, so the session never finishes. Not 9 MiB: a start
+ * is refused unless three times the total plus 100 MB is free, and the image smoke's /data is a
+ * 128 MiB tmpfs that also holds the database.
+ */
+export async function checkRestoreUpload(runner, baseUrl, validToken) {
+  const headers = { cookie: `${SESSION_COOKIE_NAME}=${validToken}`, origin: baseUrl };
+  const label = 'api restore upload: one 8 MiB piece arrives whole';
+  try {
+    const start = await fetch(`${baseUrl}/api/backup/restore-upload`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'smoke-upload.tar.gz', bytes: 8 * MIB + 1, confirm: true }),
+    });
+    const started = await start.json().catch(() => ({}));
+    if (start.status !== 200 || typeof started.id !== 'string') {
+      runner.record(label, false, `start: expected 200, got ${start.status} ${JSON.stringify(started)}`);
+      return;
+    }
+    const session = `${baseUrl}/api/backup/restore-upload/${started.id}`;
+    try {
+      const piece = await fetch(`${session}?offset=0`, {
+        method: 'PUT',
+        redirect: 'manual',
+        headers: { ...headers, 'content-type': 'application/octet-stream' },
+        body: Buffer.alloc(8 * MIB, 0x5a),
+      });
+      const reply = await piece.json().catch(() => ({}));
+      const ok = piece.status === 200 && reply.received === 8 * MIB;
+      runner.record(label, ok, ok ? `received ${reply.received}` : `expected 200 and received ${8 * MIB}, got ${piece.status} ${JSON.stringify(reply)}`);
+    } finally {
+      const cancel = await fetch(session, { method: 'DELETE', redirect: 'manual', headers });
+      runner.record('api restore upload: cancel', cancel.status === 200, `${cancel.status}`);
+    }
+  } catch (error) {
+    runner.record(label, false, `request failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 export async function checkCspNonce(runner, baseUrl, validToken) {
@@ -104,6 +152,10 @@ export function checkNoServerErrors(runner, stderrBuf) {
     ok,
     ok ? undefined : `${stderrBuf.split('\n').length} line(s) captured, see log above`,
   );
+  // v1.63.0: named on its own so a truncated restore-upload piece reads as exactly that. Next
+  // prints it (console.warn, so stderr) when a body passing through src/proxy.ts outgrows the clone.
+  const truncated = stderrBuf.includes('Request body exceeded');
+  runner.record('no "Request body exceeded" warning from the proxy', !truncated, truncated ? 'see log above' : undefined);
 }
 
 /** Prints and scores the final tally; returns the process exit code the caller should use. */
