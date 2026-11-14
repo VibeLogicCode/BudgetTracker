@@ -7,7 +7,8 @@ import { importMappingSchema, type ImportMapping } from '@/lib/import/mapping';
 import { looksLikeOfx } from '@/lib/import/ofx';
 import { getProfile } from '@/lib/import/presets';
 import { buildPreview } from '@/lib/import/preview';
-import { StagingError, readStagedFile, writeStagedFile } from '@/lib/import/staging';
+import { StagingError, readStagedFile, stagingErrorStatus, writeStagedFile } from '@/lib/import/staging';
+import { readFormOrNull, uploadTooLargeResponse } from '@/lib/upload-limits';
 import { ImportLimitError, MAX_FILE_BYTES } from '@/lib/import/parse';
 
 const bodySchema = z.object({
@@ -70,7 +71,8 @@ export async function POST(request: Request): Promise<Response> {
 
   if (contentType.includes('multipart/form-data')) {
     // First hop: the browser posts the file itself.
-    const form = await request.formData();
+    const form = await readFormOrNull(request);
+    if (form === null) return uploadTooLargeResponse();
     const file = form.get('file');
     if (!(file instanceof File)) return Response.json({ error: 'No file uploaded' }, { status: 400 });
     // content-length can be absent/wrong; the file's own size is
@@ -94,7 +96,13 @@ export async function POST(request: Request): Promise<Response> {
       return Response.json({ error: 'That account only holds a balance you type in.' }, { status: 400 });
     }
     const buf = Buffer.from(await file.arrayBuffer());
-    const stagingId = writeStagedFile(buf);
+    let stagingId: string;
+    try {
+      stagingId = writeStagedFile(buf, user.id);
+    } catch (error) {
+      if (error instanceof StagingError) return Response.json({ error: error.message, code: error.code }, { status: stagingErrorStatus(error) });
+      throw error;
+    }
     payload = {
       stagingId,
       filename: file.name,
@@ -121,11 +129,11 @@ export async function POST(request: Request): Promise<Response> {
   if (parsed.data.profileId === undefined) {
     // No profile is acceptable only for a file that reads as OFX/QFX; a CSV without one is refused.
     try {
-      if (!looksLikeOfx(parsed.data.filename, readStagedFile(parsed.data.stagingId))) {
+      if (!looksLikeOfx(parsed.data.filename, readStagedFile(parsed.data.stagingId, user.id))) {
         return Response.json({ error: 'Choose an import profile for this file.' }, { status: 400 });
       }
     } catch (error) {
-      if (error instanceof StagingError) return Response.json({ error: error.message, code: error.code }, { status: 410 });
+      if (error instanceof StagingError) return Response.json({ error: error.message, code: error.code }, { status: stagingErrorStatus(error) });
       throw error;
     }
     mapping = OFX_PLACEHOLDER_MAPPING;
@@ -150,13 +158,14 @@ export async function POST(request: Request): Promise<Response> {
       accountId: parsed.data.accountId,
       profileId,
       mapping,
+      userId: user.id,
     });
     return Response.json(preview);
   } catch (error) {
     if (error instanceof ImportLimitError) return Response.json({ error: error.message, code: error.code }, { status: 413 });
     // `code` tells the client WHICH 410 this is: 'staged_file_missing' means the bytes were swept
     // or already imported, and the screen offers to choose the file again.
-    if (error instanceof StagingError) return Response.json({ error: error.message, code: error.code }, { status: 410 });
+    if (error instanceof StagingError) return Response.json({ error: error.message, code: error.code }, { status: stagingErrorStatus(error) });
     throw error;
   }
 }

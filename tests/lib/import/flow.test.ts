@@ -56,7 +56,7 @@ describe('commitStagedImport — engine-failure isolation (review finding 2)', (
     runEngineMock.mockImplementation(() => {
       throw new Error('categorizer exploded');
     });
-    const stagingId = writeStagedFile(fixture('td-chequing.csv'));
+    const stagingId = writeStagedFile(fixture('td-chequing.csv'), userId);
     const mapping = getBuiltinPreset('TD Chequing/Debit');
 
     const result = commitStagedImport({ stagingId, filename: 'td.csv', accountId, profileId, mapping, userId });
@@ -73,7 +73,7 @@ describe('commitStagedImport — engine-failure isolation (review finding 2)', (
   it('reports engineFailed: false and the real engine stats on the happy path', () => {
     const { userId, accountId, profileId } = setup();
     runEngineMock.mockImplementation((ids: number[]) => ({ processed: ids.length, categorized: 0, transfers: 1, skipped: 0 }));
-    const stagingId = writeStagedFile(fixture('td-chequing.csv'));
+    const stagingId = writeStagedFile(fixture('td-chequing.csv'), userId);
 
     const result = commitStagedImport({ stagingId, filename: 'td.csv', accountId, profileId, mapping: getBuiltinPreset('TD Chequing/Debit'), userId });
 
@@ -116,7 +116,7 @@ describe('commitStagedImport — F-03: the post-commit balance check', () => {
 
     // First statement: anchors the account at $900.00 on 2026-07-01.
     commitStagedImport({
-      stagingId: writeStagedFile(Buffer.from('2026-07-01,FIRST ROW,-100.00,900.00\n')),
+      stagingId: writeStagedFile(Buffer.from('2026-07-01,FIRST ROW,-100.00,900.00\n'), userId),
       filename: 'first.csv',
       accountId,
       profileId,
@@ -128,7 +128,7 @@ describe('commitStagedImport — F-03: the post-commit balance check', () => {
     // (deliberately wrong) statement claims $800.00 -- a $50.00 gap only the bank's own
     // statement column could catch.
     const result = commitStagedImport({
-      stagingId: writeStagedFile(Buffer.from('2026-07-20,SECOND ROW,-50.00,800.00\n')),
+      stagingId: writeStagedFile(Buffer.from('2026-07-20,SECOND ROW,-50.00,800.00\n'), userId),
       filename: 'second.csv',
       accountId,
       profileId,
@@ -151,7 +151,7 @@ describe('commitStagedImport — F-03: the post-commit balance check', () => {
     const { userId, accountId, profileId } = setup();
 
     commitStagedImport({
-      stagingId: writeStagedFile(Buffer.from('2026-07-01,FIRST ROW,-100.00\n')),
+      stagingId: writeStagedFile(Buffer.from('2026-07-01,FIRST ROW,-100.00\n'), userId),
       filename: 'first.csv',
       accountId,
       profileId,
@@ -159,7 +159,7 @@ describe('commitStagedImport — F-03: the post-commit balance check', () => {
       userId,
     });
     const result = commitStagedImport({
-      stagingId: writeStagedFile(Buffer.from('2026-07-20,SECOND ROW,-50.00\n')),
+      stagingId: writeStagedFile(Buffer.from('2026-07-20,SECOND ROW,-50.00\n'), userId),
       filename: 'second.csv',
       accountId,
       profileId,
@@ -176,7 +176,7 @@ describe('commitStagedImport — fork ordering (review finding 3)', () => {
     const { sqlite, userId, accountId, profileId } = setup();
     const before = listProfiles().length;
     const oversized = Buffer.alloc(MAX_FILE_BYTES + 1, 'a');
-    const stagingId = writeStagedFile(oversized);
+    const stagingId = writeStagedFile(oversized, userId);
     // An edited mapping, which WOULD trigger forkProfileIfBuiltin if reached.
     const edited = { ...getBuiltinPreset('TD Chequing/Debit'), encoding: 'utf-8' as const };
 
@@ -198,7 +198,7 @@ describe('commitStagedImport — ruling R10: an asset account refuses to import 
   it('throws and inserts no transaction row, no import row, for an asset account', () => {
     const { sqlite, userId, profileId } = setup();
     const assetAccountId = createAccount({ name: 'Family Home', institution: '', type: 'asset', ownerUserId: null });
-    const stagingId = writeStagedFile(fixture('td-chequing.csv'));
+    const stagingId = writeStagedFile(fixture('td-chequing.csv'), userId);
 
     expect(() =>
       commitStagedImport({
@@ -242,7 +242,7 @@ describe('commitStagedImport - OFX without a profile', () => {
 
   it('stores a NULL profile_id and leaves the account pointing at whatever it had', () => {
     const { sqlite, userId, accountId } = setup();
-    const stagingId = writeStagedFile(Buffer.from(OFX_STATEMENT, 'utf8'));
+    const stagingId = writeStagedFile(Buffer.from(OFX_STATEMENT, 'utf8'), userId);
 
     const result = commitStagedImport({ stagingId, filename: 'march.qfx', accountId, profileId: null, mapping: null, userId });
 
@@ -253,7 +253,7 @@ describe('commitStagedImport - OFX without a profile', () => {
 
   it('refuses a CSV committed with no profile, and stages nothing', () => {
     const { sqlite, userId, accountId } = setup();
-    const stagingId = writeStagedFile(fixture('td-chequing.csv'));
+    const stagingId = writeStagedFile(fixture('td-chequing.csv'), userId);
 
     expect(() => commitStagedImport({ stagingId, filename: 'td.csv', accountId, profileId: null, mapping: null, userId })).toThrow(
       /profile/,
@@ -287,7 +287,7 @@ describe('commitStagedImport - possible duplicates (v1.61.0)', () => {
   it('leaves out a row the preview ticked', () => {
     const { sqlite, userId, accountId, profileId, csv, key } = withTypedRow();
     const result = commitStagedImport({
-      stagingId: writeStagedFile(csv),
+      stagingId: writeStagedFile(csv, userId),
       filename: 'march.csv',
       accountId,
       profileId,
@@ -303,7 +303,7 @@ describe('commitStagedImport - possible duplicates (v1.61.0)', () => {
   it('imports a row the preview unticked', () => {
     const { sqlite, userId, accountId, profileId, csv, key } = withTypedRow();
     const result = commitStagedImport({
-      stagingId: writeStagedFile(csv),
+      stagingId: writeStagedFile(csv, userId),
       filename: 'march.csv',
       accountId,
       profileId,
@@ -318,7 +318,7 @@ describe('commitStagedImport - possible duplicates (v1.61.0)', () => {
   it('holds a possible duplicate nobody decided on, and counts it nowhere', () => {
     const { sqlite, userId, accountId, profileId, csv } = withTypedRow();
     const result = commitStagedImport({
-      stagingId: writeStagedFile(csv),
+      stagingId: writeStagedFile(csv, userId),
       filename: 'march.csv',
       accountId,
       profileId,
@@ -340,9 +340,9 @@ describe('commitStagedImport - possible duplicates (v1.61.0)', () => {
       '<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20260403120000<TRNAMT>-18.40<FITID>FIT-0400<NAME>CORNER BAKERY</STMTTRN>',
       '</BANKTRANLIST></STMTRS></STMTTRNRS></BANKMSGSRSV1></OFX>',
     ].join('\n');
-    commitStagedImport({ stagingId: writeStagedFile(Buffer.from(qfx, 'utf8')), filename: 'april.qfx', accountId, profileId: null, mapping: null, userId });
+    commitStagedImport({ stagingId: writeStagedFile(Buffer.from(qfx, 'utf8'), userId), filename: 'april.qfx', accountId, profileId: null, mapping: null, userId });
     commitStagedImport({
-      stagingId: writeStagedFile(fixture('td-chequing.csv')),
+      stagingId: writeStagedFile(fixture('td-chequing.csv'), userId),
       filename: 'march.csv',
       accountId,
       profileId,

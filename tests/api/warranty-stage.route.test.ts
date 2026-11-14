@@ -2,12 +2,16 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { sql } from 'drizzle-orm';
 import { createSeededTestDb, insertTestUser, type TestDb } from '../helpers/db';
 import { POST } from '@/app/api/warranties/receipts/stage/route';
 import { SESSION_COOKIE_NAME, createSession } from '@/lib/auth/session';
 import { MAX_FILES_PER_UPLOAD, MAX_RECEIPT_BYTES, receiptTempDir } from '@/lib/warranty/receipts';
 import { UNSUPPORTED_TYPE_MESSAGE } from '@/lib/warranty/sniff';
-import { isOcrJobClaimed, resetOcrQueueForTests } from '@/lib/warranty/ocr/queue';
+import { OCR_QUEUE_MAX_DEPTH, enqueueOcrJob, isOcrJobClaimed, resetOcrQueueForTests } from '@/lib/warranty/ocr/queue';
+import { MAX_STAGED_RECEIPTS_PER_MEMBER, writeStagedReceipt } from '@/lib/warranty/staging';
+import { UPLOAD_BODY_LIMIT_BYTES } from '@/lib/upload-limits';
+import { randomUUID } from 'node:crypto';
 import { setOcrEngineForTests } from '@/lib/warranty/ocr/engine';
 
 let current: TestDb | null = null;
@@ -119,6 +123,54 @@ describe('POST /api/warranties/receipts/stage', () => {
     expect(response.status).toBe(413);
     expect((await response.json()).code).toBe('file_too_large');
     expect(fs.existsSync(receiptTempDir()) ? fs.readdirSync(receiptTempDir()) : []).toEqual([]);
+  });
+
+  it('413s a declared Content-Length over UPLOAD_BODY_LIMIT_BYTES', async () => {
+    const response = await POST(upload([{ name: 'a.jpg', bytes: JPEG }], { contentLength: String(UPLOAD_BODY_LIMIT_BYTES + 1) }));
+    expect(response.status).toBe(413);
+    expect((await response.json()).code).toBe('file_too_large');
+    expect(fs.existsSync(receiptTempDir()) ? fs.readdirSync(receiptTempDir()) : []).toEqual([]);
+  });
+
+  it('413s a body that cannot be read as a form, never a 500', async () => {
+    const request = new Request('http://nas.local:3000/api/warranties/receipts/stage', {
+      method: 'POST',
+      headers: {
+        host: 'nas.local:3000',
+        origin: 'http://nas.local:3000',
+        cookie: `${SESSION_COOKIE_NAME}=${token}`,
+        'content-type': 'multipart/form-data; boundary=----cut',
+      },
+      body: '------cut\r\nContent-Disposition: form-data; name="file"; filename="a.jpg"\r\nContent-Type: image/jpeg\r\n\r\nPARTIAL',
+    });
+    const response = await POST(request);
+    expect(response.status).toBe(413);
+    expect((await response.json()).code).toBe('file_too_large');
+  });
+
+  it('refuses the staged receipt past MAX_STAGED_RECEIPTS_PER_MEMBER before writing it', async () => {
+    const aliceId = current!.db.get<{ id: number }>(sql`select id from users where username = 'alice'`).id;
+    for (let index = 0; index < MAX_STAGED_RECEIPTS_PER_MEMBER; index += 1) writeStagedReceipt(JPEG, 'image/jpeg', aliceId);
+    const before = fs.readdirSync(receiptTempDir()).length;
+    const response = await POST(upload([{ name: 'one-more.jpg', bytes: JPEG, type: 'image/jpeg' }]));
+    expect(response.status).toBe(429);
+    expect((await response.json()).code).toBe('too_many_staged');
+    expect(fs.readdirSync(receiptTempDir()).length).toBe(before);
+
+    // Another member's uploads are their own count.
+    const samToken = createSession(insertTestUser(current!.db, { username: 'sam' })).token;
+    expect((await POST(upload([{ name: 'sam.jpg', bytes: JPEG, type: 'image/jpeg' }], { token: samToken }))).status).toBe(200);
+  });
+
+  it('refuses a stage before writing when the OCR queue is full', async () => {
+    // The first job holds the reader; the rest wait behind it.
+    enqueueOcrJob({ kind: 'staged', stagingId: writeStagedReceipt(JPEG, 'image/jpeg', 999) });
+    for (let index = 0; index < OCR_QUEUE_MAX_DEPTH; index += 1) enqueueOcrJob({ kind: 'staged', stagingId: randomUUID() });
+    const before = fs.readdirSync(receiptTempDir()).length;
+    const response = await POST(upload([{ name: 'a.jpg', bytes: JPEG, type: 'image/jpeg' }]));
+    expect(response.status).toBe(429);
+    expect((await response.json()).code).toBe('reader_busy');
+    expect(fs.readdirSync(receiptTempDir()).length).toBe(before);
   });
 
   it('413s a single oversized part inside an acceptable total, staging NOTHING', async () => {

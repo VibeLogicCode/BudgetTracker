@@ -13,7 +13,7 @@ import { setUserVisibility } from '@/lib/auth/users';
 import { listAudit } from '@/lib/audit';
 import { getBuiltinPreset, getProfileByName } from '@/lib/import/presets';
 import { MAX_FILE_BYTES, MAX_ROWS } from '@/lib/import/parse';
-import { writeStagedFile } from '@/lib/import/staging';
+import { MAX_STAGED_IMPORT_BYTES, stagedFilePath, writeStagedFile } from '@/lib/import/staging';
 
 const fixture = (name: string) => fs.readFileSync(path.join(process.cwd(), 'fixtures', name));
 
@@ -21,6 +21,8 @@ let current: TestDb | null = null;
 let tempDir: string;
 let originalDataDir: string | undefined;
 let token: string;
+/** The signed-in member behind `token`. */
+let aliceId: number;
 let accountId: number;
 let profileId: number;
 
@@ -29,8 +31,8 @@ beforeEach(() => {
   originalDataDir = process.env.DATA_DIR;
   process.env.DATA_DIR = tempDir;
   current = createSeededTestDb();
-  const userId = insertTestUser(current.db, { name: 'Alice', username: 'alice' });
-  token = createSession(userId).token;
+  aliceId = insertTestUser(current.db, { name: 'Alice', username: 'alice' });
+  token = createSession(aliceId).token;
   accountId = createAccount({ name: 'Joint Chequing', institution: 'TD Canada Trust', type: 'chequing', ownerUserId: null });
   profileId = getProfileByName('TD Chequing/Debit')!.id;
 });
@@ -543,7 +545,7 @@ describe('import routes - OFX without a profile', () => {
     );
     expect(fakeResponse.status).toBe(400);
 
-    const staged = writeStagedFile(fixture('td-chequing.csv'));
+    const staged = writeStagedFile(fixture('td-chequing.csv'), aliceId);
     const commitResponse = await commitRoute(
       jsonRequest('http://nas.local:3000/api/import/commit', { stagingId: staged, filename: 'td-chequing.csv', accountId }),
     );
@@ -553,7 +555,7 @@ describe('import routes - OFX without a profile', () => {
 
   /** Fix round: the batch commit takes the same OFX-only exemption, by the same staged-bytes check. */
   it('batch: commits an OFX file with no profile, recording a NULL profile', async () => {
-    const stagingId = writeStagedFile(Buffer.from(OFX_STATEMENT));
+    const stagingId = writeStagedFile(Buffer.from(OFX_STATEMENT), aliceId);
     const response = await batchCommitRoute(
       jsonRequest('http://nas.local:3000/api/import/batch/commit', { files: [{ stagingId, filename: 'march.qfx', accountId }] }),
     );
@@ -566,8 +568,8 @@ describe('import routes - OFX without a profile', () => {
   });
 
   it('batch: still refuses a CSV, or a CSV named .qfx, with no profile', async () => {
-    const csv = writeStagedFile(fixture('td-chequing.csv'));
-    const fake = writeStagedFile(fixture('td-chequing.csv'));
+    const csv = writeStagedFile(fixture('td-chequing.csv'), aliceId);
+    const fake = writeStagedFile(fixture('td-chequing.csv'), aliceId);
     const response = await batchCommitRoute(
       jsonRequest('http://nas.local:3000/api/import/batch/commit', {
         files: [
@@ -612,7 +614,7 @@ describe('import routes - possible duplicates (v1.61.0)', () => {
   });
 
   it('400s a decision key longer than 255 characters, and a list longer than a file can be', async () => {
-    const stagingId = writeStagedFile(fixture('td-chequing.csv'));
+    const stagingId = writeStagedFile(fixture('td-chequing.csv'), aliceId);
     const longKey = await commitRoute(
       jsonRequest('http://nas.local:3000/api/import/commit', commitBody(stagingId, { rowDecisions: [{ key: 'k'.repeat(256), action: 'skip' }] })),
     );
@@ -669,12 +671,57 @@ describe('import routes - possible duplicates (v1.61.0)', () => {
   it('batch: holds a file\'s possible duplicates in Needs review and inserts none of them', async () => {
     typeTwoByHand();
     const response = await batchCommitRoute(
-      jsonRequest('http://nas.local:3000/api/import/batch/commit', { files: [commitBody(writeStagedFile(fixture('td-chequing.csv')))] }),
+      jsonRequest('http://nas.local:3000/api/import/batch/commit', { files: [commitBody(writeStagedFile(fixture('td-chequing.csv'), aliceId))] }),
     );
     expect(response.status).toBe(200);
     const { results } = (await response.json()) as { results: Record<string, unknown>[] };
     expect(results[0]).toMatchObject({ ok: true, rowsAdded: 7, rowsDuplicate: 0, rowsSetAside: 0, rowsHeld: 2 });
     expect(count('select count(*) as c from transactions where amount_cents in (-8631, -1095)')).toBe(2);
     expect(count(`select count(*) as c from set_aside_rows where state = 'waiting'`)).toBe(2);
+  });
+});
+
+describe('import routes - a staged file belongs to who staged it', () => {
+  function otherMember(): string {
+    const samId = insertTestUser(current!.db, { name: 'Sam', username: 'sam', role: 'member' });
+    return createSession(samId).token;
+  }
+
+  it("reads another member's staging id as missing at preview, commit and batch commit", async () => {
+    const stagingId = writeStagedFile(fixture('td-chequing.csv'), aliceId);
+    const samToken = otherMember();
+    const body = { stagingId, filename: 'td-chequing.csv', accountId, profileId, mapping: getBuiltinPreset('TD Chequing/Debit') };
+
+    const preview = await previewRoute(jsonRequestAs(samToken, 'http://nas.local:3000/api/import/preview', body));
+    expect(preview.status).toBe(410);
+    expect(((await preview.json()) as { code: string }).code).toBe('staged_file_missing');
+
+    const commit = await commitRoute(jsonRequestAs(samToken, 'http://nas.local:3000/api/import/commit', body));
+    expect(commit.status).toBe(410);
+
+    const batch = await batchCommitRoute(jsonRequestAs(samToken, 'http://nas.local:3000/api/import/batch/commit', { files: [body] }));
+    const { results } = (await batch.json()) as { results: { ok: boolean }[] };
+    expect(results[0]!.ok).toBe(false);
+    expect((current!.sqlite.prepare('select count(*) as c from imports').get() as { c: number }).c).toBe(0);
+
+    // The member who staged it still can.
+    expect((await commitRoute(jsonRequest('http://nas.local:3000/api/import/commit', body))).status).toBe(200);
+  });
+
+  it('answers a preview upload whose body cannot be read as a form with 413, never a 500', async () => {
+    const request = new Request('http://nas.local:3000/api/import/preview', {
+      method: 'POST',
+      headers: { ...headers(), 'content-type': 'multipart/form-data; boundary=----cut' },
+      body: '------cut\r\nContent-Disposition: form-data; name="file"; filename="a.csv"\r\n\r\nPARTIAL',
+    });
+    expect((await previewRoute(request)).status).toBe(413);
+  });
+
+  it('refuses to stage past MAX_STAGED_IMPORT_BYTES and says so plainly', async () => {
+    const filler = writeStagedFile(Buffer.alloc(0), aliceId);
+    fs.truncateSync(stagedFilePath(filler), MAX_STAGED_IMPORT_BYTES);
+    const response = await previewRoute(uploadRequest());
+    expect(response.status).toBe(429);
+    expect(((await response.json()) as { code: string }).code).toBe('staging_full');
   });
 });

@@ -58,7 +58,7 @@ export async function POST(request: Request): Promise<Response> {
   if (profileId === undefined) {
     // No profile is acceptable only when the staged file itself reads as OFX/QFX.
     try {
-      if (!looksLikeOfx(parsed.data.filename, readStagedFile(parsed.data.stagingId))) {
+      if (!looksLikeOfx(parsed.data.filename, readStagedFile(parsed.data.stagingId, user.id))) {
         return Response.json({ error: 'Choose an import profile for this file.' }, { status: 400 });
       }
     } catch (error) {

@@ -7,6 +7,9 @@ import { POST as batchRoute, MAX_BATCH_FILES } from '@/app/api/import/batch/dete
 import { createSession, SESSION_COOKIE_NAME } from '@/lib/auth/session';
 import { setUserVisibility } from '@/lib/auth/users';
 import zlib from 'node:zlib';
+import { MAX_DROP_STAGED_BYTES } from '@/lib/import/batch';
+import { MAX_FILE_BYTES, MAX_ROWS } from '@/lib/import/parse';
+import { UPLOAD_BODY_LIMIT_BYTES } from '@/lib/upload-limits';
 
 const fixture = (name: string): Uint8Array<ArrayBuffer> => {
   const read = fs.readFileSync(path.join(process.cwd(), 'fixtures', name));
@@ -286,5 +289,63 @@ describe('POST /api/import/batch/detect: a zip becomes ordinary rows', () => {
     expect(rows[0]!.status).toBe('unsupported');
     expect(rows[0]!.reason).toMatch(/unsafe path/i);
     expect(rows[1]!.filename).toBe('mar.csv');
+  });
+});
+
+describe('POST /api/import/batch/detect: what one drop may stage', () => {
+  const stagedFiles = () => {
+    const dir = path.join(tempDir, 'tmp');
+    return fs.existsSync(dir) ? fs.readdirSync(dir) : [];
+  };
+
+  it('refuses a drop past MAX_DROP_STAGED_BYTES, counting zip entries at their inflated size, with nothing staged', async () => {
+    // Each archive is small on the wire and holds one entry just under the per-file limit.
+    const entry = 'A'.repeat(MAX_FILE_BYTES - 1024);
+    const zips = Array.from({ length: Math.ceil(MAX_DROP_STAGED_BYTES / entry.length) + 1 }, (_, index) => ({
+      name: `part-${index}.zip`,
+      body: zipOf([{ name: `part-${index}.csv`, body: entry }]),
+    }));
+    const response = await batchRoute(upload(zips));
+    expect(response.status).toBe(413);
+    expect(((await response.json()) as { code: string }).code).toBe('drop_too_large');
+    expect(stagedFiles()).toEqual([]);
+  });
+
+  it('refuses a declared length over UPLOAD_BODY_LIMIT_BYTES before reading the body', async () => {
+    const request = upload([{ name: 'mar.csv', body: fixture('td-chequing.csv') }]);
+    const declared = new Request(request.url, {
+      method: 'POST',
+      headers: { ...Object.fromEntries(request.headers), 'content-length': String(UPLOAD_BODY_LIMIT_BYTES + 1) },
+      body: 'x',
+    });
+    const response = await batchRoute(declared);
+    expect(response.status).toBe(413);
+    expect(stagedFiles()).toEqual([]);
+  });
+
+  it('answers a body that cannot be read as a form with 413, never a 500', async () => {
+    const request = new Request('http://nas.local:3000/api/import/batch/detect', {
+      method: 'POST',
+      headers: {
+        origin: 'http://nas.local:3000',
+        host: 'nas.local:3000',
+        cookie: `${SESSION_COOKIE_NAME}=${token}`,
+        'content-type': 'multipart/form-data; boundary=----cut',
+      },
+      body: '------cut\r\nContent-Disposition: form-data; name="files"; filename="a.csv"\r\n\r\nPARTIAL',
+    });
+    expect((await batchRoute(request)).status).toBe(413);
+  });
+
+  it('leaves nothing staged when detecting a file throws after it was staged', async () => {
+    const rowsText = Array.from(
+      { length: MAX_ROWS + 1 },
+      (_, index) => `<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20260803<TRNAMT>-4.10<FITID>FIT-${index}<NAME>MAPLE GROCER</STMTTRN>`,
+    ).join('\n');
+    const ofx = `OFXHEADER:100\nDATA:OFXSGML\n\n<OFX>\n<BANKTRANLIST>\n${rowsText}\n</BANKTRANLIST>\n</OFX>`;
+    const rows = await rowsOf(await batchRoute(upload([{ name: 'big.ofx', body: ofx }])));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).toBe('unsupported');
+    expect(stagedFiles()).toEqual([]);
   });
 });

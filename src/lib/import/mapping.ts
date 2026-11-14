@@ -1,3 +1,4 @@
+import { isDateFormat } from '@/lib/dates';
 import { z } from '@/lib/zod';
 
 export type AmountMode = 'signed' | 'debit_credit';
@@ -63,19 +64,30 @@ export interface ImportMapping {
   balanceCol: number | null;
 }
 
+/** The most columns one description is built from. */
+export const MAX_DESC_COLS = 8;
+/** The most skip-rule phrases one mapping holds, and the longest phrase. */
+export const MAX_SKIP_RULES = 50;
+export const MAX_SKIP_RULE_CHARS = 100;
+
+/*
+  Every writer of a mapping parses through this schema, so the caps hold for whatever a profile
+  stores. A stored profile past them reads as an unreadable mapping (presets.ts, hasReadableMapping),
+  never as a page or boot failure.
+*/
 const baseSchema = z.object({
   hasHeader: z.boolean(),
   headerRows: z.number().int().min(0).max(20),
   dateCol: z.number().int().min(0).max(200),
-  dateFormat: z.string().min(1),
-  descCols: z.array(z.number().int().min(0).max(200)).min(1),
+  dateFormat: z.string().min(1).refine(isDateFormat, 'Choose a date format from the list.'),
+  descCols: z.array(z.number().int().min(0).max(200)).min(1).max(MAX_DESC_COLS),
   amountMode: z.enum(['signed', 'debit_credit']),
   amountCol: z.number().int().min(0).max(200).nullable(),
   debitCol: z.number().int().min(0).max(200).nullable(),
   creditCol: z.number().int().min(0).max(200).nullable(),
   signConvention: z.enum(['negative_is_spend', 'positive_is_spend']),
   encoding: z.enum(['auto', 'utf-8', 'windows-1252']),
-  skipRules: z.object({ containsAny: z.array(z.string().min(1)) }).nullable(),
+  skipRules: z.object({ containsAny: z.array(z.string().min(1).max(MAX_SKIP_RULE_CHARS)).max(MAX_SKIP_RULES) }).nullable(),
   // See the ImportMapping.cardCol doc comment above: absent input (every mapping stored by
   // v1.5.1 or earlier) MUST still parse, defaulting to null, not fail as a missing required
   // field.

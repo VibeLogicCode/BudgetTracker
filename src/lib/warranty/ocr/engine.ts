@@ -9,9 +9,12 @@ export interface OcrResult {
   text: string;
 }
 
-/** MUST-7.17: the ONLY way any caller reaches recognition. Tests inject a fake. */
+/**
+ * MUST-7.17: the ONLY way any caller reaches recognition. Tests inject a fake. `signal` is aborted
+ * when the queue gives up on the job; the PDF reader stops at its next page boundary.
+ */
 export interface OcrEngine {
-  recognize(filePath: string, mime: ReceiptMime): Promise<OcrResult>;
+  recognize(filePath: string, mime: ReceiptMime, signal?: AbortSignal): Promise<OcrResult>;
 }
 
 /** §3.3 / §17.22: without a cap, one pathological PDF bloats the row and the FTS index. */
@@ -21,6 +24,8 @@ export const OCR_IDLE_TERMINATE_MS = 60_000;
 
 export const OCR_UNAVAILABLE_MESSAGE = 'OCR engine unavailable on this install.';
 export const OCR_TIMEOUT_MESSAGE = 'OCR timed out.';
+/** The plain failure a job records when nothing more specific can be said. */
+export const OCR_FAILED_MESSAGE = 'OCR failed.';
 export const TRUNCATION_MARKER = '… [truncated]';
 export const TRUNCATION_NOTE = `OCR text was truncated at ${MAX_OCR_TEXT_CHARS} characters.`;
 
@@ -84,10 +89,10 @@ export async function releaseOcrEngine(): Promise<void> {
 }
 
 const defaultEngine: OcrEngine = {
-  async recognize(filePath: string, mime: ReceiptMime): Promise<OcrResult> {
+  async recognize(filePath: string, mime: ReceiptMime, signal?: AbortSignal): Promise<OcrResult> {
     // A PDF goes to the text layer before anything else: no probe, no session, no engine
     // question. This preserves the current behaviour that a PDF never touches an OCR engine.
-    if (mime === 'application/pdf') return { text: await extractPdfText(filePath) };
+    if (mime === 'application/pdf') return { text: await extractPdfText(filePath, { signal }) };
     // IMPORTANT 2: disarm any pending idle-terminate timer the INSTANT a job claims the
     // engine, before awaiting anything. armIdleTimer() previously only re-armed inside the
     // `finally` below, which left a window where job N's OWN recognize() call could still
@@ -110,7 +115,7 @@ const defaultEngine: OcrEngine = {
         // Set only after the import resolves: a rejected import must not arm
         // releaseOcrEngine()'s ONNX release path for a tree that was never actually loaded.
         onnxTouched = true;
-        return await onnxOcrEngine.recognize(filePath, mime);
+        return await onnxOcrEngine.recognize(filePath, mime, signal);
       }
       return { text: await recognizeWithTesseract(filePath) };
     } finally {

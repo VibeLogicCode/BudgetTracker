@@ -45,10 +45,10 @@ function setup() {
 describe('upload → preview → commit', () => {
   it('runs the whole pipeline and reports the summary counts', () => {
     const { sqlite, userId, accountId, profileId } = setup();
-    const stagingId = writeStagedFile(fixture('td-chequing.csv'));
+    const stagingId = writeStagedFile(fixture('td-chequing.csv'), userId);
     const mapping = getBuiltinPreset('TD Chequing/Debit');
 
-    const preview = buildPreview({ stagingId, filename: 'td.csv', accountId, profileId, mapping });
+    const preview = buildPreview({ userId, stagingId, filename: 'td.csv', accountId, profileId, mapping });
     expect(preview.totalRows).toBe(9);
     expect(preview.duplicateCount).toBe(0);
 
@@ -63,14 +63,14 @@ describe('upload → preview → commit', () => {
 
   it('deletes the staged file after a successful commit', () => {
     const { userId, accountId, profileId } = setup();
-    const stagingId = writeStagedFile(fixture('td-chequing.csv'));
+    const stagingId = writeStagedFile(fixture('td-chequing.csv'), userId);
     commitStagedImport({ stagingId, filename: 'td.csv', accountId, profileId, mapping: getBuiltinPreset('TD Chequing/Debit'), userId });
     expect(fs.existsSync(stagedFilePath(stagingId))).toBe(false);
   });
 
   it('remembers the profile on the account and forks a built-in that was edited', () => {
     const { sqlite, userId, accountId, profileId } = setup();
-    const stagingId = writeStagedFile(fixture('td-chequing.csv'));
+    const stagingId = writeStagedFile(fixture('td-chequing.csv'), userId);
     const edited = { ...getBuiltinPreset('TD Chequing/Debit'), encoding: 'utf-8' as const };
 
     const result = commitStagedImport({ stagingId, filename: 'td.csv', accountId, profileId, mapping: edited, userId });
@@ -91,14 +91,14 @@ describe('overlapping second import then undo of the first', () => {
     const { sqlite, userId, accountId, profileId } = setup();
     const mapping = getBuiltinPreset('TD Chequing/Debit');
 
-    const firstStaging = writeStagedFile(fixture('td-chequing.csv'));
+    const firstStaging = writeStagedFile(fixture('td-chequing.csv'), userId);
     const first = commitStagedImport({ stagingId: firstStaging, filename: 'march-1-7.csv', accountId, profileId, mapping, userId });
 
     // A second export that repeats the whole file plus one new row. The new
     // row uses the preset's ISO date format (dateFormat 'YYYY-MM-DD' — see
     // src/lib/import/presets.ts) to actually parse instead of erroring out.
     const overlapping = Buffer.concat([fixture('td-chequing.csv'), Buffer.from('2026-03-10,NEW ROW ONLY IN SECOND FILE,15.00,,3576.53\n', 'utf8')]);
-    const secondStaging = writeStagedFile(overlapping);
+    const secondStaging = writeStagedFile(overlapping, userId);
     const second = commitStagedImport({ stagingId: secondStaging, filename: 'march-1-10.csv', accountId, profileId: first.profileId, mapping, userId });
 
     expect(second).toMatchObject({ rowsAdded: 1, rowsDuplicate: 9 });
@@ -121,7 +121,7 @@ describe('overlapping second import then undo of the first', () => {
   it('reverses Bayes training for the rows undo actually deletes', () => {
     const { db, userId, accountId, profileId } = setup();
     const mapping = getBuiltinPreset('TD Chequing/Debit');
-    const stagingId = writeStagedFile(fixture('td-chequing.csv'));
+    const stagingId = writeStagedFile(fixture('td-chequing.csv'), userId);
     const result = commitStagedImport({ stagingId, filename: 'td.csv', accountId, profileId, mapping, userId });
 
     const groceries = categoryIdByName(db, 'Groceries');
@@ -140,7 +140,7 @@ describe('the Amex fixture end to end', () => {
     const { sqlite, userId } = setup();
     const amexAccount = createAccount({ name: 'Amex Cobalt', institution: 'American Express Canada', type: 'credit', ownerUserId: null });
     const amexProfile = getProfileByName('Amex Canada')!.id;
-    const stagingId = writeStagedFile(fixture('amex.csv'));
+    const stagingId = writeStagedFile(fixture('amex.csv'), userId);
 
     const result = commitStagedImport({
       stagingId,
@@ -194,9 +194,9 @@ describe('the same purchase by two roads (v1.61.0)', () => {
       actorRole: 'admin',
     });
     const csv = Buffer.from('2026-03-10,MAPLE GROCER #12,42.17,,\n2026-03-11,CORNER BAKERY,8.25,,\n', 'utf8');
-    const stagingId = writeStagedFile(csv);
+    const stagingId = writeStagedFile(csv, alex);
 
-    const preview = buildPreview({ stagingId, filename: 'march.csv', accountId, profileId, mapping: TD() });
+    const preview = buildPreview({ userId: alex, stagingId, filename: 'march.csv', accountId, profileId, mapping: TD() });
     expect(preview.setAside).toEqual([
       expect.objectContaining({
         date: '2026-03-10',
@@ -230,9 +230,9 @@ describe('the same purchase by two roads (v1.61.0)', () => {
       actorRole: 'admin',
     });
     const csv = Buffer.from('2026-03-09,CORNER COFFEE,4.50,,\n2026-03-11,CORNER BAKERY,8.25,,\n', 'utf8');
-    const stagingId = writeStagedFile(csv);
+    const stagingId = writeStagedFile(csv, alex);
 
-    const counts = fileCounts(buildPreview({ stagingId, filename: 'march.csv', accountId, profileId, mapping: TD() }));
+    const counts = fileCounts(buildPreview({ userId: alex, stagingId, filename: 'march.csv', accountId, profileId, mapping: TD() }));
     expect(counts).toEqual({ totalRows: 2, duplicateCount: 0, errorCount: 0, setAsideCount: 1, willImport: 1 });
 
     const result = commitStagedImport({ stagingId, filename: 'march.csv', accountId, profileId, mapping: TD(), userId: alex });
@@ -250,7 +250,7 @@ describe('the same purchase by two roads (v1.61.0)', () => {
       ].join('\n'),
       'utf8',
     );
-    commitStagedImport({ stagingId: writeStagedFile(march), filename: 'march.csv', accountId, profileId, mapping: TD(), userId });
+    commitStagedImport({ stagingId: writeStagedFile(march, userId), filename: 'march.csv', accountId, profileId, mapping: TD(), userId });
     const marchRows = amounts(sqlite, accountId);
     expect(marchRows).toHaveLength(4);
 
@@ -267,9 +267,9 @@ describe('the same purchase by two roads (v1.61.0)', () => {
       '<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20260412120000<TRNAMT>-58.75<FITID>FIT-0412<NAME>FUEL STOP 12</STMTTRN>',
       '</BANKTRANLIST></STMTRS></STMTTRNRS></BANKMSGSRSV1></OFX>',
     ].join('\n');
-    const stagingId = writeStagedFile(Buffer.from(qfx, 'utf8'));
+    const stagingId = writeStagedFile(Buffer.from(qfx, 'utf8'), userId);
 
-    const preview = buildPreview({ stagingId, filename: 'march-april.qfx', accountId, profileId: null, mapping: TD() });
+    const preview = buildPreview({ userId, stagingId, filename: 'march-april.qfx', accountId, profileId: null, mapping: TD() });
     expect(preview.setAside.map((row) => [row.key, row.kind, row.defaultSkip, row.candidates.map((c) => c.origin)])).toEqual([
       ['FIT-0316', 'possible_duplicate', true, ['csv']],
       ['FIT-0322', 'possible_duplicate', true, ['csv']],

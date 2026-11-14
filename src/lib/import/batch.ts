@@ -2,7 +2,13 @@ import { detectImportAccount, type AccountDetection, type AccountCandidate } fro
 import { detectImportProfile, type ProfileDetection, type ProfileCandidate } from './detect-profile';
 import { looksLikeOfx, parseOfx } from './ofx';
 import { parseCsv } from './parse';
-import { readStagedFile, writeStagedFile } from './staging';
+import { deleteStagedFile, readStagedFile, writeStagedFile } from './staging';
+
+/**
+ * The most bytes one batch drop may stage, every file counted at the size it is staged at (a zip's
+ * entries at their inflated size). Past it the drop is refused before anything is staged.
+ */
+export const MAX_DROP_STAGED_BYTES = 25 * 1024 * 1024;
 
 /**
  * 2026-09-15. Dropping ten statements at once instead of picking them one at a time.
@@ -173,9 +179,17 @@ export function detectStagedFile(input: {
   filename: string;
   profiles: ProfileCandidate[];
   accounts: AccountCandidate[];
+  /** The member staging the file; only they can read it back. */
+  userId: number;
 }): FileDetection {
-  const stagingId = writeStagedFile(input.buf);
-  return detectBytes({ ...input, stagingId });
+  const stagingId = writeStagedFile(input.buf, input.userId);
+  try {
+    return detectBytes({ ...input, stagingId });
+  } catch (error) {
+    // A detection that throws leaves nothing staged behind it.
+    deleteStagedFile(stagingId, input.userId);
+    throw error;
+  }
 }
 
 /**
@@ -189,8 +203,10 @@ export function detectHeldFile(input: {
   filename: string;
   profiles: ProfileCandidate[];
   accounts: AccountCandidate[];
+  /** The viewer: a file someone else staged reads as missing. */
+  userId: number;
 }): FileDetection {
-  return detectBytes({ ...input, buf: readStagedFile(input.stagingId) });
+  return detectBytes({ ...input, buf: readStagedFile(input.stagingId, input.userId) });
 }
 
 function detectBytes(input: {

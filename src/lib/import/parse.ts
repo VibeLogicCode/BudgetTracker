@@ -6,6 +6,10 @@ import type { EncodingChoice, ImportMapping } from './mapping';
 
 export const MAX_FILE_BYTES = 5 * 1024 * 1024;
 export const MAX_ROWS = 10_000;
+/** The longest cell a row may hold. A row with a longer one is a row error, and its cells are cut to this. */
+export const MAX_CELL_CHARS = 2_000;
+/** The longest raw description an import keeps: a CSV's joined description columns, an OFX name and memo. */
+export const MAX_RAW_DESCRIPTION_CHARS = 500;
 
 export class ImportLimitError extends Error {
   readonly code: 'file_too_large' | 'too_many_rows';
@@ -51,6 +55,7 @@ export type RowErrorReason =
   | 'missing amount'
   | 'ambiguous amount'
   | 'malformed row'
+  | 'cell too long'
   // v1.13.0 fix round 2 (OFX, src/lib/import/ofx.ts): a truncated download -- the file stops
   // mid-<STMTTRN>, no closing tag at all -- has no CSV equivalent, so it gets its own literal
   // rather than being squeezed into 'malformed row'.
@@ -117,6 +122,12 @@ export function parseCsv(buf: Buffer, mapping: ImportMapping): ParseResult {
   let skipped = 0;
 
   dataRows.forEach((cells, rowIndex) => {
+    // Checked before anything else reads the row: the skip rules, the date, the amount.
+    if (cells.some((value) => typeof value === 'string' && value.length > MAX_CELL_CHARS)) {
+      errors.push({ rowIndex, cells: cells.map((value) => String(value).slice(0, MAX_CELL_CHARS)), reason: 'cell too long' });
+      return;
+    }
+
     if (mapping.skipRules && mapping.skipRules.containsAny.length > 0) {
       const joined = cells.join(' ').toUpperCase();
       if (mapping.skipRules.containsAny.some((needle) => joined.includes(needle.toUpperCase()))) {
@@ -140,7 +151,9 @@ export function parseCsv(buf: Buffer, mapping: ImportMapping): ParseResult {
     const rawDescription = mapping.descCols
       .map((index) => cell(cells, index).trim())
       .filter((part) => part.length > 0)
-      .join(' ');
+      .join(' ')
+      .slice(0, MAX_RAW_DESCRIPTION_CHARS)
+      .trim();
     if (rawDescription.length === 0) {
       errors.push({ rowIndex, cells, reason: 'missing description' });
       return;

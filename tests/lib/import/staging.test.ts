@@ -2,7 +2,19 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { StagingError, deleteStagedFile, purgeStagedFiles, readStagedFile, stagedFilePath, stagingDir, writeStagedFile } from '@/lib/import/staging';
+import {
+  MAX_STAGED_IMPORT_BYTES,
+  StagingError,
+  deleteStagedFile,
+  purgeStagedFiles,
+  readStagedFile,
+  stagedFilePath,
+  stagingDir,
+  writeStagedFile,
+} from '@/lib/import/staging';
+
+const ALEX = 1;
+const SAM = 2;
 
 let tempDir: string;
 let originalDataDir: string | undefined;
@@ -22,43 +34,43 @@ afterEach(() => {
 describe('staging', () => {
   it('writes under DATA_DIR/tmp and reads back the exact bytes', () => {
     const payload = Buffer.from('03/02/2026,COFFEE,4.85,,0.00\n', 'utf8');
-    const id = writeStagedFile(payload);
+    const id = writeStagedFile(payload, ALEX);
     expect(stagingDir()).toBe(path.join(tempDir, 'tmp'));
     expect(stagedFilePath(id).startsWith(stagingDir())).toBe(true);
-    expect(readStagedFile(id).equals(payload)).toBe(true);
+    expect(readStagedFile(id, ALEX).equals(payload)).toBe(true);
   });
 
   it('creates the staging directory if it is missing', () => {
     expect(fs.existsSync(path.join(tempDir, 'tmp'))).toBe(false);
-    writeStagedFile(Buffer.from('x'));
+    writeStagedFile(Buffer.from('x'), ALEX);
     expect(fs.existsSync(path.join(tempDir, 'tmp'))).toBe(true);
   });
 
   it('returns a UUID as the staging id', () => {
-    expect(writeStagedFile(Buffer.from('x'))).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(writeStagedFile(Buffer.from('x'), ALEX)).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
   });
 
   it('rejects a non-UUID staging id instead of joining it into a path', () => {
     expect(() => stagedFilePath('../../budget.db')).toThrowError(StagingError);
-    expect(() => readStagedFile('..\\..\\budget.db')).toThrowError(StagingError);
-    expect(() => readStagedFile('')).toThrowError(StagingError);
-    expect(() => deleteStagedFile('nope')).toThrowError(StagingError);
+    expect(() => readStagedFile('..\\..\\budget.db', ALEX)).toThrowError(StagingError);
+    expect(() => readStagedFile('', ALEX)).toThrowError(StagingError);
+    expect(() => deleteStagedFile('nope', ALEX)).toThrowError(StagingError);
   });
 
   it('throws a StagingError for an unknown but well-formed id', () => {
-    expect(() => readStagedFile('00000000-0000-4000-8000-000000000000')).toThrowError(/expired|not found/i);
+    expect(() => readStagedFile('00000000-0000-4000-8000-000000000000', ALEX)).toThrowError(/expired|not found/i);
   });
 
   it('deletes a staged file and tolerates deleting it twice', () => {
-    const id = writeStagedFile(Buffer.from('x'));
-    deleteStagedFile(id);
+    const id = writeStagedFile(Buffer.from('x'), ALEX);
+    deleteStagedFile(id, ALEX);
     expect(fs.existsSync(stagedFilePath(id))).toBe(false);
-    expect(() => deleteStagedFile(id)).not.toThrow();
+    expect(() => deleteStagedFile(id, ALEX)).not.toThrow();
   });
 
   it('purges only files older than the cutoff', () => {
-    const stale = writeStagedFile(Buffer.from('old'));
-    const fresh = writeStagedFile(Buffer.from('new'));
+    const stale = writeStagedFile(Buffer.from('old'), ALEX);
+    const fresh = writeStagedFile(Buffer.from('new'), ALEX);
     const longAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
     fs.utimesSync(stagedFilePath(stale), longAgo, longAgo);
 
@@ -77,7 +89,7 @@ describe('staging', () => {
     // backup is being written. fs.rmSync on a directory without { recursive: true } throws,
     // which would otherwise take down the entire nightly maintenance sweep the moment any
     // directory — stale-archive or otherwise — turns up in this folder.
-    const stale = writeStagedFile(Buffer.from('old'));
+    const stale = writeStagedFile(Buffer.from('old'), ALEX);
     const longAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
     fs.utimesSync(stagedFilePath(stale), longAgo, longAgo);
 
@@ -149,5 +161,74 @@ describe('staging', () => {
 
     expect(purgeStagedFiles(24 * 60 * 60 * 1000)).toBe(0);
     expect(fs.existsSync(otherDir)).toBe(true);
+  });
+});
+
+describe('staged import owner', () => {
+  it("reads another member's staged file as missing, and leaves it in place on their delete", () => {
+    const id = writeStagedFile(Buffer.from('2026-03-02,MAPLE GROCER,4.85,,0.00'), ALEX);
+    let refused: unknown;
+    try {
+      readStagedFile(id, SAM);
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(StagingError);
+    expect((refused as StagingError).code).toBe('staged_file_missing');
+    deleteStagedFile(id, SAM);
+    expect(fs.existsSync(stagedFilePath(id))).toBe(true);
+    expect(readStagedFile(id, ALEX).length).toBeGreaterThan(0);
+  });
+
+  it('reads a staged file with no owner record as missing', () => {
+    const id = writeStagedFile(Buffer.from('x'), ALEX);
+    fs.rmSync(path.join(stagingDir(), `${id}.import.json`));
+    expect(() => readStagedFile(id, ALEX)).toThrowError(StagingError);
+  });
+
+  it('removes the owner record with the file', () => {
+    const id = writeStagedFile(Buffer.from('x'), ALEX);
+    deleteStagedFile(id, ALEX);
+    expect(fs.readdirSync(stagingDir())).toEqual([]);
+  });
+
+  it('the sweep removes a staged file and its owner record together, counting the file once', () => {
+    const stale = writeStagedFile(Buffer.from('old'), ALEX);
+    const fresh = writeStagedFile(Buffer.from('new'), ALEX);
+    const longAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    fs.utimesSync(stagedFilePath(stale), longAgo, longAgo);
+    fs.utimesSync(path.join(stagingDir(), `${stale}.import.json`), longAgo, longAgo);
+
+    expect(purgeStagedFiles(24 * 60 * 60 * 1000)).toBe(1);
+    expect(fs.readdirSync(stagingDir()).sort()).toEqual([`${fresh}.csv`, `${fresh}.import.json`].sort());
+  });
+
+  it('the sweep removes an aged owner record whose file is already gone', () => {
+    const id = writeStagedFile(Buffer.from('x'), ALEX);
+    fs.rmSync(stagedFilePath(id));
+    const record = path.join(stagingDir(), `${id}.import.json`);
+    const longAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    fs.utimesSync(record, longAgo, longAgo);
+    expect(purgeStagedFiles(24 * 60 * 60 * 1000)).toBe(0);
+    expect(fs.existsSync(record)).toBe(false);
+  });
+});
+
+describe('staged import budget', () => {
+  it('refuses a file past MAX_STAGED_IMPORT_BYTES with nothing written', () => {
+    // One staged file sized up to four bytes short of the budget, without writing its bytes.
+    const filler = writeStagedFile(Buffer.alloc(0), SAM);
+    fs.truncateSync(stagedFilePath(filler), MAX_STAGED_IMPORT_BYTES - 4);
+    expect(() => writeStagedFile(Buffer.from('four'), ALEX)).not.toThrow();
+    const before = fs.readdirSync(stagingDir()).length;
+    let refused: unknown;
+    try {
+      writeStagedFile(Buffer.from('one more'), ALEX);
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(StagingError);
+    expect((refused as StagingError).code).toBe('staging_full');
+    expect(fs.readdirSync(stagingDir()).length).toBe(before);
   });
 });

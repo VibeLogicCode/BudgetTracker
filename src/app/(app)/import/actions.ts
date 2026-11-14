@@ -33,6 +33,16 @@ const CROSS_ORIGIN_ERROR = 'Cross-origin request rejected';
 // action file underneath it never was -- a self viewer could POST directly. Same refusal
 // wording review/import/settings already use.
 const NOT_AVAILABLE_ERROR = 'Import is not available on this account.';
+const MAPPING_UNREADABLE_ERROR = 'That mapping could not be read.';
+
+/** The posted mapping field read as JSON; not ok when it is not JSON at all. */
+function mappingJson(formData: FormData): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: JSON.parse(String(formData.get('mapping') ?? '{}')) };
+  } catch {
+    return { ok: false };
+  }
+}
 
 const saveSchema = z.object({
   name: z.string().trim().min(1, 'Give the profile a name').max(80),
@@ -46,10 +56,12 @@ export async function saveWizardProfileAction(_prev: WizardState, formData: Form
 
   const user = await requireUser();
   if (isSelfScoped(user)) return { error: NOT_AVAILABLE_ERROR };
+  const mappingInput = mappingJson(formData);
+  if (!mappingInput.ok) return { error: MAPPING_UNREADABLE_ERROR };
   const parsed = saveSchema.safeParse({
     name: formData.get('name') ?? '',
     institution: formData.get('institution') ?? '',
-    mapping: JSON.parse(String(formData.get('mapping') ?? '{}')),
+    mapping: mappingInput.value,
     stagingId: (formData.get('stagingId') as string | null) ?? undefined,
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Check the mapping.' };
@@ -61,7 +73,7 @@ export async function saveWizardProfileAction(_prev: WizardState, formData: Form
   // the very next step, and the wizard links straight back to it. Only a sample uploaded into the
   // wizard itself is done with once its columns are saved.
   if (formData.get('keepStaged') === '1') return { message: `Saved "${parsed.data.name}".` };
-  if (parsed.data.stagingId) deleteStagedFile(parsed.data.stagingId);
+  if (parsed.data.stagingId) deleteStagedFile(parsed.data.stagingId, user.id);
   return { message: `Saved "${parsed.data.name}". Pick it on the Import page and upload the real file.` };
 }
 
@@ -107,11 +119,13 @@ export async function saveMappingAction(_prev: SaveMappingState, formData: FormD
   const user = await requireUser();
   if (isSelfScoped(user)) return { error: NOT_AVAILABLE_ERROR };
 
+  const mappingInput = mappingJson(formData);
+  if (!mappingInput.ok) return { error: MAPPING_UNREADABLE_ERROR };
   const parsed = saveMappingSchema.safeParse({
     profileId: formData.get('profileId'),
     accountId: formData.get('accountId'),
     accountName: formData.get('accountName') ?? '',
-    mapping: JSON.parse(String(formData.get('mapping') ?? '{}')),
+    mapping: mappingInput.value,
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Check the mapping.' };
   if (!getAccount(parsed.data.accountId)) return { error: 'That account no longer exists.' };

@@ -198,3 +198,17 @@ export async function preprocessReceipt(filePath: string): Promise<RawImage> {
 export async function preprocessReceiptPng(filePath: string): Promise<Buffer> {
   return (await preparedPipeline(filePath)).png().toBuffer();
 }
+
+/**
+ * True when sharp reads the image's header and its size is within PREPROCESS_MAX_INPUT_PIXELS.
+ * False for an image past the limit, and for any file sharp cannot read a header from.
+ */
+export async function withinInputPixelLimit(filePath: string): Promise<boolean> {
+  try {
+    const { width, height } = await sharp(filePath).metadata();
+    if (typeof width !== 'number' || typeof height !== 'number' || width <= 0 || height <= 0) return false;
+    return width * height <= PREPROCESS_MAX_INPUT_PIXELS;
+  } catch {
+    return false;
+  }
+}

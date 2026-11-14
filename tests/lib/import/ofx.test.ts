@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { parseOfx, looksLikeOfx } from '@/lib/import/ofx';
+import { ImportLimitError, MAX_RAW_DESCRIPTION_CHARS, MAX_ROWS } from '@/lib/import/parse';
 
 /** OFX 1.x: SGML, no closing tags on leaves, a colon-delimited header block before <OFX>. */
 const SGML = `OFXHEADER:100
@@ -128,5 +129,39 @@ describe('parseOfx (ruling R9)', () => {
     expect(result.rows).toHaveLength(2); // the two transactions that DID close still parse
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]?.reason).toBe('statement ended mid-transaction');
+  });
+});
+
+describe('parseOfx limits', () => {
+  const statement = (transactions: string) => `OFXHEADER:100
+DATA:OFXSGML
+
+<OFX>
+<BANKTRANLIST>
+${transactions}</BANKTRANLIST>
+</OFX>`;
+  const row = (index: number, name = 'MAPLE GROCER') =>
+    `<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20260803<TRNAMT>-4.10<FITID>FIT-${index}<NAME>${name}</STMTTRN>
+`;
+
+  it('throws too_many_rows past MAX_ROWS, as parseCsv does', () => {
+    const text = statement(Array.from({ length: MAX_ROWS + 1 }, (_, index) => row(index)).join(''));
+    try {
+      parseOfx(Buffer.from(text, 'utf8'));
+      throw new Error('expected ImportLimitError');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ImportLimitError);
+      expect((error as ImportLimitError).code).toBe('too_many_rows');
+    }
+  });
+
+  it('accepts exactly MAX_ROWS transactions', () => {
+    const text = statement(Array.from({ length: MAX_ROWS }, (_, index) => row(index)).join(''));
+    expect(parseOfx(Buffer.from(text, 'utf8')).rows).toHaveLength(MAX_ROWS);
+  });
+
+  it('cuts a long name and memo to MAX_RAW_DESCRIPTION_CHARS', () => {
+    const result = parseOfx(Buffer.from(statement(row(1, 'N'.repeat(3_000))), 'utf8'));
+    expect(result.rows[0]!.rawDescription.length).toBe(MAX_RAW_DESCRIPTION_CHARS);
   });
 });

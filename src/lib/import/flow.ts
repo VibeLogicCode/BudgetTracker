@@ -114,7 +114,7 @@ export function commitStagedImport(input: {
     );
   }
 
-  const buf = readStagedFile(input.stagingId);
+  const buf = readStagedFile(input.stagingId, input.userId);
 
   // Parse (and thereby validate: byte-size cap, row-count cap, per-row
   // errors) BEFORE touching the account's profile pointer. A 413/row-cap
@@ -212,7 +212,7 @@ export function commitStagedImport(input: {
   } finally {
     // The staged file has done its job the moment commitImport succeeds —
     // clean it up regardless of what happens to categorization.
-    deleteStagedFile(input.stagingId);
+    deleteStagedFile(input.stagingId, input.userId);
   }
 
   // v1.26.0 Lane 2 item 4. A small count over the same id list as the needs-review count below,

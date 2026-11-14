@@ -6,7 +6,8 @@ import { isSimplefinManaged } from '@/lib/simplefin/connection';
 import { detectStagedFile } from '@/lib/import/batch';
 import { ImportLimitError, MAX_FILE_BYTES } from '@/lib/import/parse';
 import { hasReadableMapping, listProfiles } from '@/lib/import/presets';
-import { StagingError } from '@/lib/import/staging';
+import { StagingError, stagingErrorStatus } from '@/lib/import/staging';
+import { readFormOrNull, uploadTooLargeResponse } from '@/lib/upload-limits';
 
 /**
  * The first hop of an import: the browser posts the file, this stages it ONCE and answers which
@@ -37,7 +38,8 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: `File is larger than ${MAX_FILE_BYTES} bytes`, code: 'file_too_large' }, { status: 413 });
   }
 
-  const form = await request.formData();
+  const form = await readFormOrNull(request);
+  if (form === null) return uploadTooLargeResponse();
   const file = form.get('file');
   if (!(file instanceof File)) return Response.json({ error: 'No file uploaded' }, { status: 400 });
   if (file.size > MAX_FILE_BYTES) {
@@ -74,6 +76,7 @@ export async function POST(request: Request): Promise<Response> {
       filename: file.name,
       profiles,
       accounts,
+      userId: user.id,
     });
 
     return Response.json({
@@ -89,7 +92,7 @@ export async function POST(request: Request): Promise<Response> {
     });
   } catch (error) {
     if (error instanceof ImportLimitError) return Response.json({ error: error.message, code: error.code }, { status: 413 });
-    if (error instanceof StagingError) return Response.json({ error: error.message }, { status: 410 });
+    if (error instanceof StagingError) return Response.json({ error: error.message, code: error.code }, { status: stagingErrorStatus(error) });
     throw error;
   }
 }

@@ -210,10 +210,13 @@ export function ReconcileLoanForm({
           from a bank six months later is not.
         */}
         {pickedFile === null ? null : (
-          <label className="flex items-center gap-2 text-sm text-muted">
-            <input type="checkbox" name="keepStatement" defaultChecked className="size-4" />
-            Keep this statement with the loan
-          </label>
+          <>
+            <label className="flex items-center gap-2 text-sm text-muted">
+              <input type="checkbox" name="keepStatement" defaultChecked className="size-4" />
+              Keep this statement with the loan
+            </label>
+            <p className="text-xs text-subtle">A statement kept with the loan must be a PDF of 1 MB or smaller.</p>
+          </>
         )}
       </div>
 

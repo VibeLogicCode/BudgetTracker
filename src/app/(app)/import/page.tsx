@@ -32,11 +32,12 @@ function reopenHeldFile(
   params: Record<string, string | string[] | undefined>,
   profiles: { id: number; name: string; mapping: ImportMapping }[],
   accounts: { id: number; name: string; importProfileId: number | null }[],
+  userId: number,
 ): { initialDetection: DetectionResult | null; initialNotice: string | null } {
   const held = heldFileFromParams(params);
   if (held === null) return { initialDetection: null, initialNotice: null };
   try {
-    const detected = detectHeldFile({ ...held, profiles, accounts });
+    const detected = detectHeldFile({ ...held, profiles, accounts, userId });
     return {
       initialDetection: {
         stagingId: held.stagingId,
@@ -83,7 +84,7 @@ export default async function ImportPage({
     .filter((p) => p.isActive)
     .map((p) => ({ id: p.id, name: p.name, isBuiltin: p.isBuiltin, mapping: p.mapping }));
   const accounts = csvAccounts.map((a) => ({ id: a.id, name: a.name, importProfileId: a.importProfileId }));
-  const { initialDetection, initialNotice } = reopenHeldFile((await searchParams) ?? {}, profiles, accounts);
+  const { initialDetection, initialNotice } = reopenHeldFile((await searchParams) ?? {}, profiles, accounts, user.id);
 
   /**
    * 2026-09-08. Months that have ended and nobody has confirmed complete. The card self-hides when

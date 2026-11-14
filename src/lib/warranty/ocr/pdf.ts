@@ -15,6 +15,8 @@ export class ScannedPdfError extends Error {
 
 /** Review S-06 (2026-09-02). One pathological PDF must not run the job to its timeout. */
 export const MAX_PDF_PAGES = 20;
+/** The most text extractPdfText collects from one document; it stops reading pages past it. */
+export const MAX_PDF_TEXT_CHARS = 200_000;
 /** Items whose baselines differ by less than this fraction of the median text height share a line. */
 export const PDF_LINE_TOLERANCE_RATIO = 0.5;
 
@@ -83,10 +85,18 @@ export function linesFromItems(items: readonly PdfTextItem[]): string[] {
  * pdf-parse was rejected (§17.10): its published build executes a demo-file read at
  * require time when module.parent is unset, which breaks under bundlers and in ESM, and
  * it is unmaintained.
+ *
+ * Takes a path or the document's bytes. Collects at most MAX_PDF_TEXT_CHARS. An aborted `signal`
+ * ends the read at the next page boundary, and the document is destroyed either way.
  */
-export async function extractPdfText(filePath: string): Promise<string> {
+export async function extractPdfText(
+  source: string | Uint8Array,
+  options: { signal?: AbortSignal } = {},
+): Promise<string> {
+  const { signal } = options;
+  signal?.throwIfAborted();
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  const data = new Uint8Array(fs.readFileSync(filePath));
+  const data = typeof source === 'string' ? new Uint8Array(fs.readFileSync(source)) : source;
   const doc = await pdfjs.getDocument({
     data,
     useWorkerFetch: false,
@@ -101,19 +111,29 @@ export async function extractPdfText(filePath: string): Promise<string> {
 
   try {
     const pages: string[] = [];
+    // Characters collected so far, page separators included. Collection stops at the cap.
+    let collected = 0;
     const pageCount = Math.min(doc.numPages, MAX_PDF_PAGES);
-    for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
+    for (let pageNumber = 1; pageNumber <= pageCount && collected < MAX_PDF_TEXT_CHARS; pageNumber += 1) {
+      // Each page boundary is where a stopped read ends; the finally below destroys the document.
+      signal?.throwIfAborted();
       const page = await doc.getPage(pageNumber);
       const content = await page.getTextContent();
-      const items: PdfTextItem[] = content.items.flatMap((item) =>
-        'str' in item
-          ? [{ str: item.str, x: item.transform[4], y: item.transform[5], height: item.height || Math.abs(item.transform[3]) || 0, hasEOL: Boolean(item.hasEOL) }]
-          : [],
-      );
-      pages.push(linesFromItems(items).join('\n'));
+      const items: PdfTextItem[] = [];
+      let pageChars = 0;
+      for (const item of content.items) {
+        if (!('str' in item)) continue;
+        if (collected + pageChars >= MAX_PDF_TEXT_CHARS) break;
+        pageChars += item.str.length + 1;
+        items.push({ str: item.str, x: item.transform[4], y: item.transform[5], height: item.height || Math.abs(item.transform[3]) || 0, hasEOL: Boolean(item.hasEOL) });
+      }
+      const pageText = linesFromItems(items).join('\n');
+      pages.push(pageText);
+      collected += pageText.length + 1;
       page.cleanup();
     }
-    const text = pages.join('\n');
+    signal?.throwIfAborted();
+    const text = pages.join('\n').slice(0, MAX_PDF_TEXT_CHARS);
     if (text.replace(/\s/g, '').length < MIN_PDF_TEXT_CHARS) throw new ScannedPdfError();
     return text;
   } finally {

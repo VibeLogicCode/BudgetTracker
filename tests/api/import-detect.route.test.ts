@@ -8,7 +8,7 @@ import { createSession, SESSION_COOKIE_NAME } from '@/lib/auth/session';
 import { setUserVisibility } from '@/lib/auth/users';
 import { commitImport } from '@/lib/import/commit';
 import { computeRowHashes } from '@/lib/import/dedup';
-import { parseCsv } from '@/lib/import/parse';
+import { MAX_ROWS, parseCsv } from '@/lib/import/parse';
 import { BUILTIN_PRESETS, getProfileByName } from '@/lib/import/presets';
 
 const fixture = (name: string) => fs.readFileSync(path.join(process.cwd(), 'fixtures', name));
@@ -143,5 +143,45 @@ describe('POST /api/import/detect: who may call it', () => {
       }),
     );
     expect(response.status).toBe(403);
+  });
+});
+
+describe('POST /api/import/detect: what reaches the disk', () => {
+  const stagedFiles = () => {
+    const dir = path.join(tempDir, 'tmp');
+    return fs.existsSync(dir) ? fs.readdirSync(dir) : [];
+  };
+
+  it('answers a body that cannot be read as a form with 413, never a 500', async () => {
+    const request = new Request('http://nas.local:3000/api/import/detect', {
+      method: 'POST',
+      headers: {
+        origin: 'http://nas.local:3000',
+        host: 'nas.local:3000',
+        cookie: `${SESSION_COOKIE_NAME}=${token}`,
+        'content-type': 'multipart/form-data; boundary=----cut',
+      },
+      body: '------cut\r\nContent-Disposition: form-data; name="file"; filename="a.csv"\r\n\r\nPARTIAL',
+    });
+    expect((await detectRoute(request)).status).toBe(413);
+    expect(stagedFiles()).toEqual([]);
+  });
+
+  it('leaves nothing staged when detection throws after staging', async () => {
+    const rowsText = Array.from(
+      { length: MAX_ROWS + 1 },
+      (_, index) => `<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20260803<TRNAMT>-4.10<FITID>FIT-${index}<NAME>MAPLE GROCER</STMTTRN>`,
+    ).join('\n');
+    const form = new FormData();
+    form.append('file', new File([`OFXHEADER:100\nDATA:OFXSGML\n\n<OFX>\n<BANKTRANLIST>\n${rowsText}\n</BANKTRANLIST>\n</OFX>`], 'big.ofx'));
+    const response = await detectRoute(
+      new Request('http://nas.local:3000/api/import/detect', {
+        method: 'POST',
+        headers: { origin: 'http://nas.local:3000', host: 'nas.local:3000', cookie: `${SESSION_COOKIE_NAME}=${token}` },
+        body: form,
+      }),
+    );
+    expect(response.status).toBe(413);
+    expect(stagedFiles()).toEqual([]);
   });
 });

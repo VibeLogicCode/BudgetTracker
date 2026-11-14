@@ -3,13 +3,21 @@ import { userFromRequest } from '@/lib/auth/session';
 import { isSelfScoped } from '@/lib/auth/viewer';
 import { acceptsTransactions, listAccounts } from '@/lib/accounts';
 import { isSimplefinManaged } from '@/lib/simplefin/connection';
-import { classifyDetection, detectStagedFile, fileCounts, type FileCounts, type FileStatus } from '@/lib/import/batch';
+import {
+  MAX_DROP_STAGED_BYTES,
+  classifyDetection,
+  detectStagedFile,
+  fileCounts,
+  type FileCounts,
+  type FileStatus,
+} from '@/lib/import/batch';
 import { buildPreview } from '@/lib/import/preview';
 import type { ImportMapping } from '@/lib/import/mapping';
 import { ImportLimitError, MAX_FILE_BYTES } from '@/lib/import/parse';
 import { hasReadableMapping, listProfiles } from '@/lib/import/presets';
 import { StagingError } from '@/lib/import/staging';
 import { ZipError, looksLikeZip, readZipEntries } from '@/lib/import/zip';
+import { declaredLengthOver, readFormOrNull, uploadTooLargeResponse } from '@/lib/upload-limits';
 
 /**
  * 2026-09-15. The batch counterpart of /api/import/detect: N files in, one classified row each
@@ -58,7 +66,9 @@ export async function POST(request: Request): Promise<Response> {
   if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
   if (isSelfScoped(user)) return Response.json({ error: 'Import is not available on this account.' }, { status: 403 });
 
-  const form = await request.formData();
+  if (declaredLengthOver(request)) return uploadTooLargeResponse();
+  const form = await readFormOrNull(request);
+  if (form === null) return uploadTooLargeResponse();
   const files = form.getAll('files').filter((entry): entry is File => entry instanceof File);
   if (files.length === 0) return Response.json({ error: 'No files uploaded' }, { status: 400 });
   if (files.length > MAX_BATCH_FILES) {
@@ -78,27 +88,50 @@ export async function POST(request: Request): Promise<Response> {
     .filter((account) => !isSimplefinManaged(account.id))
     .map((account) => ({ id: account.id, name: account.name, importProfileId: account.importProfileId }));
 
-  const rows: BatchDetectRow[] = [];
+  /*
+    TWO PASSES. The first reads every file and opens every zip without staging anything, so the
+    drop's total -- each zip entry at its inflated size -- is known before a byte is written. Past
+    MAX_DROP_STAGED_BYTES the whole drop is refused and nothing is staged. The second pass stages
+    and detects, in the order the files came.
+  */
+  const slots: ({ kind: 'row'; row: BatchDetectRow } | { kind: 'file'; buf: Buffer; filename: string })[] = [];
+  let dropBytes = 0;
+  const dropTooLarge = (): Response =>
+    Response.json(
+      {
+        error: `The files in this drop are larger than ${Math.floor(MAX_DROP_STAGED_BYTES / (1024 * 1024))} MB in total. Drop fewer at once.`,
+        code: 'drop_too_large',
+      },
+      { status: 413 },
+    );
 
   /**
-   * One readable file, detected and classified. Called for a dropped file and, once a zip has been
+   * One readable file, queued for detection. Called for a dropped file and, once a zip has been
    * opened, for each thing inside it -- an entry out of an archive is not a special kind of file
    * once it has been read, and giving it its own path would be a second place for the four
-   * statuses to be decided.
+   * statuses to be decided. False once the drop is past its byte budget.
    */
-  const take = (buf: Buffer, filename: string): void => {
+  const take = (buf: Buffer, filename: string): boolean => {
     if (buf.length > MAX_FILE_BYTES) {
-      rows.push(unsupported(filename, `This file is larger than ${Math.floor(MAX_FILE_BYTES / (1024 * 1024))} MB.`));
-      return;
+      slots.push({ kind: 'row', row: unsupported(filename, `This file is larger than ${Math.floor(MAX_FILE_BYTES / (1024 * 1024))} MB.`) });
+      return true;
     }
     // Ruling B11: a zip inside a zip is listed, never opened. Recursion is how a bounded reader
     // becomes an unbounded one, and no bank has ever nested a statement inside a statement.
     if (looksLikeZip(filename, buf)) {
-      rows.push(unsupported(filename, 'A zip inside a zip is not opened. Unzip it first.'));
-      return;
+      slots.push({ kind: 'row', row: unsupported(filename, 'A zip inside a zip is not opened. Unzip it first.') });
+      return true;
     }
+    dropBytes += buf.length;
+    if (dropBytes > MAX_DROP_STAGED_BYTES) return false;
+    slots.push({ kind: 'file', buf, filename });
+    return true;
+  };
+
+  const rows: BatchDetectRow[] = [];
+  const detect = (buf: Buffer, filename: string): void => {
     try {
-      const detection = detectStagedFile({ buf, filename, profiles, accounts });
+      const detection = detectStagedFile({ buf, filename, profiles, accounts, userId: user.id });
       const { status, reason } = classifyDetection(detection);
       rows.push({
         status,
@@ -111,7 +144,7 @@ export async function POST(request: Request): Promise<Response> {
         profile: detection.profile.profile,
         profileConfidence: detection.profile.confidence,
         source: detection.profile.source,
-        counts: countsFor(detection, profiles),
+        counts: countsFor(detection, profiles, user.id),
       });
     } catch (error) {
       if (error instanceof ImportLimitError || error instanceof StagingError) {
@@ -131,7 +164,7 @@ export async function POST(request: Request): Promise<Response> {
       one-at-a-time flow it replaces. This handling was asked for explicitly.
     */
     if (file.size > MAX_FILE_BYTES) {
-      rows.push(unsupported(file.name, `This file is larger than ${Math.floor(MAX_FILE_BYTES / (1024 * 1024))} MB.`));
+      slots.push({ kind: 'row', row: unsupported(file.name, `This file is larger than ${Math.floor(MAX_FILE_BYTES / (1024 * 1024))} MB.`) });
       continue;
     }
 
@@ -139,7 +172,7 @@ export async function POST(request: Request): Promise<Response> {
     try {
       buf = Buffer.from(await file.arrayBuffer());
     } catch {
-      rows.push(unsupported(file.name, 'This file could not be read.'));
+      slots.push({ kind: 'row', row: unsupported(file.name, 'This file could not be read.') });
       continue;
     }
 
@@ -148,23 +181,30 @@ export async function POST(request: Request): Promise<Response> {
     // (traversal, entry count, and the decompressed total, which is the one an upload-size check
     // cannot see); a refusal from it is this one file's problem, exactly like any other.
     if (looksLikeZip(file.name, buf)) {
+      let entries: ReturnType<typeof readZipEntries>;
       try {
-        const entries = readZipEntries(buf);
-        if (entries.length === 0) rows.push(unsupported(file.name, 'That zip holds no files this page can read.'));
-        // The whole-drop bound counts EXPANDED files, or a single small archive would walk past
-        // the limit the drop itself is held to.
-        else if (rows.length + entries.length > MAX_BATCH_FILES) {
-          rows.push(unsupported(file.name, `That zip would make more than ${MAX_BATCH_FILES} files. Unzip it and drop fewer.`));
-        } else {
-          for (const entry of entries) take(entry.buf, entry.filename);
-        }
+        entries = readZipEntries(buf);
       } catch (error) {
-        rows.push(unsupported(file.name, error instanceof ZipError ? error.message : 'That zip could not be opened.'));
+        slots.push({ kind: 'row', row: unsupported(file.name, error instanceof ZipError ? error.message : 'That zip could not be opened.') });
+        continue;
+      }
+      if (entries.length === 0) slots.push({ kind: 'row', row: unsupported(file.name, 'That zip holds no files this page can read.') });
+      // The whole-drop bound counts EXPANDED files, or a single small archive would walk past
+      // the limit the drop itself is held to.
+      else if (slots.length + entries.length > MAX_BATCH_FILES) {
+        slots.push({ kind: 'row', row: unsupported(file.name, `That zip would make more than ${MAX_BATCH_FILES} files. Unzip it and drop fewer.`) });
+      } else {
+        for (const entry of entries) if (!take(entry.buf, entry.filename)) return dropTooLarge();
       }
       continue;
     }
 
-    take(buf, file.name);
+    if (!take(buf, file.name)) return dropTooLarge();
+  }
+
+  for (const slot of slots) {
+    if (slot.kind === 'row') rows.push(slot.row);
+    else detect(slot.buf, slot.filename);
   }
 
   return Response.json({ rows });
@@ -186,6 +226,7 @@ export async function POST(request: Request): Promise<Response> {
 function countsFor(
   detection: ReturnType<typeof detectStagedFile>,
   profiles: { id: number; name: string; mapping: ImportMapping }[],
+  userId: number,
 ): FileCounts | null {
   const account = detection.account.account;
   if (account === null) return null;
@@ -206,6 +247,7 @@ function countsFor(
         accountId: account.id,
         profileId,
         mapping,
+        userId,
       }),
     );
   } catch {

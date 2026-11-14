@@ -76,6 +76,11 @@ describe('extractPdfText (M5 — real pdfjs-dist execution, not the OCR engine)'
     const file = writeFixture('');
     await expect(extractPdfText(file)).rejects.toThrow(ScannedPdfError);
   });
+
+  it('reads the same text from the bytes as from the file', async () => {
+    const bytes = new Uint8Array(buildMinimalPdf('MAPLE GROCERY CO. TOTAL 42.00 hardware receipt'));
+    expect(await extractPdfText(bytes)).toContain('MAPLE GROCERY CO. TOTAL 42.00');
+  });
 });
 
 /** Spec 2026-09-30 §2.2. Items are grouped into LINES by position; one paragraph per page broke every line-based heuristic. */

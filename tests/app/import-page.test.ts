@@ -92,11 +92,13 @@ describe('ImportPage — reopening a staged file by id', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  async function renderWith(params: Record<string, string>) {
+  /** `params` may be a function of the signed-in admin's id, for a file that admin staged. */
+  async function renderWith(params: Record<string, string> | ((adminId: number) => Record<string, string>)) {
     current = createSeededTestDb();
     const admin = insertTestUser(current.db, { name: 'Admin', username: 'admin', role: 'admin' });
     insertTestAccount(current.db, { name: 'Joint Chequing', type: 'chequing' });
     currentUser.value = { id: admin, name: 'Admin', username: 'admin', role: 'admin', visibility: 'household' };
+    if (typeof params === 'function') params = params(admin);
     const { default: ImportPage } = await import('@/app/(app)/import/page');
     const rendered = (await ImportPage({ searchParams: Promise.resolve(params) })) as { props: { children: unknown[] } };
     return (rendered.props.children as { props?: Record<string, unknown> }[]).find(
@@ -105,9 +107,11 @@ describe('ImportPage — reopening a staged file by id', () => {
   }
 
   it('opens the held file, detected against the current profiles', async () => {
-    const stagingId = writeStagedFile(fs.readFileSync(path.join(process.cwd(), 'fixtures', 'scotia.csv')));
-
-    const batch = await renderWith({ stagingId, filename: 'scotia.csv' });
+    let stagingId = '';
+    const batch = await renderWith((adminId) => {
+      stagingId = writeStagedFile(fs.readFileSync(path.join(process.cwd(), 'fixtures', 'scotia.csv')), adminId);
+      return { stagingId, filename: 'scotia.csv' };
+    });
 
     expect(batch.props.initialDetection).toMatchObject({
       stagingId,
@@ -116,6 +120,15 @@ describe('ImportPage — reopening a staged file by id', () => {
       source: 'csv',
     });
     expect(batch.props.initialNotice ?? null).toBeNull();
+  });
+
+  it("says the file is gone when someone else staged it", async () => {
+    const batch = await renderWith((adminId) => ({
+      stagingId: writeStagedFile(fs.readFileSync(path.join(process.cwd(), 'fixtures', 'scotia.csv')), adminId + 1),
+      filename: 'scotia.csv',
+    }));
+    expect(batch.props.initialDetection ?? null).toBeNull();
+    expect(batch.props.initialNotice).toBe('This file is no longer held on the server. Choose it again.');
   });
 
   it('says the file is gone, rather than opening nothing, when the server no longer holds it', async () => {

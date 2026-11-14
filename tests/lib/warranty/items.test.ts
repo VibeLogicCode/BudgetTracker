@@ -695,13 +695,13 @@ describe('resetReceiptForReOcr (MUST-7.16)', () => {
     expect(receipt.ocrStatus).toBe('failed');
     expect(receipt.ocrError).toBe('OCR timed out.');
 
-    expect(resetReceiptForReOcr(receipt.id)).toBe(true);
+    expect(resetReceiptForReOcr(receipt.id)).toBe('queued');
     await drainOcrQueue();
 
     const after = getWarrantyReceipt(receipt.id)!;
     expect(after.ocrStatus).toBe('done');
     expect(after.ocrError).toBeNull();
-    expect(resetReceiptForReOcr(999)).toBe(false);
+    expect(resetReceiptForReOcr(999)).toBe('missing');
   });
 });
 

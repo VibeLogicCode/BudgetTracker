@@ -1,5 +1,5 @@
 import { assertOcrAssets, resolveOcrAssets } from '@/lib/warranty/ocr/assets';
-import { OcrUnavailableError } from '@/lib/warranty/ocr/engine';
+import { OCR_FAILED_MESSAGE, OcrUnavailableError } from '@/lib/warranty/ocr/engine';
 
 /* ------------------------------------------------------------------ *
  * Real engine — one lazily created, reused tesseract.js Node worker.  *
@@ -72,6 +72,15 @@ export async function releaseTesseractWorker(): Promise<void> {
   }
 }
 
+async function rawFileWithinPixelLimit(filePath: string): Promise<boolean> {
+  try {
+    const { withinInputPixelLimit } = await import('@/lib/warranty/ocr/onnx/preprocess');
+    return await withinInputPixelLimit(filePath);
+  } catch {
+    return false;
+  }
+}
+
 export async function recognizeWithTesseract(filePath: string): Promise<string> {
   const active = await getWorker();
   // The tesseract path used to receive the raw upload with no preprocessing at all -- the only
@@ -84,7 +93,9 @@ export async function recognizeWithTesseract(filePath: string): Promise<string> 
     const { preprocessReceiptPng } = await import('@/lib/warranty/ocr/onnx/preprocess');
     input = await preprocessReceiptPng(filePath);
   } catch (error) {
-    // sharp missing or the decode refused: tesseract reads the raw file, as it did before.
+    // The decode refused: tesseract reads the raw file only when sharp reads its header and the
+    // image is within the same pixel limit. Anything else, sharp missing included, fails the job.
+    if (!(await rawFileWithinPixelLimit(filePath))) throw new Error(OCR_FAILED_MESSAGE);
     console.warn('[ocr] tesseract preprocess failed; reading the raw file', error);
   }
   const result = await active.recognize(input);

@@ -149,7 +149,7 @@ describe('CSV vs SimpleFIN exclusivity', () => {
     linkAccount({ simplefinAccountId: 'remote-1', accountId, currency: 'CAD' });
     expect(isSimplefinManaged(accountId)).toBe(true);
 
-    const stagingId = writeStagedFile(fixture('td-chequing.csv'));
+    const stagingId = writeStagedFile(fixture('td-chequing.csv'), userId);
     expect(() =>
       commitStagedImport({
         stagingId,
@@ -164,7 +164,7 @@ describe('CSV vs SimpleFIN exclusivity', () => {
 
     unlinkAccount('remote-1');
     expect(isSimplefinManaged(accountId)).toBe(false);
-    const retry = writeStagedFile(fixture('td-chequing.csv'));
+    const retry = writeStagedFile(fixture('td-chequing.csv'), userId);
     const result = commitStagedImport({
       stagingId: retry,
       filename: 'td.csv',
@@ -184,7 +184,7 @@ describe('CSV vs SimpleFIN exclusivity', () => {
     saveClaimedConnection(ACCESS_URL, NOW);
     linkAccount({ simplefinAccountId: 'remote-1', accountId: linked, currency: 'CAD' });
 
-    const stagingId = writeStagedFile(fixture('td-visa.csv'));
+    const stagingId = writeStagedFile(fixture('td-visa.csv'), userId);
     const result = commitStagedImport({
       stagingId,
       filename: 'visa.csv',

@@ -10,7 +10,7 @@ import { ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { nowIso } from '@/lib/clock';
 import { todayIso, isIsoDate } from '@/lib/dates';
 import { computeExpiryDate } from '@/lib/warranty/expiry';
-import { enqueueOcrJob } from '@/lib/warranty/ocr/queue';
+import { enqueueOcrJob, ocrQueueWouldOverflow } from '@/lib/warranty/ocr/queue';
 import {
   MAX_RECEIPT_BYTES,
   adoptReceiptFile,
@@ -1048,7 +1048,8 @@ function commitStaged(
       deleteStagedOwner(stagingId);
     });
     // No sidecar means OCR had not finished when the member saved: record 'pending' and let
-    // the queue (and, after a crash, the scheduler sweep) pick it up (§7.5).
+    // the queue (and, after a crash, the scheduler sweep) pick it up (§7.5). A full queue leaves
+    // it pending for the sweep; the receipt is attached either way.
     if (sidecar === null) {
       const receiptId = inserted.id;
       deferred.push(() => {
@@ -1076,17 +1077,19 @@ export function deleteWarrantyReceipt(id: number): boolean {
 
 /**
  * MUST-7.16: reset to 'pending', clear text and error, enqueue. Idempotent: a second
- * click on a claimed row is a no-op inside enqueueOcrJob().
+ * click on a claimed row is a no-op inside enqueueOcrJob(). 'busy' when the OCR queue is full:
+ * the row is left exactly as it was.
  */
-export function resetReceiptForReOcr(id: number): boolean {
+export function resetReceiptForReOcr(id: number): 'queued' | 'missing' | 'busy' {
+  if (ocrQueueWouldOverflow()) return 'busy';
   const result = getDb()
     .update(warrantyReceipts)
     .set({ ocrStatus: 'pending', ocrText: null, ocrError: null })
     .where(eq(warrantyReceipts.id, id))
     .run();
-  if (result.changes === 0) return false;
+  if (result.changes === 0) return 'missing';
   enqueueOcrJob({ kind: 'receipt', receiptId: id });
-  return true;
+  return 'queued';
 }
 
 export function listStoredFilenames(): string[] {

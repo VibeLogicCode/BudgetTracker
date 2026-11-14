@@ -24,6 +24,7 @@ import {
   createCategoryAction,
   deleteProfileAction,
   renameCategoryAction,
+  saveProfileMappingAction,
   setCategoryTaxRelevantAction,
   setProfileActiveAction,
 } from '@/app/(app)/settings/managers/actions';
@@ -332,5 +333,15 @@ describe('setCategoryTaxRelevantAction', () => {
     await setCategoryTaxRelevantAction({}, formData({ categoryId: String(coffee), taxRelevant: 'on' }));
     const calls = vi.mocked(revalidatePath).mock.calls.map((call) => call[0]);
     for (const route of CATEGORY_RENDERING_ROUTES) expect(calls).toContain(route);
+  });
+});
+
+describe('saveProfileMappingAction reads the posted mapping safely', () => {
+  it('answers malformed JSON with a plain error and changes nothing', async () => {
+    setup();
+    const profileId = createProfile({ name: 'Corner Bank', institution: 'Corner Bank', mapping: getBuiltinPreset('TD Visa') });
+    const result = await saveProfileMappingAction({}, formData({ profileId: String(profileId), mapping: '{not json' }));
+    expect(result.error).toBe('That mapping could not be read.');
+    expect(getProfile(profileId)?.mapping).toEqual(getBuiltinPreset('TD Visa'));
   });
 });

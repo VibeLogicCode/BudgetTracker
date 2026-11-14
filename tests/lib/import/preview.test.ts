@@ -18,6 +18,9 @@ import type { ImportMapping } from '@/lib/import/mapping';
 
 const fixture = (name: string) => fs.readFileSync(path.join(process.cwd(), 'fixtures', name));
 
+/** Who staged the files these previews read; buildPreview reads only the viewer's own. */
+const STAGED_BY = 1;
+
 let current: TestDb | null = null;
 let tempDir: string;
 let originalDataDir: string | undefined;
@@ -40,14 +43,14 @@ function setup(fixtureName = 'td-chequing.csv') {
   current = createSeededTestDb();
   const userId = insertTestUser(current.db);
   const accountId = insertTestAccount(current.db);
-  const stagingId = writeStagedFile(fixture(fixtureName));
+  const stagingId = writeStagedFile(fixture(fixtureName), STAGED_BY);
   return { db: current.db, sqlite: current.sqlite, userId, accountId, stagingId };
 }
 
 describe('buildPreview', () => {
   it('returns parsed rows with hashes, the detected encoding and the row counts', () => {
     const { accountId, stagingId } = setup();
-    const preview = buildPreview({ stagingId, filename: 'td.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
+    const preview = buildPreview({ userId: STAGED_BY, stagingId, filename: 'td.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
 
     expect(preview).toMatchObject({ stagingId, filename: 'td.csv', accountId, encoding: 'utf-8', totalRows: 9, duplicateCount: 0, errorCount: 0, skipped: 0, truncated: false, source: 'csv' });
     expect(preview.rows).toHaveLength(9);
@@ -70,7 +73,7 @@ describe('buildPreview', () => {
     const hashed = computeRowHashes(accountId, parsed.rows);
     const committed = commitImport({ accountId, profileId: null, filename: 'first.csv', importedBy: userId, rows: hashed.slice(0, 4), errors: [] });
 
-    const preview = buildPreview({ stagingId, filename: 'td.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
+    const preview = buildPreview({ userId: STAGED_BY, stagingId, filename: 'td.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
     expect(preview.duplicateCount).toBe(4);
     expect(preview.rows.slice(0, 4).every((r) => r.isDuplicate)).toBe(true);
     expect(preview.rows[0].duplicateTransactionId).toBe(committed.insertedTransactionIds[0]);
@@ -83,7 +86,7 @@ describe('buildPreview', () => {
     const parsed = parseCsv(fixture('td-chequing.csv'), getBuiltinPreset('TD Chequing/Debit'));
     commitImport({ accountId: otherAccount, profileId: null, filename: 'other.csv', importedBy: userId, rows: computeRowHashes(otherAccount, parsed.rows), errors: [] });
 
-    const preview = buildPreview({ stagingId, filename: 'td.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
+    const preview = buildPreview({ userId: STAGED_BY, stagingId, filename: 'td.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
     expect(preview.duplicateCount).toBe(0);
   });
 
@@ -92,14 +95,14 @@ describe('buildPreview', () => {
     const coffee = categoryIdByName(db, 'Coffee');
     upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: null, actorRole: 'admin' });
 
-    const preview = buildPreview({ stagingId, filename: 'td.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
+    const preview = buildPreview({ userId: STAGED_BY, stagingId, filename: 'td.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
     expect(preview.rows[0]).toMatchObject({ predictedCategoryId: coffee, predictedCategoryName: 'Coffee', predictedSource: 'rule' });
     expect((sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(0);
   });
 
   it('marks card payments as transfers in the preview', () => {
     const { accountId, stagingId } = setup('td-visa.csv');
-    const preview = buildPreview({ stagingId, filename: 'visa.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Visa') });
+    const preview = buildPreview({ userId: STAGED_BY, stagingId, filename: 'visa.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Visa') });
     const payment = preview.rows.find((r) => r.rawDescription === 'PAYMENT - THANK YOU');
     expect(payment?.isTransfer).toBe(true);
     expect(preview.rows.find((r) => r.rawDescription.startsWith('ESSO'))?.isTransfer).toBe(false);
@@ -110,7 +113,7 @@ describe('buildPreview', () => {
     // and its MM/DD/YYYY date format, unlike TD Chequing/Debit which now expects
     // ISO dates (src/lib/import/presets.ts, corrected against real exports).
     const { accountId, stagingId } = setup('mint-like-edge-cases.csv');
-    const preview = buildPreview({ stagingId, filename: 'edge.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Visa') });
+    const preview = buildPreview({ userId: STAGED_BY, stagingId, filename: 'edge.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Visa') });
     expect(preview.errorCount).toBe(5);
     expect(preview.errors.map((e) => e.reason)).toContain('unparseable date');
     expect(preview.totalRows).toBe(3);
@@ -119,7 +122,7 @@ describe('buildPreview', () => {
   it('reports the detected encoding for a windows-1252 file', () => {
     // Same MM/DD/YYYY-vs-ISO reasoning as above: TD Visa's mapping fits this fixture.
     const { accountId, stagingId } = setup('td-chequing-win1252.csv');
-    const preview = buildPreview({ stagingId, filename: 'fr.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Visa') });
+    const preview = buildPreview({ userId: STAGED_BY, stagingId, filename: 'fr.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Visa') });
     expect(preview.encoding).toBe('windows-1252');
     expect(preview.rows[0].rawDescription).toContain('CAFÉ RÉPUBLIQUE');
   });
@@ -129,9 +132,9 @@ describe('buildPreview', () => {
     const accountId = insertTestAccount(current.db);
     const line = (n: number) => `2026-03-02,SHOP ${n},4.85,,0.00`;
     const csv = Buffer.from(Array.from({ length: PREVIEW_ROW_LIMIT + 25 }, (_, i) => line(i)).join('\n'), 'utf8');
-    const stagingId = writeStagedFile(csv);
+    const stagingId = writeStagedFile(csv, STAGED_BY);
 
-    const preview = buildPreview({ stagingId, filename: 'big.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
+    const preview = buildPreview({ userId: STAGED_BY, stagingId, filename: 'big.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
     expect(preview.rows).toHaveLength(PREVIEW_ROW_LIMIT);
     expect(preview.totalRows).toBe(PREVIEW_ROW_LIMIT + 25);
     expect(preview.truncated).toBe(true);
@@ -141,7 +144,7 @@ describe('buildPreview', () => {
     it('is unique for a file whose date column only fits one known format', () => {
       // amex.csv's dates are "02 Mar 2026" etc — only 'DD-MMM-YYYY' parses them.
       const { accountId, stagingId } = setup('amex.csv');
-      const preview = buildPreview({ stagingId, filename: 'amex.csv', accountId, profileId: null, mapping: getBuiltinPreset('Amex Canada') });
+      const preview = buildPreview({ userId: STAGED_BY, stagingId, filename: 'amex.csv', accountId, profileId: null, mapping: getBuiltinPreset('Amex Canada') });
       expect(preview.dateFormatDetection.status).toBe('unique');
       expect(preview.dateFormatDetection.detected).toBe('DD-MMM-YYYY');
     });
@@ -151,7 +154,7 @@ describe('buildPreview', () => {
       // 'YYYY/MM/DD' parse identically (see dates.ts) — a harmless tie, not a real
       // ambiguity, so detection still names one winner instead of asking the user.
       const { accountId, stagingId } = setup();
-      const preview = buildPreview({ stagingId, filename: 'td.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
+      const preview = buildPreview({ userId: STAGED_BY, stagingId, filename: 'td.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
       expect(preview.dateFormatDetection.status).toBe('resolved');
       expect(preview.dateFormatDetection.detected).toBe('YYYY-MM-DD');
       expect(preview.dateFormatDetection.candidates).toContain('YYYY/MM/DD');
@@ -164,10 +167,10 @@ describe('buildPreview', () => {
         ['03/04/2026,SHOP A,4.85,,0.00', '05/06/2026,SHOP B,10.00,,0.00'].join('\n'),
         'utf8',
       );
-      const stagingId = writeStagedFile(csv);
+      const stagingId = writeStagedFile(csv, STAGED_BY);
       const mapping: ImportMapping = { ...getBuiltinPreset('TD Chequing/Debit'), dateFormat: 'MM/DD/YYYY' };
 
-      const preview = buildPreview({ stagingId, filename: 'ambiguous.csv', accountId, profileId: null, mapping });
+      const preview = buildPreview({ userId: STAGED_BY, stagingId, filename: 'ambiguous.csv', accountId, profileId: null, mapping });
       expect(preview.dateFormatDetection.status).toBe('ambiguous');
       expect(preview.dateFormatDetection.detected).toBeNull();
       expect(preview.dateFormatDetection.candidates).toEqual(expect.arrayContaining(['MM/DD/YYYY', 'DD/MM/YYYY']));
@@ -181,9 +184,9 @@ describe('buildPreview', () => {
       current = createSeededTestDb();
       const accountId = insertTestAccount(current.db);
       const csv = Buffer.from(['N/A,SHOP A,4.85,,0.00', 'N/A,SHOP B,10.00,,0.00'].join('\n'), 'utf8');
-      const stagingId = writeStagedFile(csv);
+      const stagingId = writeStagedFile(csv, STAGED_BY);
 
-      const preview = buildPreview({ stagingId, filename: 'none.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
+      const preview = buildPreview({ userId: STAGED_BY, stagingId, filename: 'none.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
       expect(preview.dateFormatDetection).toEqual({ status: 'none', detected: null, candidates: [] });
       expect(preview.errorCount).toBe(2);
     });
@@ -195,9 +198,9 @@ describe('buildPreview', () => {
       current = createSeededTestDb();
       const accountId = insertTestAccount(current.db);
       const csv = Buffer.from(['03/14/2026,SHOP A,4.85,,0.00', '01/05/2026,SHOP B,10.00,,0.00'].join('\n'), 'utf8');
-      const stagingId = writeStagedFile(csv);
+      const stagingId = writeStagedFile(csv, STAGED_BY);
 
-      const preview = buildPreview({ stagingId, filename: 'wrong-format.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
+      const preview = buildPreview({ userId: STAGED_BY, stagingId, filename: 'wrong-format.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
       expect(preview.errorCount).toBe(2);
       expect(preview.dateFormatDetection.status).toBe('unique');
       expect(preview.dateFormatDetection.detected).toBe('MM/DD/YYYY');
@@ -211,7 +214,7 @@ describe('buildPreview', () => {
   describe('columnOptions (Task 6 Carry 1 — the preview column picker)', () => {
     it('labels every column "Column N" for a headerless mapping', () => {
       const { accountId, stagingId } = setup();
-      const preview = buildPreview({ stagingId, filename: 'td.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
+      const preview = buildPreview({ userId: STAGED_BY, stagingId, filename: 'td.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
       // td-chequing.csv's real rows carry a 5th (running-balance) column the mapping never
       // references by index -- columnOptions reports every column actually in the file, not
       // just the ones a bank preset happens to use.
@@ -226,7 +229,7 @@ describe('buildPreview', () => {
 
     it('labels every column with its real header text when the mapping has a header row', () => {
       const { accountId, stagingId } = setup('amex.csv');
-      const preview = buildPreview({ stagingId, filename: 'amex.csv', accountId, profileId: null, mapping: getBuiltinPreset('Amex Canada') });
+      const preview = buildPreview({ userId: STAGED_BY, stagingId, filename: 'amex.csv', accountId, profileId: null, mapping: getBuiltinPreset('Amex Canada') });
       expect(preview.columnOptions).toHaveLength(17);
       expect(preview.columnOptions[0]).toEqual({ index: 0, label: 'Date' });
       expect(preview.columnOptions[3]).toEqual({ index: 3, label: 'Card Member' });
@@ -235,7 +238,7 @@ describe('buildPreview', () => {
 
     it('is present even when the mapping has no cardCol at all', () => {
       const { accountId, stagingId } = setup();
-      const preview = buildPreview({ stagingId, filename: 'td.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
+      const preview = buildPreview({ userId: STAGED_BY, stagingId, filename: 'td.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
       expect(preview.mapping.cardCol).toBeNull();
       expect(preview.columnOptions.length).toBe(5);
     });
@@ -246,13 +249,13 @@ describe('buildPreview', () => {
   describe('cardValues (MUST-6.1) and the cardCol-null byte-identical guarantee', () => {
     it('is entirely absent from PreviewResult when mapping.cardCol is null -- not present as null, not present at all', () => {
       const { accountId, stagingId } = setup();
-      const preview = buildPreview({ stagingId, filename: 'td.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
+      const preview = buildPreview({ userId: STAGED_BY, stagingId, filename: 'td.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
       expect('cardValues' in preview).toBe(false);
     });
 
     it('leaves every pre-existing field exactly as it was when cardCol is null', () => {
       const { accountId, stagingId } = setup();
-      const preview = buildPreview({ stagingId, filename: 'td.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
+      const preview = buildPreview({ userId: STAGED_BY, stagingId, filename: 'td.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
       expect(preview).toMatchObject({
         stagingId,
         filename: 'td.csv',
@@ -270,10 +273,10 @@ describe('buildPreview', () => {
     it('lists the distinct normalized card values with row counts, excluding blank cells, when cardCol is set', () => {
       current = createSeededTestDb();
       const accountId = insertTestAccount(current.db);
-      const stagingId = writeStagedFile(fixture('amex-two-card.csv'));
+      const stagingId = writeStagedFile(fixture('amex-two-card.csv'), STAGED_BY);
       const mapping: ImportMapping = { ...getBuiltinPreset('Amex Canada'), cardCol: 4 };
 
-      const preview = buildPreview({ stagingId, filename: 'amex.csv', accountId, profileId: null, mapping });
+      const preview = buildPreview({ userId: STAGED_BY, stagingId, filename: 'amex.csv', accountId, profileId: null, mapping });
 
       expect(preview.cardValues).toEqual([
         { value: '-1001', rowCount: 3, assignedUserId: null, assignedUserName: null },
@@ -287,10 +290,10 @@ describe('buildPreview', () => {
       const accountId = insertTestAccount(current.db);
       const alexId = insertTestUser(current.db, { name: 'Alex' });
       upsertAccountCardPerson({ accountId, cardValue: '-1001', userId: alexId });
-      const stagingId = writeStagedFile(fixture('amex-two-card.csv'));
+      const stagingId = writeStagedFile(fixture('amex-two-card.csv'), STAGED_BY);
       const mapping: ImportMapping = { ...getBuiltinPreset('Amex Canada'), cardCol: 4 };
 
-      const preview = buildPreview({ stagingId, filename: 'amex.csv', accountId, profileId: null, mapping });
+      const preview = buildPreview({ userId: STAGED_BY, stagingId, filename: 'amex.csv', accountId, profileId: null, mapping });
 
       expect(preview.cardValues!.find((v) => v.value === '-1001')).toMatchObject({
         rowCount: 3,
@@ -303,7 +306,7 @@ describe('buildPreview', () => {
     it("reports no card values at all when cardCol points past every row's cell count", () => {
       const { accountId, stagingId } = setup(); // td-chequing.csv, 4 columns
       const mapping: ImportMapping = { ...getBuiltinPreset('TD Chequing/Debit'), cardCol: 50 };
-      const preview = buildPreview({ stagingId, filename: 'td.csv', accountId, profileId: null, mapping });
+      const preview = buildPreview({ userId: STAGED_BY, stagingId, filename: 'td.csv', accountId, profileId: null, mapping });
       expect(preview.cardValues).toEqual([]);
     });
   });
@@ -347,10 +350,10 @@ NEWFILEUID:NONE
 
     it('previews the real OFX rows (not CSV-garbled columns), with FITIDs as externalIds', () => {
       const { accountId } = setupOfx();
-      const stagingId = writeStagedFile(Buffer.from(OFX, 'utf8'));
+      const stagingId = writeStagedFile(Buffer.from(OFX, 'utf8'), STAGED_BY);
       // The mapping passed here belongs to whatever CSV profile the account remembers -- ruling
       // R9 says an OFX file skips it entirely, so any valid CSV mapping proves the point.
-      const preview = buildPreview({
+      const preview = buildPreview({ userId: STAGED_BY,
         stagingId,
         filename: 'statement.ofx',
         accountId,
@@ -377,8 +380,8 @@ NEWFILEUID:NONE
     it('yields the same rows commitStagedImport actually inserts, FITID for FITID', () => {
       const { accountId, userId } = setupOfx();
 
-      const previewStagingId = writeStagedFile(Buffer.from(OFX, 'utf8'));
-      const preview = buildPreview({
+      const previewStagingId = writeStagedFile(Buffer.from(OFX, 'utf8'), STAGED_BY);
+      const preview = buildPreview({ userId: STAGED_BY,
         stagingId: previewStagingId,
         filename: 'statement.ofx',
         accountId,
@@ -386,7 +389,7 @@ NEWFILEUID:NONE
         mapping: getBuiltinPreset('TD Chequing/Debit'),
       });
 
-      const commitStagingId = writeStagedFile(Buffer.from(OFX, 'utf8'));
+      const commitStagingId = writeStagedFile(Buffer.from(OFX, 'utf8'), userId);
       const committed = commitStagedImport({
         stagingId: commitStagingId,
         filename: 'statement.ofx',
@@ -411,7 +414,7 @@ NEWFILEUID:NONE
     it('flags rows already committed by FITID as duplicates on a re-preview', () => {
       const { accountId, userId } = setupOfx();
 
-      const firstStagingId = writeStagedFile(Buffer.from(OFX, 'utf8'));
+      const firstStagingId = writeStagedFile(Buffer.from(OFX, 'utf8'), userId);
       commitStagedImport({
         stagingId: firstStagingId,
         filename: 'statement.ofx',
@@ -421,8 +424,8 @@ NEWFILEUID:NONE
         userId,
       });
 
-      const secondStagingId = writeStagedFile(Buffer.from(OFX, 'utf8'));
-      const preview = buildPreview({
+      const secondStagingId = writeStagedFile(Buffer.from(OFX, 'utf8'), STAGED_BY);
+      const preview = buildPreview({ userId: STAGED_BY,
         stagingId: secondStagingId,
         filename: 'statement.ofx',
         accountId,
@@ -436,8 +439,8 @@ NEWFILEUID:NONE
 
     it('reports the source so the client can stop offering a CSV mapping (item BP)', () => {
       const { accountId } = setupOfx();
-      const stagingId = writeStagedFile(Buffer.from(OFX, 'utf8'));
-      const preview = buildPreview({
+      const stagingId = writeStagedFile(Buffer.from(OFX, 'utf8'), STAGED_BY);
+      const preview = buildPreview({ userId: STAGED_BY,
         stagingId,
         filename: 'statement.ofx',
         accountId,
@@ -516,7 +519,7 @@ describe('buildPreview: rows that may already be here (v1.61.0)', () => {
     const lines = Array.from({ length: 250 }, (_, n) => `2026-03-10,SHOP ${n},${n + 1}.00,,`);
     const typed = existing('2026-03-09', -23100);
 
-    const preview = buildPreview({ stagingId: writeStagedFile(csv(lines)), filename: 'march.csv', accountId, profileId: null, mapping: TD() });
+    const preview = buildPreview({ userId: STAGED_BY, stagingId: writeStagedFile(csv(lines), STAGED_BY), filename: 'march.csv', accountId, profileId: null, mapping: TD() });
 
     expect(preview.rows).toHaveLength(PREVIEW_ROW_LIMIT);
     expect(preview.setAside).toHaveLength(1);
@@ -540,9 +543,9 @@ describe('buildPreview: rows that may already be here (v1.61.0)', () => {
     const only = existing('2026-03-08', -4217);
     const near = existing('2026-03-14', -6130, 'manual', 'FUEL STOP 12');
     const far = existing('2026-03-17', -6130, 'manual', 'FUEL STOP 12');
-    const stagingId = writeStagedFile(csv(['2026-03-09,MAPLE GROCER,42.17,,', '2026-03-15,FUEL STOP 12,61.30,,']));
+    const stagingId = writeStagedFile(csv(['2026-03-09,MAPLE GROCER,42.17,,', '2026-03-15,FUEL STOP 12,61.30,,']), STAGED_BY);
 
-    const preview = buildPreview({ stagingId, filename: 'march.csv', accountId, profileId: null, mapping: TD() });
+    const preview = buildPreview({ userId: STAGED_BY, stagingId, filename: 'march.csv', accountId, profileId: null, mapping: TD() });
 
     expect(preview.setAside.map((row) => [row.rawDescription, row.defaultSkip, row.candidates.map((c) => c.id)])).toEqual([
       ['MAPLE GROCER', true, [only]],
@@ -564,7 +567,7 @@ describe('buildPreview: rows that may already be here (v1.61.0)', () => {
     setAside({ accountId, alex, row: hashed[0]!, state: 'dismissed', reason: 'deleted', importId: first.importId });
     setAside({ accountId, alex, row: hashed[1]!, state: 'dismissed', reason: 'possible_duplicate', importId: first.importId });
 
-    const preview = buildPreview({ stagingId: writeStagedFile(csv(lines)), filename: 'march.csv', accountId, profileId: null, mapping: TD() });
+    const preview = buildPreview({ userId: STAGED_BY, stagingId: writeStagedFile(csv(lines), STAGED_BY), filename: 'march.csv', accountId, profileId: null, mapping: TD() });
 
     expect(preview.duplicateCount).toBe(1);
     expect(preview.setAside.map((row) => [row.rawDescription, row.kind, row.defaultSkip, row.decidable])).toEqual([
@@ -580,7 +583,7 @@ describe('buildPreview: rows that may already be here (v1.61.0)', () => {
     const hashed = computeRowHashes(accountId, parseCsv(csv(lines), TD()).rows);
     setAside({ accountId, alex, row: hashed[0]!, state: 'waiting', reason: 'possible_duplicate' });
 
-    const preview = buildPreview({ stagingId: writeStagedFile(csv(lines)), filename: 'march.csv', accountId, profileId: null, mapping: TD() });
+    const preview = buildPreview({ userId: STAGED_BY, stagingId: writeStagedFile(csv(lines), STAGED_BY), filename: 'march.csv', accountId, profileId: null, mapping: TD() });
 
     expect(preview.setAside).toEqual([
       expect.objectContaining({ key: hashed[0]!.dedupHash, kind: 'waiting', decidable: false, candidates: [] }),
@@ -590,8 +593,8 @@ describe('buildPreview: rows that may already be here (v1.61.0)', () => {
   it('lists nothing for a file with no matches, and never compares a file with its own rows', () => {
     const { accountId } = setupHousehold();
     // Two identical same-day purchases from one file are two purchases.
-    const stagingId = writeStagedFile(csv(['2026-03-09,MAPLE GROCER,42.17,,', '2026-03-09,MAPLE GROCER,42.17,,']));
-    const preview = buildPreview({ stagingId, filename: 'march.csv', accountId, profileId: null, mapping: TD() });
+    const stagingId = writeStagedFile(csv(['2026-03-09,MAPLE GROCER,42.17,,', '2026-03-09,MAPLE GROCER,42.17,,']), STAGED_BY);
+    const preview = buildPreview({ userId: STAGED_BY, stagingId, filename: 'march.csv', accountId, profileId: null, mapping: TD() });
     expect(preview.setAside).toEqual([]);
     expect(preview.rows.map((row) => row.setAsideKind)).toEqual([null, null]);
   });
@@ -616,8 +619,8 @@ describe('buildPreview: rows that may already be here (v1.61.0)', () => {
       '</OFX>',
     ].join('\n');
 
-    const preview = buildPreview({
-      stagingId: writeStagedFile(Buffer.from(qfx, 'utf8')),
+    const preview = buildPreview({ userId: STAGED_BY,
+      stagingId: writeStagedFile(Buffer.from(qfx, 'utf8'), STAGED_BY),
       filename: 'august.qfx',
       accountId,
       profileId: null,
@@ -639,10 +642,10 @@ describe('buildPreview: rows that may already be here (v1.61.0)', () => {
     const { accountId, alex, existing, sqlite } = setupHousehold();
     const lines = Array.from({ length: 250 }, (_, n) => `2026-03-10,SHOP ${n},${n + 1}.00,,`);
     existing('2026-03-09', -23100);
-    const preview = buildPreview({ stagingId: writeStagedFile(csv(lines)), filename: 'march.csv', accountId, profileId: null, mapping: TD() });
+    const preview = buildPreview({ userId: STAGED_BY, stagingId: writeStagedFile(csv(lines), STAGED_BY), filename: 'march.csv', accountId, profileId: null, mapping: TD() });
 
     const result = commitStagedImport({
-      stagingId: writeStagedFile(csv(lines)),
+      stagingId: writeStagedFile(csv(lines), alex),
       filename: 'march.csv',
       accountId,
       profileId: getProfileByName('TD Chequing/Debit')!.id,

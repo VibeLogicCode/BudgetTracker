@@ -274,7 +274,7 @@ describe('commitStagedImport reports what the rules did, and never marks the imp
       ['"2026-03-02","POS PURCHASE CORNER MARKET","24.50",,"1000.00"', '"2026-03-03","POS PURCHASE FUEL DEPOT","40.00",,"960.00"', ''].join('\n'),
       'utf8',
     );
-    const stagingId = writeStagedFile(csv);
+    const stagingId = writeStagedFile(csv, userId);
     const result = commitStagedImport({
       stagingId,
       filename: 'march.csv',

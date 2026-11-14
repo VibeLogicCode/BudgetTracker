@@ -126,7 +126,13 @@ export async function saveProfileMappingAction(_prev: ManagerState, formData: Fo
 
   await requireAdmin();
   const profileId = Number(formData.get('profileId'));
-  const mapping = importMappingSchema.safeParse(JSON.parse(String(formData.get('mapping') ?? '{}')));
+  let mappingInput: unknown;
+  try {
+    mappingInput = JSON.parse(String(formData.get('mapping') ?? '{}'));
+  } catch {
+    return { error: 'That mapping could not be read.' };
+  }
+  const mapping = importMappingSchema.safeParse(mappingInput);
   if (!Number.isInteger(profileId) || !mapping.success) return { error: 'Invalid mapping.' };
   const profile = getProfile(profileId);
   if (!profile) return { error: 'Unknown profile.' };

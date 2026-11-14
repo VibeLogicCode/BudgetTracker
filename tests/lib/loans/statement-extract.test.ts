@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { findStatementCandidates, prefill } from '@/lib/loans/statement-extract';
+import { MAX_STATEMENT_LINE_CHARS, findStatementCandidates, prefill } from '@/lib/loans/statement-extract';
 
 /**
  * Ruling S7. Candidates by keyword proximity, never per-lender templates -- a template rots
@@ -139,5 +139,34 @@ describe('findStatementCandidates: text that is not a statement', () => {
   it('does not read bare integers as money', () => {
     const found = findStatementCandidates('Closing balance page 2 of 3 account 123456789');
     expect(found.balance).toEqual([]);
+  });
+});
+
+describe('findStatementCandidates: line length and pattern bounds', () => {
+  it('skips a line longer than MAX_STATEMENT_LINE_CHARS within a generous time bound', () => {
+    const longDigits = `Closing balance ${'1'.repeat(200_000)}x`;
+    const longMonth = `Statement date 1 jan${'a'.repeat(200_000)} 2026`;
+    const text = `${longDigits}\n${longMonth}\n${MORTGAGE}`;
+    const started = performance.now();
+    const found = findStatementCandidates(text);
+    expect(performance.now() - started).toBeLessThan(1_000);
+    // The ordinary lines after the long ones are still read.
+    expect(prefill(found.balance)?.valueCents).toBe(19_991_315);
+    expect(prefill(found.statementDate)?.date).toBe('2026-09-01');
+  });
+
+  it('still reads a line at the cap', () => {
+    const line = 'Closing balance $1,234.56'.padEnd(MAX_STATEMENT_LINE_CHARS, ' ');
+    expect(line.length).toBe(MAX_STATEMENT_LINE_CHARS);
+    expect(prefill(findStatementCandidates(line).balance)?.valueCents).toBe(123_456);
+    const over = `${line} `;
+    expect(findStatementCandidates(over).balance).toEqual([]);
+  });
+
+  it('reads a full month name and a twelve-digit figure, and nothing longer as one figure', () => {
+    expect(prefill(findStatementCandidates('Statement date September 1, 2026').statementDate)?.date).toBe('2026-09-01');
+    expect(prefill(findStatementCandidates('Statement date 1 September 2026').statementDate)?.date).toBe('2026-09-01');
+    expect(prefill(findStatementCandidates('Closing balance 123456789012.34').balance)?.valueCents).toBe(12_345_678_901_234);
+    expect(findStatementCandidates('Closing balance 1234567890123.45').balance).toEqual([]);
   });
 });

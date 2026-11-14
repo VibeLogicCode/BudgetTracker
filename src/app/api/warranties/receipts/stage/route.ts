@@ -1,15 +1,11 @@
 import { z } from '@/lib/zod';
 import { CsrfError, assertSameOrigin } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
-import { enqueueOcrJob } from '@/lib/warranty/ocr/queue';
-import {
-  MAX_FILES_PER_UPLOAD,
-  MAX_RECEIPT_BYTES,
-  MAX_UPLOAD_BYTES,
-  sha256Bytes,
-} from '@/lib/warranty/receipts';
+import { UPLOAD_BODY_LIMIT_BYTES, declaredLengthOver, readFormOrNull, uploadTooLargeResponse } from '@/lib/upload-limits';
+import { enqueueOcrJob, ocrQueueWouldOverflow } from '@/lib/warranty/ocr/queue';
+import { MAX_FILES_PER_UPLOAD, MAX_RECEIPT_BYTES, sha256Bytes } from '@/lib/warranty/receipts';
 import { HEIC_MESSAGE, UNSUPPORTED_TYPE_MESSAGE, extForMime, looksLikeHeic, sniffReceiptType } from '@/lib/warranty/sniff';
-import { writeStagedReceipt } from '@/lib/warranty/staging';
+import { MAX_STAGED_RECEIPTS_PER_MEMBER, countStagedReceiptsBy, writeStagedReceipt } from '@/lib/warranty/staging';
 
 export const dynamic = 'force-dynamic';
 
@@ -35,17 +31,13 @@ function tooLarge(): Response {
 }
 
 /**
- * MINOR 2 (review): the Content-Length pre-check trips at MAX_UPLOAD_BYTES (the whole
- * request, up to MAX_FILES_PER_UPLOAD receipts), not at the per-file MAX_RECEIPT_BYTES cap
- * tooLarge() describes — reusing that message on this branch told a member uploading five
- * legitimately-sized 9 MB receipts that "each receipt must be 10485760 bytes or smaller",
- * which is false. This message names the actual limit that tripped.
+ * MINOR 2 (review): the Content-Length pre-check trips at the whole-request limit
+ * (UPLOAD_BODY_LIMIT_BYTES, every receipt in the request together), not at the per-file
+ * MAX_RECEIPT_BYTES cap tooLarge() describes. This message names the limit that tripped. A body
+ * that arrives cut short, and so cannot be read as a form, gets the same answer.
  */
 function requestTooLarge(): Response {
-  return Response.json(
-    { error: `The whole upload must be ${MAX_UPLOAD_BYTES} bytes (50 MB) or smaller.`, code: 'file_too_large' },
-    { status: 413 },
-  );
+  return uploadTooLargeResponse(`The whole upload must be ${UPLOAD_BODY_LIMIT_BYTES} bytes (10 MB) or smaller.`);
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -63,10 +55,10 @@ export async function POST(request: Request): Promise<Response> {
 
   // MUST-6.5(a): refuse on the DECLARED size before formData() buffers the whole body —
   // the same pre-check the import routes already make.
-  const contentLength = Number(request.headers.get('content-length') ?? '');
-  if (Number.isFinite(contentLength) && contentLength > MAX_UPLOAD_BYTES) return requestTooLarge();
+  if (declaredLengthOver(request)) return requestTooLarge();
 
-  const form = await request.formData();
+  const form = await readFormOrNull(request);
+  if (form === null) return requestTooLarge();
   const parts = form.getAll('file').filter((value): value is File => value instanceof File);
   if (parts.length === 0) return Response.json({ error: 'No file uploaded', code: 'no_file' }, { status: 400 });
   if (parts.length > MAX_FILES_PER_UPLOAD) {
@@ -74,6 +66,21 @@ export async function POST(request: Request): Promise<Response> {
       { error: `Upload at most ${MAX_FILES_PER_UPLOAD} files at once.`, code: 'too_many_files' },
       { status: 413 },
     );
+  }
+
+  // Refused before anything is written: a member holds at most MAX_STAGED_RECEIPTS_PER_MEMBER
+  // staged receipts no item has adopted, and the reader takes at most OCR_QUEUE_MAX_DEPTH waiting jobs.
+  if (countStagedReceiptsBy(user.id) + parts.length > MAX_STAGED_RECEIPTS_PER_MEMBER) {
+    return Response.json(
+      {
+        error: `You already have ${MAX_STAGED_RECEIPTS_PER_MEMBER} uploaded receipts not saved to an item. Save those first; unsaved uploads are cleared after a day.`,
+        code: 'too_many_staged',
+      },
+      { status: 429 },
+    );
+  }
+  if (ocrQueueWouldOverflow(parts.length)) {
+    return Response.json({ error: 'The receipt reader is busy. Try again in a few minutes.', code: 'reader_busy' }, { status: 429 });
   }
 
   // MUST-6.5(b): validate EVERY part before writing ANY of them. A request that fails is

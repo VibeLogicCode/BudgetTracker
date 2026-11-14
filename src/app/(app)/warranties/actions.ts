@@ -44,6 +44,7 @@ import {
 } from '@/lib/warranty/items';
 import { MAX_FILES_PER_UPLOAD } from '@/lib/warranty/receipts';
 import { STAGING_ID_RE } from '@/lib/warranty/staging';
+import { sniffReceiptType } from '@/lib/warranty/sniff';
 import { findItemType } from '@/lib/warranty/types';
 import {
   addInstallment,
@@ -116,6 +117,7 @@ const stagedSchema = z
   .max(MAX_FILES_PER_UPLOAD);
 
 const UPLOAD_INVALID_ERROR = 'That upload is no longer valid — please choose the files again.';
+const RECEIPT_READER_BUSY_ERROR = 'The receipt reader is busy. Try again in a few minutes.';
 
 /**
  * IMPORTANT 2: `JSON.parse` throws a raw SyntaxError ("Unexpected token…") and
@@ -626,9 +628,12 @@ export async function reconcileLoanAction(
     return failure(error, 'Could not save that statement.');
   }
 
+  let fileNotKept = false;
   if (keepFile) {
     try {
-      attachStatementReceipt(anchorId, await storeStatementReceipt(id.data, uploaded as File));
+      const receiptId = await storeStatementReceipt(id.data, uploaded as File);
+      if (receiptId === null) fileNotKept = true;
+      else attachStatementReceipt(anchorId, receiptId);
     } catch (error) {
       // The figures matter more than the document: the statement is saved either way, and this is
       // now the ONLY thing that can fail after it -- leaving a statement with no file, which is
@@ -638,6 +643,7 @@ export async function reconcileLoanAction(
   }
 
   revalidateAll(id.data);
+  if (fileNotKept) return { message: `Reconciled to the statement of ${asOfDate}. The file was not kept: it is not a PDF.` };
   return { message: `Reconciled to the statement of ${asOfDate}.` };
 }
 
@@ -859,7 +865,7 @@ export async function reRunOcrAction(
   // MUST-7.16: idempotent and safe to click repeatedly. A second click on a claimed row
   // is a no-op inside enqueueOcrJob(). M5: errors as return values, never thrown.
   try {
-    resetReceiptForReOcr(id.data);
+    if (resetReceiptForReOcr(id.data) === 'busy') return { error: RECEIPT_READER_BUSY_ERROR };
   } catch (error) {
     return failure(error, 'Could not re-run OCR for that receipt.');
   }
@@ -1195,9 +1201,12 @@ export async function recomputeLoanBalanceAction(_prev: WarrantyActionState, for
  * Goes through the same path a receipt upload does -- a server-generated filename, the sha256, the
  * size -- so the file lands under the same rules (MUST-4.2) and the OCR sweep treats it like any
  * other PDF.
+ *
+ * Returns the receipt id, or null when the bytes do not read as a PDF: nothing is stored then.
  */
-async function storeStatementReceipt(itemId: number, file: File): Promise<number> {
+async function storeStatementReceipt(itemId: number, file: File): Promise<number | null> {
   const buffer = Buffer.from(await file.arrayBuffer());
+  if (sniffReceiptType(buffer) !== 'application/pdf') return null;
   const storedFilename = writeReceiptFile(buffer, 'application/pdf');
   const row = getDb()
     .insert(warrantyReceipts)

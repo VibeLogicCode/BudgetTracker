@@ -1,7 +1,3 @@
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { randomUUID } from 'node:crypto';
 import { CsrfError, assertSameOrigin } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
 import { isSelfScoped, type Viewer } from '@/lib/auth/viewer';
@@ -10,6 +6,7 @@ import { extractPdfText, ScannedPdfError } from '@/lib/warranty/ocr/pdf';
 import { findStatementCandidates, prefill } from '@/lib/loans/statement-extract';
 import { detectStatementColumns, readStatementCsv, type StatementColumns } from '@/lib/loans/statement-csv';
 import { statementCsvColumnsFor } from '@/lib/loans';
+import { declaredLengthOver, readFormOrNull, uploadTooLargeResponse } from '@/lib/upload-limits';
 
 /**
  * Read the figures off a statement so the reconcile form can be filled in.
@@ -25,6 +22,10 @@ import { statementCsvColumnsFor } from '@/lib/loans';
  * come from, and typing two numbers is faster than checking twelve.
  */
 export const MAX_STATEMENT_BYTES = 10 * 1024 * 1024;
+
+/** How many statements the whole household may have read at once. Another answers 429. */
+export const MAX_STATEMENT_PREFILLS_IN_FLIGHT = 1;
+let prefillsInFlight = 0;
 
 /** A CSV by type or by name. A statement is one or the other; nothing else is accepted. */
 function looksLikeCsv(file: File): boolean {
@@ -80,8 +81,22 @@ export async function POST(request: Request): Promise<Response> {
   const user = userFromRequest(request);
   if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
   if (isSelfScoped(user)) return Response.json({ error: 'Not available on this account.' }, { status: 403 });
+  if (declaredLengthOver(request)) return uploadTooLargeResponse('That file is too large to read.');
 
-  const form = await request.formData();
+  if (prefillsInFlight >= MAX_STATEMENT_PREFILLS_IN_FLIGHT) {
+    return Response.json({ error: 'Another statement is being read. Try again in a moment.' }, { status: 429 });
+  }
+  prefillsInFlight += 1;
+  try {
+    return await readStatement(request, user);
+  } finally {
+    prefillsInFlight -= 1;
+  }
+}
+
+async function readStatement(request: Request, user: Viewer): Promise<Response> {
+  const form = await readFormOrNull(request);
+  if (form === null) return uploadTooLargeResponse('That file is too large to read.');
   const file = form.get('statement');
   if (!(file instanceof File)) return Response.json({ error: 'No statement uploaded' }, { status: 400 });
   if (file.size > MAX_STATEMENT_BYTES) {
@@ -89,8 +104,8 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   /*
-    v1.48.0, ruling S1. A CSV never reaches the disk at all: it is text, so it is decoded in memory,
-    read, and dropped. Only the PDF path needs a file, because extractPdfText takes a path.
+    v1.48.0, ruling S1. A statement never reaches the disk: a CSV is decoded in memory, read and
+    dropped, and a PDF's bytes go straight to extractPdfText.
 
     The mapping a person confirmed for THIS loan is tried first (S3). A lender's export keeps its
     shape month to month, so remembering it turns a monthly chore back into an upload.
@@ -126,13 +141,10 @@ export async function POST(request: Request): Promise<Response> {
     });
   }
 
-  // Written to a temp file because extractPdfText takes a path, and removed in the finally below
-  // whatever happens: this route only ever READS a statement. Keeping the document is a separate,
-  // opt-in decision made on the reconcile form itself.
-  const scratch = path.join(os.tmpdir(), `statement-${randomUUID()}.pdf`);
+  // This route only ever READS a statement. Keeping the document is a separate, opt-in decision
+  // made on the reconcile form itself.
   try {
-    fs.writeFileSync(scratch, Buffer.from(await file.arrayBuffer()));
-    const text = await extractPdfText(scratch);
+    const text = await extractPdfText(new Uint8Array(await file.arrayBuffer()));
     const candidates = findStatementCandidates(text);
     return Response.json({
       balance: prefill(candidates.balance),
@@ -154,7 +166,5 @@ export async function POST(request: Request): Promise<Response> {
       );
     }
     return Response.json({ error: 'That statement could not be read. Type the figures instead.' }, { status: 422 });
-  } finally {
-    fs.rmSync(scratch, { force: true });
   }
 }

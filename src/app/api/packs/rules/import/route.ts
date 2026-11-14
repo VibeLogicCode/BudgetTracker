@@ -2,6 +2,7 @@ import { CsrfError, assertSameOrigin } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
 import { MAX_FILE_BYTES } from '@/lib/import/parse';
 import { PackFormatError, importRulesPack, previewRulesPackImport } from '@/lib/packs';
+import { readFormOrNull } from '@/lib/upload-limits';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,7 +24,9 @@ class PackTooLargeError extends Error {
 }
 
 async function readPack(request: Request): Promise<{ pack: unknown; mode: string; onConflict: 'keep' | 'overwrite' }> {
-  const form = await request.formData();
+  // A body that cannot be read as a form (one cut short reads this way) is answered as too large.
+  const form = await readFormOrNull(request);
+  if (form === null) throw new PackTooLargeError();
   const file = form.get('file');
   if (!(file instanceof File)) throw new PackFormatError('No file was uploaded.');
   // R-15: the FILE's own size, which is authoritative and known without reading a byte -- exactly

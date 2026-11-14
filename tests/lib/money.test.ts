@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { parseAmountToCents, formatCents, sumCents, netSpentCents, absCents, pctOf } from '@/lib/money';
+import {
+  parseAmountToCents,
+  formatCents,
+  sumCents,
+  netSpentCents,
+  absCents,
+  pctOf,
+  MAX_AMOUNT_INPUT_CHARS,
+} from '@/lib/money';
 
 describe('parseAmountToCents', () => {
   it('parses plain decimals', () => {
@@ -57,6 +65,35 @@ describe('parseAmountToCents', () => {
 
   it('never returns negative zero', () => {
     expect(Object.is(parseAmountToCents('-0.00'), 0)).toBe(true);
+  });
+
+  it('returns null for an amount longer than the input cap, within a generous time bound', () => {
+    const commas = ','.repeat(1_000_000);
+    const started = performance.now();
+    expect(parseAmountToCents(commas)).toBeNull();
+    expect(parseAmountToCents(`1${commas}12`)).toBeNull();
+    expect(performance.now() - started).toBeLessThan(50);
+    expect(parseAmountToCents('1'.repeat(MAX_AMOUNT_INPUT_CHARS + 1))).toBeNull();
+  });
+
+  it('still reads an amount at the input cap', () => {
+    const padded = `${' '.repeat(10)}12.34${' '.repeat(10)}`;
+    expect(parseAmountToCents(padded)).toBe(1234);
+    const atCap = `${'0'.repeat(MAX_AMOUNT_INPUT_CHARS - 5)}12.34`;
+    expect(atCap.length).toBe(MAX_AMOUNT_INPUT_CHARS);
+    expect(parseAmountToCents(atCap)).toBe(1234);
+  });
+
+  it('refuses two or more commas ending in two digits with a single pass over the commas', () => {
+    expect(parseAmountToCents('1,234,56')).toBeNull();
+    expect(parseAmountToCents('1,,56')).toBeNull();
+    expect(parseAmountToCents(',1,56')).toBeNull();
+    expect(parseAmountToCents('1,234,567')).toBe(123456700);
+    expect(parseAmountToCents('1,2,3')).toBe(12300);
+    expect(parseAmountToCents('12,34')).toBe(1234);
+    expect(parseAmountToCents('(45.00)')).toBe(-4500);
+    expect(parseAmountToCents('CAD 5')).toBe(500);
+    expect(parseAmountToCents('−1,234.56')).toBe(-123456);
   });
 });
 

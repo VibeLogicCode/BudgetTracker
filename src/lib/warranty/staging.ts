@@ -146,6 +146,29 @@ export function stagedByViewer(stagingId: string, userId: number): boolean {
   return stagedUploader(stagingId) === userId;
 }
 
+/** How many staged receipts one member may hold before saving or discarding some. */
+export const MAX_STAGED_RECEIPTS_PER_MEMBER = 20;
+
+const OWNER_RECORD_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.owner\.json$/;
+
+/**
+ * The staged receipts this member holds that no item has adopted yet: counted from the owner
+ * records, each with its file still present. Saving a receipt removes its owner record, and the
+ * 24-hour sweep removes the rest.
+ */
+export function countStagedReceiptsBy(userId: number): number {
+  const dir = receiptTempDir();
+  if (!fs.existsSync(dir)) return 0;
+  let held = 0;
+  for (const entry of fs.readdirSync(dir)) {
+    const match = OWNER_RECORD_RE.exec(entry);
+    if (match === null) continue;
+    const stagingId = match[1]!;
+    if (stagedUploader(stagingId) === userId && findStagedReceipt(stagingId) !== null) held += 1;
+  }
+  return held;
+}
+
 export function deleteStagedOwner(stagingId: string): void {
   fs.rmSync(ownerPath(stagingId), { force: true });
 }

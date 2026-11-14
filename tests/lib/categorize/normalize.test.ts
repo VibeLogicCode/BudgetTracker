@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { CHANNEL_PREFIXES, PROVINCE_CODES, alwaysAskPattern, normalizeMerchant, tokenize } from '@/lib/categorize/normalize';
+import {
+  ALWAYS_ASK_MAX_INPUT_CHARS,
+  CHANNEL_PREFIXES,
+  PROVINCE_CODES,
+  alwaysAskPattern,
+  normalizeMerchant,
+  tokenize,
+} from '@/lib/categorize/normalize';
+import { MAX_RAW_DESCRIPTION_CHARS } from '@/lib/import/parse';
 import { dedupDescription, dedupHash } from '@/lib/import/dedup';
 
 describe('normalizeMerchant — basics', () => {
@@ -179,6 +187,27 @@ describe('alwaysAskPattern', () => {
   it('works on what the normaliser stores, which keeps the code', () => {
     expect(normalizeMerchant('E-TRANSFER ***AB1')).toBe('E-TRANSFER ***AB1');
     expect(alwaysAskPattern(normalizeMerchant('E-TRANSFER ***AB1'))).toBe('E-TRANSFER');
+  });
+
+  it('drops several masked codes, trimming trailing spaces first', () => {
+    expect(alwaysAskPattern('E-TRANSFER ***AB1 **QX7')).toBe('E-TRANSFER');
+    expect(alwaysAskPattern('E-TRANSFER ***AB1   ')).toBe('E-TRANSFER');
+    expect(alwaysAskPattern('MAPLE GROCER *AB1')).toBe('MAPLE GROCER *AB1');
+  });
+
+  it('returns within a generous time bound on a long description', () => {
+    const long = `MAPLE GROCER${' '.repeat(100_000)}**${'A'.repeat(100_000)}x`;
+    const stars = `${'**'.repeat(100_000)}x`;
+    const started = performance.now();
+    alwaysAskPattern(long);
+    alwaysAskPattern(stars);
+    expect(performance.now() - started).toBeLessThan(250);
+  });
+
+  it('works on text cut to the raw-description cap', () => {
+    expect(ALWAYS_ASK_MAX_INPUT_CHARS).toBe(MAX_RAW_DESCRIPTION_CHARS);
+    const long = `FUEL STOP 12 ${'X'.repeat(ALWAYS_ASK_MAX_INPUT_CHARS)}`;
+    expect(alwaysAskPattern(long).length).toBeLessThanOrEqual(ALWAYS_ASK_MAX_INPUT_CHARS);
   });
 
   it('leaves a merchant with no masked code alone, and never empties one that is only a code', () => {

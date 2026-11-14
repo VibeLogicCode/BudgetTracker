@@ -2,10 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, insertTestUser, type TestDb } from '../../../helpers/db';
 import {
   OCR_CRASH_CONDEMNED_MESSAGE,
+  OCR_QUEUE_MAX_DEPTH,
   drainOcrQueue,
   enqueueOcrJob,
   isOcrJobClaimed,
@@ -79,7 +81,7 @@ describe('staged jobs', () => {
   it('writes a done sidecar with the raw text and the suggestions', async () => {
     setOcrEngineForTests({ recognize: async () => ({ text: 'HOME DEPOT #7042\nTOTAL 42.00' }) });
     const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
-    expect(enqueueOcrJob({ kind: 'staged', stagingId })).toBe(true);
+    expect(enqueueOcrJob({ kind: 'staged', stagingId })).toBe('queued');
     await drainOcrQueue();
     const sidecar = readSidecar(stagingId);
     expect(sidecar?.status).toBe('done');
@@ -242,10 +244,10 @@ describe('claiming and FIFO order (MUST-7.10)', () => {
     });
     const a = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     const b = writeStagedReceipt(JPEG, 'image/jpeg', 1);
-    expect(enqueueOcrJob({ kind: 'staged', stagingId: a })).toBe(true);
-    expect(enqueueOcrJob({ kind: 'staged', stagingId: a })).toBe(false);
+    expect(enqueueOcrJob({ kind: 'staged', stagingId: a })).toBe('queued');
+    expect(enqueueOcrJob({ kind: 'staged', stagingId: a })).toBe('claimed');
     expect(isOcrJobClaimed({ kind: 'staged', stagingId: a })).toBe(true);
-    expect(enqueueOcrJob({ kind: 'staged', stagingId: b })).toBe(true);
+    expect(enqueueOcrJob({ kind: 'staged', stagingId: b })).toBe('queued');
     await drainOcrQueue();
     expect(order).toEqual([`${a}.jpg`, `${b}.jpg`]);
     expect(isOcrJobClaimed({ kind: 'staged', stagingId: a })).toBe(false);
@@ -332,7 +334,7 @@ describe('queue never strands a job (IMPORTANT 3 fix report — Ruling P15 revis
     setOcrEngineForTests({
       recognize: async () => ({ text: 'b-result' }),
     });
-    expect(enqueueOcrJob({ kind: 'staged', stagingId: b })).toBe(true);
+    expect(enqueueOcrJob({ kind: 'staged', stagingId: b })).toBe('queued');
 
     releaseFirst({ text: 'a-result' });
     await drainOcrQueue();
@@ -355,7 +357,7 @@ describe('queue never strands a job (IMPORTANT 3 fix report — Ruling P15 revis
 
     setOcrEngineForTests({ recognize: async () => ({ text: 'b-result' }) });
     const b = writeStagedReceipt(JPEG, 'image/jpeg', 1);
-    expect(enqueueOcrJob({ kind: 'staged', stagingId: b })).toBe(true);
+    expect(enqueueOcrJob({ kind: 'staged', stagingId: b })).toBe('queued');
     await drainOcrQueue();
 
     expect(readSidecar(b)?.status).toBe('done');
@@ -363,7 +365,57 @@ describe('queue never strands a job (IMPORTANT 3 fix report — Ruling P15 revis
   });
 });
 
+describe('queue depth cap (OCR_QUEUE_MAX_DEPTH)', () => {
+  it('reports a full queue distinctly from a claimed job, and claims nothing', () => {
+    setOcrEngineForTests({ recognize: () => new Promise(() => {}) });
+    const ids = Array.from({ length: OCR_QUEUE_MAX_DEPTH + 2 }, () => randomUUID());
+    // The first job leaves the queue for the engine at once; the cap is on jobs waiting.
+    for (const stagingId of ids.slice(0, OCR_QUEUE_MAX_DEPTH + 1)) {
+      expect(enqueueOcrJob({ kind: 'staged', stagingId })).toBe('queued');
+    }
+    expect(ocrQueueDepth()).toBe(OCR_QUEUE_MAX_DEPTH);
+    const last = ids[OCR_QUEUE_MAX_DEPTH + 1]!;
+    expect(enqueueOcrJob({ kind: 'staged', stagingId: last })).toBe('full');
+    expect(isOcrJobClaimed({ kind: 'staged', stagingId: last })).toBe(false);
+    expect(enqueueOcrJob({ kind: 'staged', stagingId: ids[1]! })).toBe('claimed');
+  });
+
+  it('the sweep stops at the cap and leaves the rest pending for the next tick', async () => {
+    setOcrEngineForTests({ recognize: async () => ({ text: 'x' }) });
+    const itemId = makeItem();
+    const total = OCR_QUEUE_MAX_DEPTH + 5;
+    for (let index = 0; index < total; index += 1) makeReceipt(itemId, `missing-${index}.jpg`);
+    const enqueued = sweepPendingReceipts();
+    expect(ocrQueueDepth()).toBe(OCR_QUEUE_MAX_DEPTH);
+    expect(enqueued).toBeLessThan(total);
+    await drainOcrQueue();
+    const pending = current!.db.get<{ n: number }>(sql`select count(*) as n from warranty_receipts where ocr_status = 'pending'`);
+    expect(pending.n).toBe(total - enqueued);
+    expect(sweepPendingReceipts()).toBe(total - enqueued);
+  });
+});
+
 describe('Ruling P5 — timeout terminates and recreates the worker (MUST-7.11)', () => {
+  it('aborts the signal the engine was handed when the job times out', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(engineModule, 'releaseOcrEngine').mockResolvedValue(undefined);
+    let seen: AbortSignal | undefined;
+    setOcrEngineForTests({
+      recognize: (_filePath, _mime, signal) => {
+        seen = signal;
+        return new Promise(() => {});
+      },
+    });
+    const itemId = makeItem();
+    const receiptId = makeReceipt(itemId, writeReceiptFile(JPEG, 'image/jpeg'));
+    enqueueOcrJob({ kind: 'receipt', receiptId });
+    const drainPromise = drainOcrQueue();
+    expect(seen?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(OCR_TIMEOUT_MS + 1000);
+    await drainPromise;
+    expect(seen?.aborted).toBe(true);
+  });
+
   it('terminates the cached worker when a job blows past OCR_TIMEOUT_MS, and still drains the queue', async () => {
     vi.useFakeTimers();
     const terminateSpy = vi.spyOn(engineModule, 'releaseOcrEngine').mockResolvedValue(undefined);

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { accounts, billInstallments, loanAnchors,
   loanPostings,
@@ -11,6 +11,7 @@ import { displaySourceMayWrite } from '@/lib/display-source';
 import { addDaysIso, addMonths, addMonthsClamped, daysBetweenIso, monthEnd, monthOf, monthRange, monthStart, todayIso } from '@/lib/dates';
 import type { RateVerdict } from '@/lib/notify/ratelimit';
 import { meanCents } from '@/lib/predict/stats';
+import { soleOwnerClause } from '@/lib/splits';
 import { displayNameOf, getTransaction } from '@/lib/transactions';
 import {
   isLoanRepayment,
@@ -256,6 +257,24 @@ export function ruleLinkedPayments(days: number, now: Date = new Date()): RuleLi
  */
 const itemOwnerScopeSql = sql<number | null>`case when ${users.visibility} = 'self' and ${users.role} <> 'admin' then ${users.id} else null end`;
 
+/** A LIKE pattern matching `text` as a literal substring, with a backslash as the escape character. */
+function likeContains(text: string): string {
+  return `%${text.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
+}
+
+/**
+ * True when the transaction is `ownerId`'s alone: attributed to them, with no split part set to
+ * anyone else. A self-scoped rule owner's rule links only such a transaction.
+ */
+function soleOwnedBy(tx: ReturnType<typeof getDb>, txnId: number, ownerId: number): boolean {
+  const row = tx
+    .select({ id: transactions.id })
+    .from(transactions)
+    .where(and(eq(transactions.id, txnId), soleOwnerClause(ownerId)))
+    .get();
+  return row !== undefined;
+}
+
 export function loanRuleReach(input: { itemId: number; merchantContains: string; accountId: number | null }): number {
   const needle = input.merchantContains.trim().toUpperCase();
   if (needle.length === 0) return 0;
@@ -277,9 +296,10 @@ export function loanRuleReach(input: { itemId: number; merchantContains: string;
         // would inflate the warning with rows that could not link (applyPaymentMatchers' own
         // `amountCents >= 0` skip).
         lt(transactions.amountCents, 0),
-        like(transactions.normalizedMerchant, `%${needle}%`),
+        // Escaped, so % and _ in a pattern count as the characters the matcher's substring test sees.
+        sql`${transactions.normalizedMerchant} like ${likeContains(needle)} escape '\\'`,
         ...(input.accountId === null ? [] : [eq(transactions.accountId, input.accountId)]),
-        ...(ownerScopeId === null ? [] : [eq(transactions.attributedUserId, ownerScopeId)]),
+        ...(ownerScopeId === null ? [] : [soleOwnerClause(ownerScopeId)]),
       ),
     )
     .all();
@@ -1855,8 +1875,10 @@ export function applyPaymentMatchers(txnIds: number[], at: Date = new Date(), re
           (rule) =>
             txn.normalizedMerchant.includes(rule.merchantContains) &&
             (rule.accountId === null || rule.accountId === txn.accountId) &&
-            (rule.ownerScopeId === null || rule.ownerScopeId === txn.attributedUserId) &&
-            amountPlausibleFor(rule, txn.amountCents),
+            amountPlausibleFor(rule, txn.amountCents) &&
+            // A self-scoped owner's rule: the owner's row, with no split part set to anyone else.
+            (rule.ownerScopeId === null ||
+              (rule.ownerScopeId === txn.attributedUserId && soleOwnedBy(tx, txn.id, rule.ownerScopeId))),
         );
         if (match === undefined) continue;
 
@@ -1938,7 +1960,7 @@ export function backfillLoanRule(
             sql`${transactions.amountCents} < 0`,
             sql`instr(${transactions.normalizedMerchant}, ${rule.merchantContains}) > 0`,
             rule.accountId === null ? sql`1 = 1` : eq(transactions.accountId, rule.accountId),
-            rule.ownerScopeId === null ? sql`1 = 1` : eq(transactions.attributedUserId, rule.ownerScopeId),
+            rule.ownerScopeId === null ? sql`1 = 1` : soleOwnerClause(rule.ownerScopeId),
             sql`not exists (select 1 from ${loanPayments} lp where lp.txn_id = ${transactions.id})`,
           ),
         )

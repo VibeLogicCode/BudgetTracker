@@ -170,8 +170,10 @@ export function buildPreview(input: {
   accountId: number;
   profileId: number | null;
   mapping: ImportMapping;
+  /** The viewer: a file someone else staged reads as missing. */
+  userId: number;
 }): PreviewResult {
-  const buf = readStagedFile(input.stagingId);
+  const buf = readStagedFile(input.stagingId, input.userId);
   // v1.13.0 ruling R9 fix (item C2). This used to call parseCsv unconditionally, so an OFX/QFX
   // file previewed as garbled CSV (its own SGML/XML tags read as "columns") while the commit
   // path (src/lib/import/flow.ts) already dispatched correctly -- a preview that bore no

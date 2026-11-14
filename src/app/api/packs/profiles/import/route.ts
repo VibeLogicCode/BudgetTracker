@@ -2,6 +2,7 @@ import { CsrfError, assertSameOrigin } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
 import { MAX_FILE_BYTES } from '@/lib/import/parse';
 import { PackFormatError, importProfilesPack, previewProfilesPackImport } from '@/lib/packs';
+import { readFormOrNull, uploadTooLargeResponse } from '@/lib/upload-limits';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,7 +27,8 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: `File is larger than ${MAX_FILE_BYTES} bytes`, code: 'file_too_large' }, { status: 413 });
   }
 
-  const form = await request.formData();
+  const form = await readFormOrNull(request);
+  if (form === null) return uploadTooLargeResponse();
   const file = form.get('file');
   if (!(file instanceof File)) return Response.json({ error: 'No file was uploaded.' }, { status: 400 });
   // v1.31.0 R-15, the same gap this route's sibling had: the Content-Length check above is a

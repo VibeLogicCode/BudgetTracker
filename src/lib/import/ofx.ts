@@ -1,7 +1,15 @@
 import { isIsoDate } from '@/lib/dates';
 import { parseAmountToCents } from '@/lib/money';
 import { decodeBuffer, type DetectedEncoding } from './decode';
-import { ImportLimitError, MAX_FILE_BYTES, type CandidateRow, type ParseResult, type RowError } from './parse';
+import {
+  ImportLimitError,
+  MAX_FILE_BYTES,
+  MAX_RAW_DESCRIPTION_CHARS,
+  MAX_ROWS,
+  type CandidateRow,
+  type ParseResult,
+  type RowError,
+} from './parse';
 
 /**
  * v1.13.0 ruling R9 (item AO / PROD-5). A reader for OFX 1.x (SGML) and OFX 2.x (XML), written in
@@ -115,7 +123,15 @@ export function parseOfx(buf: Buffer): OfxParseResult {
         current = null;
         const cells = [record.DTPOSTED ?? '', record.NAME ?? '', record.TRNAMT ?? '', record.FITID ?? ''];
         const date = toIsoDate(record.DTPOSTED ?? '');
-        const description = [record.NAME ?? '', record.MEMO ?? ''].map((part) => part.trim()).filter(Boolean).join(' ');
+        if (rowIndex >= MAX_ROWS) {
+          throw new ImportLimitError('too_many_rows', `File has more than ${MAX_ROWS} rows`);
+        }
+        const description = [record.NAME ?? '', record.MEMO ?? '']
+          .map((part) => part.trim())
+          .filter(Boolean)
+          .join(' ')
+          .slice(0, MAX_RAW_DESCRIPTION_CHARS)
+          .trim();
         const amountCents = parseAmountToCents(record.TRNAMT ?? '');
         const externalId = (record.FITID ?? '').trim() || null;
         if (date === null) {

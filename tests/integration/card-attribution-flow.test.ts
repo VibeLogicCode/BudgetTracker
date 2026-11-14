@@ -61,8 +61,8 @@ describe('per-card attribution: preview -> assign -> commit -> undo -> re-import
     const mapping: ImportMapping = { ...getBuiltinPreset('Amex Canada'), cardCol: 4 };
 
     // --- Preview: MUST-6.1's cardValues list, before any assignment exists yet.
-    const firstStaging = writeStagedFile(fixture('amex-two-card.csv'));
-    const preview = buildPreview({ stagingId: firstStaging, filename: 'amex-two-card.csv', accountId, profileId: builtinProfileId, mapping });
+    const firstStaging = writeStagedFile(fixture('amex-two-card.csv'), importedBy);
+    const preview = buildPreview({ userId: importedBy, stagingId: firstStaging, filename: 'amex-two-card.csv', accountId, profileId: builtinProfileId, mapping });
     expect(preview.totalRows).toBe(7);
     expect(preview.cardValues).toEqual([
       { value: '-1001', rowCount: 3, assignedUserId: null, assignedUserName: null },
@@ -77,8 +77,8 @@ describe('per-card attribution: preview -> assign -> commit -> undo -> re-import
 
     // Re-preview after assigning: MUST-6.2's "already assigned shows preselected", proved at
     // the data layer (the component-level proof lives in import-client.test.tsx).
-    const reStaging = writeStagedFile(fixture('amex-two-card.csv'));
-    const reassignedPreview = buildPreview({ stagingId: reStaging, filename: 'amex-two-card.csv', accountId, profileId: builtinProfileId, mapping });
+    const reStaging = writeStagedFile(fixture('amex-two-card.csv'), importedBy);
+    const reassignedPreview = buildPreview({ userId: importedBy, stagingId: reStaging, filename: 'amex-two-card.csv', accountId, profileId: builtinProfileId, mapping });
     expect(reassignedPreview.cardValues!.find((v) => v.value === '-1001')).toMatchObject({ assignedUserId: alexId, assignedUserName: 'Alex' });
     expect(reassignedPreview.cardValues!.find((v) => v.value === '-1002')).toMatchObject({ assignedUserId: samId, assignedUserName: 'Sam' });
 
@@ -90,7 +90,7 @@ describe('per-card attribution: preview -> assign -> commit -> undo -> re-import
     });
 
     // --- Commit.
-    const commitStaging = writeStagedFile(fixture('amex-two-card.csv'));
+    const commitStaging = writeStagedFile(fixture('amex-two-card.csv'), importedBy);
     const result = commitStagedImport({
       stagingId: commitStaging,
       filename: 'amex-two-card.csv',
@@ -135,7 +135,7 @@ describe('per-card attribution: preview -> assign -> commit -> undo -> re-import
     // zero" can be true, so that is what this test proves, then undo is proved afterward
     // (below) using the exact "overlapping import" semantics tests/integration/import-flow.test.ts
     // already established for the non-attributed case.
-    const secondStaging = writeStagedFile(fixture('amex-two-card.csv'));
+    const secondStaging = writeStagedFile(fixture('amex-two-card.csv'), importedBy);
     const second = commitStagedImport({
       stagingId: secondStaging,
       filename: 'amex-two-card.csv',

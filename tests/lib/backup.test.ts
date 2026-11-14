@@ -175,7 +175,7 @@ describe('maintenance sweep', () => {
     recordLoginAttempt({ username: 'alice', ip: '10.0.0.5', success: false, at: new Date('2026-08-14T00:00:00.000Z') });
 
     const at = new Date('2026-08-15T02:00:00.000Z');
-    const stale = writeStagedFile(Buffer.from('old'));
+    const stale = writeStagedFile(Buffer.from('old'), 1);
     // Anchored to `at`, not the real wall clock: purgeStagedFiles compares
     // mtime against the injected "now", so the fixture must too.
     const longAgo = new Date(at.getTime() - 48 * 60 * 60 * 1000);

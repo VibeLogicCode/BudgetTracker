@@ -1,7 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { closingBalancesByDate, ImportLimitError, MAX_ROWS, parseCsv, previewRawRows, type CandidateRow } from '@/lib/import/parse';
+import {
+  closingBalancesByDate,
+  ImportLimitError,
+  MAX_CELL_CHARS,
+  MAX_RAW_DESCRIPTION_CHARS,
+  MAX_ROWS,
+  parseCsv,
+  previewRawRows,
+  type CandidateRow,
+} from '@/lib/import/parse';
 import { getBuiltinPreset } from '@/lib/import/presets';
 import type { ImportMapping } from '@/lib/import/mapping';
 
@@ -200,6 +209,37 @@ describe('limits', () => {
     const line = '2026-03-02,COFFEE,4.85,,0.00';
     const csv = Buffer.from(Array.from({ length: MAX_ROWS }, () => line).join('\n'), 'utf8');
     expect(parseCsv(csv, getBuiltinPreset('TD Chequing/Debit')).rows).toHaveLength(MAX_ROWS);
+  });
+});
+
+describe('cell and description caps', () => {
+  const mapping = getBuiltinPreset('TD Chequing/Debit');
+
+  it('reads a row holding a cell longer than MAX_CELL_CHARS as a row error with a plain reason', () => {
+    const long = 'X'.repeat(MAX_CELL_CHARS + 1);
+    const csv = Buffer.from(`2026-03-02,MAPLE GROCER,4.85,,0.00
+2026-03-03,${long},4.85,,0.00
+2026-03-04,FUEL STOP 12,9.00,,0.00`, 'utf8');
+    const result = parseCsv(csv, mapping);
+    expect(result.rows.map((row) => row.rawDescription)).toEqual(['MAPLE GROCER', 'FUEL STOP 12']);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toMatchObject({ rowIndex: 1, reason: 'cell too long' });
+    expect(result.errors[0]!.cells.every((cell) => cell.length <= MAX_CELL_CHARS)).toBe(true);
+  });
+
+  it('still reads a cell at MAX_CELL_CHARS, cutting the description to MAX_RAW_DESCRIPTION_CHARS', () => {
+    const atCap = 'Y'.repeat(MAX_CELL_CHARS);
+    const csv = Buffer.from(`2026-03-02,${atCap},4.85,,0.00`, 'utf8');
+    const result = parseCsv(csv, mapping);
+    expect(result.errors).toEqual([]);
+    expect(result.rows[0]!.rawDescription).toBe('Y'.repeat(MAX_RAW_DESCRIPTION_CHARS));
+  });
+
+  it('cuts a description built from several columns to MAX_RAW_DESCRIPTION_CHARS', () => {
+    const part = 'Z'.repeat(400);
+    const twoCols: ImportMapping = { ...mapping, descCols: [1, 2], debitCol: 3, creditCol: 4 };
+    const result = parseCsv(Buffer.from(`2026-03-02,${part},${part},4.85,`, 'utf8'), twoCols);
+    expect(result.rows[0]!.rawDescription.length).toBe(MAX_RAW_DESCRIPTION_CHARS);
   });
 });
 

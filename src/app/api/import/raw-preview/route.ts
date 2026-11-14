@@ -3,7 +3,8 @@ import { CsrfError, assertSameOrigin } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
 import { isSelfScoped } from '@/lib/auth/viewer';
 import { ImportLimitError, MAX_FILE_BYTES, previewRawRows } from '@/lib/import/parse';
-import { StagingError, readStagedFile, writeStagedFile } from '@/lib/import/staging';
+import { StagingError, readStagedFile, stagingErrorStatus, writeStagedFile } from '@/lib/import/staging';
+import { readFormOrNull, uploadTooLargeResponse } from '@/lib/upload-limits';
 
 const encodingSchema = z.enum(['auto', 'utf-8', 'windows-1252']).default('auto');
 
@@ -52,16 +53,17 @@ export async function POST(request: Request): Promise<Response> {
     if (!parsed.success) return Response.json({ error: parsed.error.issues[0]?.message ?? 'Invalid request' }, { status: 400 });
     try {
       // previewRawRows applies the same MAX_FILE_BYTES cap to these bytes as to an upload's.
-      const { rows, encoding: detected } = previewRawRows(readStagedFile(parsed.data.stagingId), parsed.data.encoding, 10);
+      const { rows, encoding: detected } = previewRawRows(readStagedFile(parsed.data.stagingId, user.id), parsed.data.encoding, 10);
       return Response.json({ stagingId: parsed.data.stagingId, encoding: detected, rows });
     } catch (error) {
       if (error instanceof ImportLimitError) return Response.json({ error: error.message, code: error.code }, { status: 413 });
-      if (error instanceof StagingError) return Response.json({ error: error.message, code: error.code }, { status: 410 });
+      if (error instanceof StagingError) return Response.json({ error: error.message, code: error.code }, { status: stagingErrorStatus(error) });
       throw error;
     }
   }
 
-  const form = await request.formData();
+  const form = await readFormOrNull(request);
+  if (form === null) return uploadTooLargeResponse();
   const file = form.get('file');
   if (!(file instanceof File)) return Response.json({ error: 'No file uploaded' }, { status: 400 });
   // content-length can be absent/wrong (e.g. chunked transfer); the file's
@@ -73,10 +75,11 @@ export async function POST(request: Request): Promise<Response> {
 
   try {
     const { rows, encoding: detected } = previewRawRows(buf, encoding, 10);
-    const stagingId = writeStagedFile(buf);
+    const stagingId = writeStagedFile(buf, user.id);
     return Response.json({ stagingId, filename: file.name, encoding: detected, rows });
   } catch (error) {
     if (error instanceof ImportLimitError) return Response.json({ error: error.message, code: error.code }, { status: 413 });
+    if (error instanceof StagingError) return Response.json({ error: error.message, code: error.code }, { status: stagingErrorStatus(error) });
     throw error;
   }
 }

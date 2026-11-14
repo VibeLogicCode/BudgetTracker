@@ -390,6 +390,19 @@ describe('a profile row whose stored mapping does not parse (settings/managers 5
     expect(profile!.name).toBe('Corrupted Bank');
   });
 
+  it('reads a stored profile past the mapping caps as unreadable, without throwing', () => {
+    current = createSeededTestDb();
+    const overCap = JSON.stringify({
+      ...getBuiltinPreset('TD Visa'),
+      skipRules: { containsAny: Array.from({ length: 500 }, (_, i) => `SKIP ${i}`) },
+    });
+    const id = insertUnparseableProfile(current, overCap);
+    const profile = getProfile(id)!;
+    expect(profile.mapping).toBeNull();
+    expect(profile.mappingError).toBeTruthy();
+    expect(listProfiles().filter(hasReadableMapping).some((p) => p.id === id)).toBe(false);
+  });
+
   it('is still deletable — the row that broke the page is the one you need to be able to remove', () => {
     current = createSeededTestDb();
     const id = insertUnparseableProfile(current, '{"amountMode": "not a real mode"}');

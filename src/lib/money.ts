@@ -4,14 +4,36 @@ const CENT_FORMATTER = new Intl.NumberFormat('en-CA', {
 });
 
 /**
+ * The longest amount text, after trimming, that parseAmountToCents reads. Longer text returns
+ * null before any pattern runs, so every caller (import cells, statement files, form fields)
+ * gets the same bound.
+ */
+export const MAX_AMOUNT_INPUT_CHARS = 64;
+
+/** Two or more commas, and the last one followed by exactly two digits that end the text. */
+function hasTwoCommasEndingInCents(text: string): boolean {
+  let commas = 0;
+  for (let i = 0; i < text.length && commas < 2; i += 1) {
+    if (text.charCodeAt(i) === 44) commas += 1;
+  }
+  if (commas < 2) return false;
+  const n = text.length;
+  if (n < 3 || text.charCodeAt(n - 3) !== 44) return false;
+  const isDigit = (code: number) => code >= 48 && code <= 57;
+  return isDigit(text.charCodeAt(n - 2)) && isDigit(text.charCodeAt(n - 1));
+}
+
+/**
  * Parses a bank CSV amount cell into integer cents.
  * Handles: $ / CAD prefixes, thousands separators, unicode minus, accounting parentheses.
- * Returns null when the cell is blank or not a single well-formed number.
+ * Returns null when the cell is blank, longer than MAX_AMOUNT_INPUT_CHARS, or not a single
+ * well-formed number.
  */
 export function parseAmountToCents(raw: string): number | null {
   if (typeof raw !== 'string') return null;
   let text = raw.trim();
   if (text.length === 0) return null;
+  if (text.length > MAX_AMOUNT_INPUT_CHARS) return null;
 
   // Normalise unicode minus / non-breaking spaces.
   text = text.replace(/−/g, '-').replace(/ /g, ' ');
@@ -36,7 +58,7 @@ export function parseAmountToCents(raw: string): number | null {
   // and reads as an error rather than a silent wrong amount.
   if (/\.\d*,/.test(text)) return null;
   // Two or more commas ending in two digits ("1,234,56") is neither grouping nor a decimal comma.
-  if (!text.includes('.') && /,.*,\d{2}$/.test(text)) return null;
+  if (!text.includes('.') && hasTwoCommasEndingInCents(text)) return null;
   if (!text.includes('.') && /^[^,]*,\d{2}$/.test(text)) {
     text = text.replace(',', '.');
   } else {

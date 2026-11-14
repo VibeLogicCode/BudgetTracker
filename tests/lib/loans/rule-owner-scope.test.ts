@@ -115,3 +115,55 @@ describe('v1.58.1: payment rules respect a self-scoped item owner', () => {
     expect(applyPaymentMatchers([fromAlex, unattributed], new Date(NOW))).toBe(2);
   });
 });
+
+function splitWithPartFor(txnId: number, partPerson: number): void {
+  const categoryId = (t.sqlite.prepare('select id from categories order by id limit 1').get() as { id: number }).id;
+  t.sqlite
+    .prepare('insert into transaction_splits (txn_id, category_id, amount_cents, created_at, person_set, attributed_user_id) values (?, ?, ?, ?, 0, null)')
+    .run(txnId, categoryId, -25_000, NOW);
+  t.sqlite
+    .prepare('insert into transaction_splits (txn_id, category_id, amount_cents, created_at, person_set, attributed_user_id) values (?, ?, ?, ?, 1, ?)')
+    .run(txnId, categoryId, -20_000, NOW, partPerson);
+}
+
+describe('a self-scoped rule owner and split payments', () => {
+  it('applyPaymentMatchers does not link a split with a part set to another person', () => {
+    const itemId = makeItem('loan', alex);
+    saveLoanRule({ itemId, merchantContains: 'FUEL STOP', accountId: null, enabled: true, at: new Date(NOW) });
+    const shared = spend(alex, '2026-08-10');
+    splitWithPartFor(shared, sam);
+    const ownSplit = spend(alex, '2026-08-11');
+    splitWithPartFor(ownSplit, alex);
+
+    expect(applyPaymentMatchers([shared, ownSplit], new Date(NOW))).toBe(1);
+    expect(loanLinks()).toEqual([ownSplit]);
+  });
+
+  it('backfillLoanRule and loanRuleReach leave out a split with a part set to another person', () => {
+    const itemId = makeItem('loan', alex);
+    const shared = spend(alex, '2026-08-10');
+    splitWithPartFor(shared, sam);
+    const mine = spend(alex, '2026-08-11');
+
+    expect(loanRuleReach({ itemId, merchantContains: 'FUEL STOP', accountId: null })).toBe(1);
+    const ruleId = saveLoanRule({ itemId, merchantContains: 'FUEL STOP', accountId: null, enabled: true, at: new Date(NOW) });
+    expect(backfillLoanRule(ruleId, { at: new Date(NOW) }).linked).toBe(1);
+    expect(loanLinks()).toEqual([mine]);
+  });
+});
+
+describe('loanRuleReach counts what the matcher links', () => {
+  it('reads % and _ in a pattern as the characters themselves', () => {
+    const itemId = makeItem('loan', sam);
+    spend(sam, '2026-08-10', 'FUEL 100% STOP');
+    spend(sam, '2026-08-11', 'FUEL 1000 STOP');
+    spend(sam, '2026-08-12', 'MAPLE_GROCER');
+    spend(sam, '2026-08-13', 'MAPLE GROCER');
+
+    expect(loanRuleReach({ itemId, merchantContains: '100%', accountId: null })).toBe(1);
+    expect(loanRuleReach({ itemId, merchantContains: 'MAPLE_GROCER', accountId: null })).toBe(1);
+
+    const ruleId = saveLoanRule({ itemId, merchantContains: 'MAPLE_GROCER', accountId: null, enabled: true, at: new Date(NOW) });
+    expect(backfillLoanRule(ruleId, { at: new Date(NOW) }).linked).toBe(1);
+  });
+});

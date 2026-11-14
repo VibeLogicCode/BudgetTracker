@@ -6,6 +6,7 @@ import { receiptFileExists, resolveReceiptPath } from '@/lib/warranty/receipts';
 import { amountCandidates, dateCandidates, suggestFromOcrText } from '@/lib/warranty/suggest';
 import {
   NO_TEXT_MESSAGE,
+  OCR_FAILED_MESSAGE,
   OCR_LINES_MAX,
   OCR_TIMEOUT_MESSAGE,
   OCR_TIMEOUT_MS,
@@ -47,6 +48,15 @@ const queue: OcrJob[] = [];
 const claimed = new Set<string>();
 let pump: Promise<void> | null = null;
 
+/**
+ * The most jobs waiting at once. Past it a new job is refused: an upload is refused before it is
+ * written, a re-run says the reader is busy, and a saved receipt stays pending for the sweep.
+ */
+export const OCR_QUEUE_MAX_DEPTH = 100;
+
+/** queued: added. claimed: already waiting or running (MUST-7.16's no-op). full: the queue is at its cap. */
+export type EnqueueOutcome = 'queued' | 'claimed' | 'full';
+
 function jobKey(job: OcrJob): string {
   return job.kind === 'staged' ? `s:${job.stagingId}` : `r:${job.receiptId}`;
 }
@@ -59,14 +69,20 @@ export function ocrQueueDepth(): number {
   return queue.length;
 }
 
-/** Returns false when the job is already claimed — MUST-7.16's "second click is a no-op". */
-export function enqueueOcrJob(job: OcrJob): boolean {
+/** True when `extra` more jobs would take the queue past OCR_QUEUE_MAX_DEPTH. */
+export function ocrQueueWouldOverflow(extra = 1): boolean {
+  return queue.length + extra > OCR_QUEUE_MAX_DEPTH;
+}
+
+/** 'claimed' is MUST-7.16's "second click is a no-op"; 'full' adds nothing and claims nothing. */
+export function enqueueOcrJob(job: OcrJob): EnqueueOutcome {
   const key = jobKey(job);
-  if (claimed.has(key)) return false;
+  if (claimed.has(key)) return 'claimed';
+  if (ocrQueueWouldOverflow()) return 'full';
   claimed.add(key);
   queue.push(job);
   if (pump === null) pump = runQueue();
-  return true;
+  return 'queued';
 }
 
 /** Await the in-flight drain. Used by tests; production code never blocks on OCR. */
@@ -140,12 +156,15 @@ async function runQueue(): Promise<void> {
 async function recognizeWithTimeout(filePath: string, mime: Parameters<OcrEngine['recognize']>[1]): Promise<OcrResult> {
   let timer: NodeJS.Timeout | undefined;
   let timedOut = false;
+  // Aborted on timeout, so a PDF read stops at its next page and its document is destroyed.
+  const controller = new AbortController();
   try {
     return await Promise.race([
-      getOcrEngine().recognize(filePath, mime),
+      getOcrEngine().recognize(filePath, mime, controller.signal),
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => {
           timedOut = true;
+          controller.abort(new Error(OCR_TIMEOUT_MESSAGE));
           reject(new Error(OCR_TIMEOUT_MESSAGE));
         }, OCR_TIMEOUT_MS);
         timer.unref?.();
@@ -162,7 +181,7 @@ async function recognizeWithTimeout(filePath: string, mime: Parameters<OcrEngine
 }
 
 function messageOf(error: unknown): string {
-  return error instanceof Error && error.message.length > 0 ? error.message : 'OCR failed.';
+  return error instanceof Error && error.message.length > 0 ? error.message : OCR_FAILED_MESSAGE;
 }
 
 /**
@@ -261,7 +280,8 @@ async function runReceiptJob(receiptId: number): Promise<void> {
 
 /**
  * MUST-7.12: the scheduler tick. Enqueues every warranty_receipts row still 'pending' that
- * is not currently claimed. One indexed query (warranty_receipts_ocr_idx).
+ * is not currently claimed, up to OCR_QUEUE_MAX_DEPTH; the rest wait for the next tick. One
+ * indexed query (warranty_receipts_ocr_idx).
  */
 export function sweepPendingReceipts(): number {
   const rows = getDb()
@@ -271,7 +291,9 @@ export function sweepPendingReceipts(): number {
     .all();
   let enqueued = 0;
   for (const row of rows) {
-    if (enqueueOcrJob({ kind: 'receipt', receiptId: row.id })) enqueued += 1;
+    const outcome = enqueueOcrJob({ kind: 'receipt', receiptId: row.id });
+    if (outcome === 'full') break;
+    if (outcome === 'queued') enqueued += 1;
   }
   return enqueued;
 }

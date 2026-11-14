@@ -159,12 +159,38 @@ export function normalizeMerchant(raw: string): string {
  * names the recipient and would make the rule match one person's rows only. normalizeMerchant
  * keeps such a code (its reference-token rule needs five digits), so this runs on the stored text.
  * A single asterisk is part of many merchant names and is left alone.
+ *
+ * One pass from the end over text cut to ALWAYS_ASK_MAX_INPUT_CHARS: trailing spaces once, then
+ * each masked code (letters or digits, two or more asterisks, the spaces before them) in turn.
  */
 export function alwaysAskPattern(normalizedMerchant: string): string {
-  let text = normalizedMerchant;
-  while (/\s*\*{2,}[0-9A-Z]*$/.test(text)) text = text.replace(/\s*\*{2,}[0-9A-Z]*$/, '');
-  text = text.trim();
-  return text.length > 0 ? text : normalizedMerchant;
+  const input = normalizedMerchant.slice(0, ALWAYS_ASK_MAX_INPUT_CHARS);
+  let end = input.trimEnd().length;
+  for (;;) {
+    let at = end;
+    while (at > 0 && isMaskedCodeChar(input.charCodeAt(at - 1))) at -= 1;
+    let stars = 0;
+    while (at > 0 && input.charCodeAt(at - 1) === 42) {
+      at -= 1;
+      stars += 1;
+    }
+    if (stars < 2) break;
+    while (at > 0 && /\s/.test(input[at - 1]!)) at -= 1;
+    end = at;
+  }
+  const text = input.slice(0, end).trim();
+  return text.length > 0 ? text : input;
+}
+
+/**
+ * The raw-description cap (MAX_RAW_DESCRIPTION_CHARS in src/lib/import/parse.ts, which a test
+ * keeps equal to this). Not imported from there: this module also runs in the browser.
+ */
+export const ALWAYS_ASK_MAX_INPUT_CHARS = 500;
+
+/** 0-9 and A-Z, the characters a masked code is made of. */
+function isMaskedCodeChar(code: number): boolean {
+  return (code >= 48 && code <= 57) || (code >= 65 && code <= 90);
 }
 
 /** Multinomial Bayes needs the token multiset, so duplicates are preserved. */

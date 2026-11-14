@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { parseImportMapping, serializeImportMapping, importMappingSchema, normalizeCardValue } from '@/lib/import/mapping';
+import {
+  MAX_DESC_COLS,
+  MAX_SKIP_RULES,
+  MAX_SKIP_RULE_CHARS,
+  parseImportMapping,
+  serializeImportMapping,
+  importMappingSchema,
+  normalizeCardValue,
+} from '@/lib/import/mapping';
+import { DATE_FORMATS } from '@/lib/dates';
 import { BUILTIN_PRESETS, BUILTIN_PRESET_NAMES, getBuiltinPreset } from '@/lib/import/presets';
 
 // Verbatim shape of what v1.5.1 (and every earlier version) actually wrote to
@@ -54,6 +63,31 @@ describe('importMappingSchema', () => {
     expect(BUILTIN_PRESETS['Scotiabank Chequing/Debit'].mapping.signConvention).toBe('negative_is_spend');
     expect(BUILTIN_PRESETS['Amex Canada'].mapping.signConvention).toBe('positive_is_spend');
     expect(BUILTIN_PRESETS['Amex Canada'].mapping.hasHeader).toBe(true);
+  });
+});
+
+describe('importMappingSchema caps', () => {
+  const base = () => getBuiltinPreset('TD Visa');
+
+  it('accepts MAX_DESC_COLS description columns and refuses one more', () => {
+    expect(() => parseImportMapping({ ...base(), descCols: Array.from({ length: MAX_DESC_COLS }, (_, i) => i) })).not.toThrow();
+    expect(() => parseImportMapping({ ...base(), descCols: Array.from({ length: MAX_DESC_COLS + 1 }, (_, i) => i) })).toThrow();
+  });
+
+  it('caps skip rules by count and by length', () => {
+    const many = Array.from({ length: MAX_SKIP_RULES }, (_, i) => `SKIP ${i}`);
+    expect(() => parseImportMapping({ ...base(), skipRules: { containsAny: many } })).not.toThrow();
+    expect(() => parseImportMapping({ ...base(), skipRules: { containsAny: [...many, 'ONE MORE'] } })).toThrow();
+    expect(() => parseImportMapping({ ...base(), skipRules: { containsAny: ['X'.repeat(MAX_SKIP_RULE_CHARS)] } })).not.toThrow();
+    expect(() => parseImportMapping({ ...base(), skipRules: { containsAny: ['X'.repeat(MAX_SKIP_RULE_CHARS + 1)] } })).toThrow();
+  });
+
+  it('accepts only a date format from DATE_FORMATS', () => {
+    for (const dateFormat of DATE_FORMATS) {
+      expect(() => parseImportMapping({ ...base(), dateFormat })).not.toThrow();
+    }
+    expect(() => parseImportMapping({ ...base(), dateFormat: 'DD.MM.YYYY' })).toThrow();
+    expect(() => parseImportMapping({ ...base(), dateFormat: 'Y'.repeat(5_000) })).toThrow();
   });
 });
 

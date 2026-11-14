@@ -46,7 +46,7 @@ function runImport() {
     ctx,
     commit: () =>
       commitStagedImport({
-        stagingId: writeStagedFile(Buffer.from(CSV)),
+        stagingId: writeStagedFile(Buffer.from(CSV), ctx!.userId),
         filename: 'td.csv',
         accountId: ctx!.accountId,
         profileId,

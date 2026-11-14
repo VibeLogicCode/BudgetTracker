@@ -98,6 +98,12 @@ function fold(text: string): string {
 
 const SNIPPET_RADIUS = 40;
 
+/**
+ * The longest line the reader looks at. A statement line is a label and a figure; a longer line is
+ * skipped before any pattern runs over it.
+ */
+export const MAX_STATEMENT_LINE_CHARS = 2_000;
+
 function snippetAround(text: string, at: number, length: number): string {
   const from = Math.max(0, at - SNIPPET_RADIUS);
   const to = Math.min(text.length, at + length + SNIPPET_RADIUS);
@@ -127,8 +133,11 @@ function scoreLine(foldedLine: string, wanted: string[], against: string[]): num
  *
  * A bare integer is deliberately NOT money: on a statement it is far more often a page number, an
  * account digit or part of a date, and offering those as candidates would bury the real figures.
+ *
+ * Bounded: at most twelve digits before the cents, or four groups of three after the first, and
+ * never starting inside a longer run of digits.
  */
-const MONEY = /\(?\$?\s?(\d{1,3}(?:[ ,.]\d{3})+|\d+)([.,]\d{2})\)?\s?\$?/g;
+const MONEY = /\(?\$?\s?(?<!\d)(\d{1,3}(?:[ ,.]\d{3}){1,4}|\d{1,12})([.,]\d{2})\)?\s?\$?/g;
 
 function centsFrom(whole: string, fraction: string): number | null {
   const digits = whole.replace(/[ ,.]/g, '');
@@ -146,11 +155,11 @@ const DATES: { pattern: RegExp; toIso: (match: RegExpMatchArray) => string | nul
     toIso: (m) => `${m[3]}-${m[2]}-${m[1]}`,
   },
   {
-    pattern: /(\d{1,2})\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?,?\s+(\d{4})/gi,
+    pattern: /(\d{1,2})\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]{0,6}\.?,?\s+(\d{4})/gi,
     toIso: (m) => isoFromMonthName(m[3]!, m[2]!, m[1]!),
   },
   {
-    pattern: /(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})/gi,
+    pattern: /(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]{0,6}\.?\s+(\d{1,2}),?\s+(\d{4})/gi,
     toIso: (m) => isoFromMonthName(m[3]!, m[1]!, m[2]!),
   },
 ];
@@ -181,6 +190,10 @@ export function findStatementCandidates(text: string): StatementCandidates {
 
   let offset = 0;
   for (const line of text.split(/\r?\n/)) {
+    if (line.length > MAX_STATEMENT_LINE_CHARS) {
+      offset += line.length + 1;
+      continue;
+    }
     const folded = fold(line);
     const balanceScore = scoreLine(folded, BALANCE_WORDS, NOT_BALANCE_WORDS);
     const interestScore = scoreLine(folded, INTEREST_WORDS, []);

@@ -15,14 +15,16 @@ let current: TestDb | null = null;
 let tempDir: string;
 let originalDataDir: string | undefined;
 let token: string;
+/** The signed-in member behind `token`. */
+let aliceId: number;
 
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-rawpreview-'));
   originalDataDir = process.env.DATA_DIR;
   process.env.DATA_DIR = tempDir;
   current = createSeededTestDb();
-  const userId = insertTestUser(current.db, { name: 'Alice', username: 'alice' });
-  token = createSession(userId).token;
+  aliceId = insertTestUser(current.db, { name: 'Alice', username: 'alice' });
+  token = createSession(aliceId).token;
 });
 
 afterEach(() => {
@@ -153,7 +155,7 @@ describe('POST /api/import/raw-preview with a staged file (JSON { stagingId })',
   });
 
   it('honours an explicit encoding the same way the multipart path does', async () => {
-    const stagingId = writeStagedFile(fixture('td-chequing-win1252.csv'));
+    const stagingId = writeStagedFile(fixture('td-chequing-win1252.csv'), aliceId);
     const response = await rawPreviewRoute(stagedRequest({ stagingId, encoding: 'windows-1252' }));
     expect(response.status).toBe(200);
     expect(((await response.json()) as { encoding: string }).encoding).toBe('windows-1252');
@@ -174,7 +176,7 @@ describe('POST /api/import/raw-preview with a staged file (JSON { stagingId })',
   });
 
   it('403s a self-scoped viewer before reading the staged file', async () => {
-    const stagingId = writeStagedFile(fixture('scotia.csv'));
+    const stagingId = writeStagedFile(fixture('scotia.csv'), aliceId);
     const kidId = insertTestUser(current!.db, { name: 'Kid', username: 'kid', role: 'member' });
     setUserVisibility(kidId, 'self');
     const response = await rawPreviewRoute(stagedRequest({ stagingId }, createSession(kidId).token));
@@ -182,7 +184,7 @@ describe('POST /api/import/raw-preview with a staged file (JSON { stagingId })',
   });
 
   it('rejects an unauthenticated request', async () => {
-    const stagingId = writeStagedFile(fixture('scotia.csv'));
+    const stagingId = writeStagedFile(fixture('scotia.csv'), aliceId);
     const request = new Request('http://nas.local:3000/api/import/raw-preview', {
       method: 'POST',
       headers: { origin: 'http://nas.local:3000', host: 'nas.local:3000', 'content-type': 'application/json' },

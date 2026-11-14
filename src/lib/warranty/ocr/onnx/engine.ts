@@ -18,9 +18,9 @@ import { getOnnxOcrSessions } from '@/lib/warranty/ocr/onnx/session';
  * The engine applies no character cap. That truncation step belongs to the queue.
  */
 export const onnxOcrEngine: OcrEngine = {
-  async recognize(filePath: string, mime: ReceiptMime): Promise<OcrResult> {
+  async recognize(filePath: string, mime: ReceiptMime, signal?: AbortSignal): Promise<OcrResult> {
     // A PDF never touches an OCR engine. No session is created and no model is loaded.
-    if (mime === 'application/pdf') return { text: await extractPdfText(filePath) };
+    if (mime === 'application/pdf') return { text: await extractPdfText(filePath, { signal }) };
 
     const image = await preprocessReceipt(filePath);
     const sessions = await getOnnxOcrSessions();

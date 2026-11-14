@@ -100,7 +100,7 @@ export async function POST(request: Request): Promise<Response> {
       // No profile is acceptable only when the staged file itself reads as OFX/QFX; a CSV is refused.
       let isOfx: boolean;
       try {
-        isOfx = looksLikeOfx(entry.filename, readStagedFile(entry.stagingId));
+        isOfx = looksLikeOfx(entry.filename, readStagedFile(entry.stagingId, user.id));
       } catch (error) {
         results.push({ ...base, ok: false, error: error instanceof StagingError ? error.message : 'This file could not be imported.' });
         continue;

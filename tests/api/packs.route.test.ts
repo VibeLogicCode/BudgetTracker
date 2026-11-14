@@ -390,3 +390,20 @@ describe('profiles pack routes', () => {
     expect(formDataSpy).not.toHaveBeenCalled();
   });
 });
+
+describe('pack imports answer a body that cannot be read as a form', () => {
+  const cut = (url: string, token: string) =>
+    new Request(url, {
+      method: 'POST',
+      headers: { ...headers(token), 'content-type': 'multipart/form-data; boundary=----cut' },
+      body: '------cut\r\nContent-Disposition: form-data; name="file"; filename="pack.json"\r\n\r\nPARTIAL',
+    });
+
+  it('with 413 from the rules and the profiles import, never a 500', async () => {
+    const { adminToken } = setup();
+    const rules = await rulesImport(cut('http://nas.local:3000/api/packs/rules/import', adminToken));
+    expect(rules.status).toBe(413);
+    const profiles = await profilesImport(cut('http://nas.local:3000/api/packs/profiles/import', adminToken));
+    expect(profiles.status).toBe(413);
+  });
+});

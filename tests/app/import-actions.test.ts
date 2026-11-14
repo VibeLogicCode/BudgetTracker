@@ -63,7 +63,7 @@ function formData(fields: Record<string, string>): FormData {
 
 describe('saveWizardProfileAction (new-bank wizard)', () => {
   it('saves a new named profile from the mapping and deletes the staged sample file', async () => {
-    const stagingId = writeStagedFile(Buffer.from('sample'));
+    const stagingId = writeStagedFile(Buffer.from('sample'), FAKE_USER.id);
     const mapping = getBuiltinPreset('Scotiabank Chequing/Debit');
 
     const result = await saveWizardProfileAction(
@@ -86,7 +86,7 @@ describe('saveWizardProfileAction (new-bank wizard)', () => {
   // v1.55.2: a wizard opened on a file the import screen staged must not delete that file on save,
   // because importing it is the next thing the person does.
   it('keeps the staged file when asked to, since it is the file about to be imported', async () => {
-    const stagingId = writeStagedFile(Buffer.from('sample'));
+    const stagingId = writeStagedFile(Buffer.from('sample'), FAKE_USER.id);
 
     const result = await saveWizardProfileAction(
       {},
@@ -390,6 +390,27 @@ describe('saveMappingAction (Lane 5: save a corrected import mapping from the pr
 });
 
 // v1.60.0 item 3b: the next page of import history.
+describe('the mapping actions read the posted mapping safely', () => {
+  it('saveWizardProfileAction answers malformed JSON with a plain error and saves nothing', async () => {
+    const before = listProfiles().length;
+    const result = await saveWizardProfileAction({}, formData({ name: 'Corner Bank', institution: 'Corner Bank', mapping: '{not json' }));
+    expect(result.error).toBe('That mapping could not be read.');
+    expect(listProfiles()).toHaveLength(before);
+  });
+
+  it('saveMappingAction answers malformed JSON with a plain error and changes nothing', async () => {
+    const builtin = getProfileByName('TD Visa')!;
+    const accountId = insertTestAccount(current!.db, { name: 'Household Visa', importProfileId: builtin.id });
+    const before = listProfiles().length;
+    const result = await saveMappingAction(
+      {},
+      formData({ profileId: String(builtin.id), accountId: String(accountId), accountName: 'Household Visa', mapping: '{not json' }),
+    );
+    expect(result.error).toBe('That mapping could not be read.');
+    expect(listProfiles()).toHaveLength(before);
+  });
+});
+
 describe('loadImportHistoryAction', () => {
   function seedImports(count: number) {
     const userId = insertTestUser(current!.db, { name: 'Alex', username: 'alex' });

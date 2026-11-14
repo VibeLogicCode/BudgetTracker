@@ -75,7 +75,7 @@ import { MAX_RULES_PER_LOAN, assignTransactionToLoan, itemLedger, listLoanRules,
 import { attachStagedReceipts, createWarrantyItem, getWarrantyItem, getWarrantyReceipt, listWarrantyReceipts } from '@/lib/warranty/items';
 import { MAX_FILES_PER_UPLOAD, receiptFileExists } from '@/lib/warranty/receipts';
 import { writeSidecar, writeStagedReceipt } from '@/lib/warranty/staging';
-import { resetOcrQueueForTests } from '@/lib/warranty/ocr/queue';
+import { OCR_QUEUE_MAX_DEPTH, enqueueOcrJob, resetOcrQueueForTests } from '@/lib/warranty/ocr/queue';
 import { setOcrEngineForTests } from '@/lib/warranty/ocr/engine';
 import { createItemType, listItemTypes } from '@/lib/warranty/types';
 import { HOUSEHOLD_VIEWER, NOT_YOURS_ERROR, type Viewer } from '@/lib/auth/viewer';
@@ -821,6 +821,31 @@ describe('attachReceiptsAction / deleteReceiptAction / reRunOcrAction', () => {
     expect((await reRunOcrAction({}, formData({ receiptId: String(receipt.id) }))).message).toBeTruthy();
   });
 
+  it('says the reader is busy and leaves the receipt as it was when the OCR queue is full', async () => {
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
+    writeSidecar(stagingId, { status: 'failed', error: 'OCR timed out.' });
+    const to = await redirectPath(() =>
+      createWarrantyAction(
+        {},
+        formData(baseFields({ staged: JSON.stringify([{ stagingId, originalFilename: 'a.jpg' }]) })),
+      ),
+    );
+    const receipt = listWarrantyReceipts(Number(to.split('/').pop()))[0];
+    setOcrEngineForTests({ recognize: () => new Promise(() => {}) });
+    try {
+      // The first job holds the reader; the rest wait behind it.
+      enqueueOcrJob({ kind: 'staged', stagingId: writeStagedReceipt(JPEG, 'image/jpeg', 1) });
+      for (let index = 0; index < OCR_QUEUE_MAX_DEPTH; index += 1) {
+        enqueueOcrJob({ kind: 'staged', stagingId: randomUUID() });
+      }
+      const result = await reRunOcrAction({}, formData({ receiptId: String(receipt.id) }));
+      expect(result.error).toBe('The receipt reader is busy. Try again in a few minutes.');
+      expect(getWarrantyReceipt(receipt.id)?.ocrStatus).toBe('failed');
+    } finally {
+      resetOcrQueueForTests();
+    }
+  });
+
   it('errors on unknown ids instead of throwing', async () => {
     expect((await deleteReceiptAction({}, formData({ receiptId: '99999' }))).error).toBeTruthy();
     expect((await reRunOcrAction({}, formData({ receiptId: '99999' }))).error).toBeTruthy();
@@ -1354,7 +1379,7 @@ describe('recomputeLoanBalanceAction (item 6, v1.21.0 backlog)', () => {
  * nothing pointed at. The sweep will not collect it (it is a real row) and no screen lists it.
  */
 describe('A10: the statement file is stored after the statement row', () => {
-  function statementForm(over: Record<string, string> = {}): FormData {
+  function statementForm(over: Record<string, string> = {}, bytes: Buffer = Buffer.from('%PDF-1.7\n%%EOF\n')): FormData {
     const itemId = seedLoanItem({ balanceCents: 1_000_000 });
     const fd = new FormData();
     fd.set('itemId', String(itemId));
@@ -1362,10 +1387,7 @@ describe('A10: the statement file is stored after the statement row', () => {
     fd.set('statementBalance', '9500.00');
     fd.set('keepStatement', 'on');
     for (const [key, value] of Object.entries(over)) fd.set(key, value);
-    fd.set(
-      'statement',
-      new File([Buffer.from('%PDF-1.7\n')], 'statement.pdf', { type: 'application/pdf' }),
-    );
+    fd.set('statement', new File([new Uint8Array(bytes)], 'statement.pdf', { type: 'application/pdf' }));
     return fd;
   }
 
@@ -1391,6 +1413,18 @@ describe('A10: the statement file is stored after the statement row', () => {
       sql`select receipt_id from loan_anchors where source = 'reconcile' order by id desc limit 1`,
     );
     expect(anchor?.receipt_id).not.toBeNull();
+  });
+
+  it('keeps a statement file only when its bytes read as a PDF, and says so', async () => {
+    const before = receiptCount();
+    const result = await reconcileLoanAction({}, statementForm({}, Buffer.from('date,balance\n2026-09-01,9500.00\n')));
+    expect(result.error).toBeUndefined();
+    expect(result.message).toContain('The file was not kept: it is not a PDF.');
+    expect(receiptCount()).toBe(before);
+    const anchor = current!.db.get<{ receipt_id: number | null }>(
+      sql`select receipt_id from loan_anchors where source = 'reconcile' order by id desc limit 1`,
+    );
+    expect(anchor?.receipt_id).toBeNull();
   });
 });
 
