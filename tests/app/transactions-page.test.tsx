@@ -9,7 +9,7 @@ import { captureBulkBefore, recordBulkUndo } from '@/lib/bulk-undo';
 import { localTimeLabel } from '@/lib/dates';
 import { readEnv } from '@/lib/env';
 import { bulkSetAttribution } from '@/lib/transactions';
-import { saveLocalAiConfig, turnOffLocalAi } from '@/lib/ai/config';
+import { recordLocalAiFailure, saveLocalAiConfig, turnOffLocalAi } from '@/lib/ai/config';
 import { ignoreAiSuggestion, recordMerchantSuggestion } from '@/lib/ai/suggestions';
 import { buildAiFixture, type AiFixture } from '../helpers/ai-fixture';
 
@@ -29,6 +29,12 @@ const currentUser = vi.hoisted(() => ({
 }));
 
 vi.mock('@/lib/auth/session', () => ({ requireUser: async () => currentUser.value }));
+// v1.64.0: with local AI active the page renders Ask in words, whose useRouter needs the App
+// Router mounted. A test render has none, so the router is a stand-in here.
+vi.mock('next/navigation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('next/navigation')>()),
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn(), back: vi.fn(), forward: vi.fn(), prefetch: vi.fn() }),
+}));
 
 afterEach(cleanup);
 
@@ -1163,5 +1169,77 @@ describe('TransactionsPage: AI suggestions in Review (v1.64.0)', () => {
     const { container } = await renderPage({ review: '1', group: 'merchant' });
     expect((screen.getByRole('combobox', { name: /^Category for .*MAPLE GROCER/ }) as HTMLInputElement).value).toMatch(/Groceries$/);
     expect(container.textContent).toContain('Use the name Maple Grocer for all');
+  });
+});
+
+/**
+ * v1.64.0 (plan E4). Ask in words is on the page only while local AI is active (on, set up and not
+ * waiting after failures) and only outside review mode. A self viewer gets it too: what they may
+ * ask about is narrowed in src/lib/ai/ask.ts, and readFilter forces their own person scope.
+ */
+describe('TransactionsPage: Ask in words (v1.64.0)', () => {
+  let fx: AiFixture | null = null;
+  const AT = new Date('2026-03-10T09:00:00.000Z');
+  afterEach(() => {
+    vi.useRealTimers();
+    fx?.t.cleanup();
+    fx = null;
+  });
+
+  function setup(on = true): AiFixture {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(AT);
+    fx = buildAiFixture();
+    currentUser.value = { id: fx.alex, name: 'Alex', username: 'alex', role: 'admin', visibility: 'household' };
+    if (on) saveLocalAiConfig({ baseUrl: 'http://192.168.1.50:11434', model: 'test-model:1b', userId: fx.alex, at: AT });
+    return fx;
+  }
+
+  async function renderPage(searchParams: Record<string, string>) {
+    const { default: TransactionsPage } = await import('@/app/(app)/transactions/page');
+    return render(await TransactionsPage({ searchParams: Promise.resolve(searchParams) }));
+  }
+
+  const box = () => screen.queryByRole('textbox', { name: 'Ask in words' });
+
+  it('is on the plain list while local AI is active, outside the filter form', async () => {
+    setup();
+    const { container } = await renderPage({});
+    const field = box() as HTMLInputElement;
+    expect(field).toBeTruthy();
+    expect(field.maxLength).toBe(200);
+    expect((container.querySelector('form[method="get"]') as HTMLFormElement).contains(field)).toBe(false);
+    expect(screen.getByRole('button', { name: 'Ask' })).toBeTruthy();
+  });
+
+  it('is absent in review mode', async () => {
+    setup();
+    await renderPage({ review: '1' });
+    expect(box()).toBeNull();
+  });
+
+  it('is absent with local AI off or never set up', async () => {
+    const f = setup(false);
+    await renderPage({});
+    expect(box()).toBeNull();
+    cleanup();
+    saveLocalAiConfig({ baseUrl: 'http://192.168.1.50:11434', model: 'test-model:1b', userId: f.alex, at: AT });
+    turnOffLocalAi({ userId: f.alex, at: AT });
+    await renderPage({});
+    expect(box()).toBeNull();
+  });
+
+  it('is absent while waiting after a server failure', async () => {
+    setup();
+    recordLocalAiFailure(AT, 'Could not reach the model server at 192.168.1.50:11434.');
+    await renderPage({});
+    expect(box()).toBeNull();
+  });
+
+  it('is there for a self viewer on their own list', async () => {
+    const f = setup();
+    currentUser.value = { id: f.sam, name: 'Sam', username: 'sam', role: 'member', visibility: 'self' };
+    await renderPage({});
+    expect(box()).toBeTruthy();
   });
 });

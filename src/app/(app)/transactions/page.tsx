@@ -24,7 +24,9 @@ import {
   listTransactions,
 } from '@/lib/transactions';
 import { lastBulkUndo } from '@/lib/bulk-undo';
-import { localAiEnabled } from '@/lib/ai/config';
+import { localAiActive, localAiEnabled } from '@/lib/ai/config';
+import { ASK_MAX_QUESTION_CHARS } from '@/lib/ai/ask';
+import { AskInWords } from '@/components/AskInWords';
 import { aiSuggestionsForMerchants } from '@/lib/ai/suggestions';
 import { suggestTransferPairs } from '@/lib/transfer-pairs';
 import { localTimeLabel, todayIso } from '@/lib/dates';
@@ -227,6 +229,11 @@ export default async function TransactionsPage({
       recurringMarks={recurringMarks}
       alwaysAskMerchants={alwaysAskMerchants}
       aiSuggestions={aiSuggestions}
+      // v1.64.0 (plan E4): Ask in words, only while local AI is active (on, set up, not waiting
+      // after failures) and never in review mode, whose queue is not a filter question. A self
+      // viewer may ask too: their names lists hold only their own accounts and no person, and the
+      // link it opens is read through readFilter, which forces their own person scope anyway.
+      askBox={localAiActive(now) && !reviewMode ? <AskInWords maxChars={ASK_MAX_QUESTION_CHARS} /> : null}
       groups={groups}
       merchantGroups={merchantGroups}
       undo={undo}

@@ -504,6 +504,7 @@ export function TransactionsClient({
   recurringMarks = {},
   alwaysAskMerchants = [],
   aiSuggestions = {},
+  askBox = null,
   groups = null,
   merchantGroups = null,
   undo = null,
@@ -568,6 +569,8 @@ export function TransactionsClient({
   alwaysAskMerchants?: string[];
   /** v1.64.0: the local AI's suggestion per merchant (page.tsx); empty when AI is off or in no review mode. */
   aiSuggestions?: Record<string, AiSuggestionView>;
+  /** v1.64.0 (plan E4): the Ask in words box, rendered by page.tsx; null when local AI is off or in review mode. */
+  askBox?: React.ReactNode;
   /**
    * v1.26.0 Lane 3a item 2. groupTransactionsByCategory's page of clusters (src/lib/transactions.ts)
    * for the SAME filter the row list above was built from -- `null` whenever `?group=category` is
@@ -3426,6 +3429,10 @@ export function TransactionsClient({
 
       <Card as="div">
         <CardBody className="pt-5">
+          {/* v1.64.0 (plan E4): Ask in words, beside the filter form and never inside it (a form
+              cannot hold another). page.tsx passes it only while local AI is active and out of
+              review mode; the link it opens is read by this same filter form. */}
+          {askBox ? <div className="mb-3 border-b border-line pb-3">{askBox}</div> : null}
           <form method="get" className="flex flex-col gap-3">
             {/* Ruling R1: `review=1` is a filter like any other on this form, so re-submitting
                 it (changing the account, say) must not silently drop out of the review queue --

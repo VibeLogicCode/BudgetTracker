@@ -5576,3 +5576,35 @@ describe('TransactionsClient: AI suggestion line (v1.64.0)', () => {
     await waitFor(() => expect(screen.getByText('Category updated.')).toBeTruthy());
   });
 });
+
+/**
+ * v1.64.0 (plan E4). Ask in words arrives as a slot from page.tsx and sits in the filter card,
+ * beside the GET filter form and never inside it: a form cannot hold another, and the box's own
+ * form posts to a server action while the filter form is a plain GET.
+ */
+describe('Ask in words slot (v1.64.0)', () => {
+  const ASK_BOX = (
+    <form data-testid="ask-box">
+      <input aria-label="Ask in words" name="question" />
+    </form>
+  );
+
+  it('renders the box in the filter card, outside the filter form', () => {
+    const { container } = render(
+      <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" askBox={ASK_BOX} />,
+    );
+    const box = screen.getByTestId('ask-box');
+    const filterForm = container.querySelector('form[method="get"]') as HTMLFormElement;
+    expect(filterForm).toBeTruthy();
+    expect(filterForm.contains(box)).toBe(false);
+    expect(box.parentElement?.closest('form')).toBeNull();
+    // The same card body: the box sits directly above the filters it fills in.
+    expect(box.closest('div.pt-5')).toBe(filterForm.closest('div.pt-5'));
+  });
+
+  it('renders nothing in its place without one', () => {
+    render(<TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" />);
+    expect(screen.queryByTestId('ask-box')).toBeNull();
+    expect(screen.queryByRole('textbox', { name: 'Ask in words' })).toBeNull();
+  });
+});
