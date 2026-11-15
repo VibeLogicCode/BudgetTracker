@@ -21,6 +21,38 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.64.1] - 2026-11-14
+
+Migration 0034 adds an index for sign-in records and allows only the admin and member roles. A
+second security review of the whole app, with these checks added. People who were asked to change
+their password must now do so before anything else works.
+
+### Security
+
+- Sign-in: password checks are limited across the server, and failed sign-ins from browsers the
+  app has not seen before share a household-wide budget, so a burst of attempts cannot slow the
+  app down for everyone. Browsers you have signed in with before are not affected.
+- A forced password change is now required by every page, action and download, not only pages.
+- Wrong current passwords and codes when changing a password or two-factor sign-in are counted
+  like sign-in attempts. Turning off two-factor sign-in now also needs a current code.
+- Behind a reverse proxy the app uses the client address the proxy added last. The install guide
+  says to have the proxy set that header.
+- The admin password reset tool asks for the new password instead of taking it on the command
+  line, makes the person change it at next sign-in, and records the reset in the audit log.
+- Amounts, statements, import profiles and files are read with size and length limits, staged
+  imports and unsaved receipts have storage limits, and very large images are refused before
+  they are decoded.
+- Members who see only their own money no longer see loan names, notes or receipts belonging to
+  someone else on a charge they share, and search only matches their own notes.
+- A typed-in transaction can be deleted only by someone allowed to act for its owner, and not while
+  it is linked to a loan you cannot open.
+- Restore checks the size and contents of a backup archive before unpacking it, and refuses a
+  database with unexpected triggers or views.
+- More admin changes are recorded in the audit log, and replies from outside services are size
+  capped.
+- Local AI: one model request at a time, model names checked, and Tailscale IPv6 addresses
+  refused like the IPv4 range.
+
 ## [1.64.0] - 2026-11-13
 
 Migration 0033. Local AI is optional and off until an admin sets it up. Nothing changes for an
