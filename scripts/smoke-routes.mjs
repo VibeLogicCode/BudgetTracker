@@ -81,7 +81,8 @@ export const SPECIAL_PAGES = [
   ['/warranties/999999', [307], [404]],
 ];
 
-// 9 safe API GETs (spec's "Proposed smoke test" route list; v1.63.0 adds the year-end pair).
+// 8 safe API GETs (spec's "Proposed smoke test" route list; v1.63.0 adds the year-end pair;
+// v1.64.1 moves the SimpleFIN account listing to POST).
 // [path, anonExpected, authExpected]
 export const API_GETS = [
   ['/api/backup/download', [401], [200]],
@@ -92,16 +93,14 @@ export const API_GETS = [
   ['/api/reports/year-end?year=2026', [401], [200]],
   ['/api/packs/rules/export', [401], [200]],
   ['/api/packs/profiles/export', [401], [200]],
-  // Admin session, no SimpleFIN connection configured in this fixture -> the documented
-  // "not connected" response, not a 500.
-  ['/api/simplefin/accounts', [401], [409]],
   ['/api/warranties/receipts/999999', [401], [404]],
 ];
 
 // The POST-only routes (spec text said twelve when there were eleven route.ts files under
 // src/app/api exporting a POST handler with no GET -- verified by grepping every
 // `export (async )?function GET|POST` in src/app/api, not assumed from the review prose; v1.63.0
-// adds the restore upload's start, the twelfth). A GET against each still proves the module
+// adds the restore upload's start, the twelfth; v1.64.1 makes the SimpleFIN account listing a
+// same-origin POST, the thirteenth). A GET against each still proves the module
 // loaded and the route registered (Next's own 405 for an unimplemented method on an existing
 // route file).
 export const POST_ONLY_ROUTES = [
@@ -113,6 +112,7 @@ export const POST_ONLY_ROUTES = [
   '/api/import/undo',
   '/api/packs/rules/import',
   '/api/packs/profiles/import',
+  '/api/simplefin/accounts',
   '/api/simplefin/claim',
   '/api/simplefin/link',
   '/api/simplefin/sync',
